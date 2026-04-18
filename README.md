@@ -313,11 +313,15 @@ nested git repos tracked as ghost submodules.
 3. **Public API surface.** Is `coord/` the only exported package, or do we
    expose `holds/` and `tasks/` directly? Lean toward one narrow public
    entry point.
+   **Resolved (2026-04-18):** `coord/` is the sole exported package. See
+   [ADR 0001](./docs/adr/0001-public-surface.md).
 4. **Conflict resolution model.** When two agents commit overlapping task
    state, what happens? Options: (a) last-writer-wins + notification,
    (b) fossil fork + chat-resolved merge commit, (c) NATS-KV-based
    pessimistic claim before commit. Leaning (b) — it uses fossil's native
    posture.
+   **Resolved (2026-04-18):** Chose (b) fossil fork + chat notify. See
+   [ADR 0004](./docs/adr/0004-conflict-resolution.md).
 5. **Auto-init UX.** Walk-up discovery (like git) vs explicit `init`
    command. Walk-up is friendlier but does filesystem work on every CLI
    invocation.
