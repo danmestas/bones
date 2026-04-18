@@ -1,0 +1,63 @@
+# golangci-lint configuration for agent-infra.
+# Schema: v2 (golangci-lint v2.x). See https://golangci-lint.run/usage/configuration/
+#
+# TigerStyle discipline gate — enforces formatting, correctness, and function-size
+# limits. The intent is a small, opinionated set of linters that stay quiet on
+# conforming code and loud on drift. Style-preference linters are excluded.
+
+version: "2"
+
+run:
+  timeout: 5m
+  # Skip the vendored/reference clones entirely — those are upstream trees we
+  # consume, not code we own.
+  tests: true
+
+linters:
+  # Start from a clean slate: enable only what we explicitly list below.
+  default: none
+  enable:
+    - errcheck      # no unchecked errors
+    - govet         # standard vet checks
+    - staticcheck   # primary correctness linter (bundles gosimple, stylecheck, unused)
+    - gofmt         # formatting drift
+    - lll           # line length cap
+    - funlen        # function size cap
+    - misspell      # common spelling mistakes
+  settings:
+    funlen:
+      # TigerStyle: keep functions short. We cap by line count and deliberately
+      # do not cap statements — a long expression shouldn't fail the build.
+      lines: 70
+      statements: -1
+      ignore-comments: true
+    lll:
+      line-length: 100
+      tab-width: 4
+    gofmt:
+      simplify: true
+    misspell:
+      locale: US
+  exclusions:
+    # Keep rules tight: no default excludes except where the tool insists.
+    generated: lax
+    rules:
+      # Test files may have long table-driven test cases; exempt them from funlen.
+      - path: _test\.go
+        linters:
+          - funlen
+      # Reference clones are read-only upstream code; never lint them.
+      - path: ^reference/
+        linters:
+          - errcheck
+          - govet
+          - staticcheck
+          - gofmt
+          - lll
+          - funlen
+          - misspell
+
+issues:
+  # Surface every finding — we want signal, not a sampled view.
+  max-issues-per-linter: 0
+  max-same-issues: 0

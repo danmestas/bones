@@ -44,4 +44,52 @@ if [ "$violations" -gt 0 ]; then
   exit 1
 fi
 
+# --- TigerStyle checks (issue 2t0) ---------------------------------------
+# The import-boundary guard above is a correctness gate. The checks below are
+# discipline gates: formatting drift and stray TODO markers. They run only on
+# staged .go files so the hook stays fast.
+
+fmt_violations=0
+todo_violations=0
+
+for file in "${staged[@]}"; do
+  [ -f "$file" ] || continue
+
+  # gofmt check: -l prints a filename only when formatting would change it.
+  if [ -n "$(gofmt -l "$file" 2>/dev/null)" ]; then
+    printf 'gofmt drift: %s\n' "$file" >&2
+    fmt_violations=$((fmt_violations + 1))
+  fi
+
+  # TODO check: production code only. Test files may document pending
+  # behavior inline; everything else must live as a beads issue.
+  case "$file" in
+    *_test.go) : ;;  # exempt
+    *)
+      while IFS=: read -r lineno content; do
+        [ -n "$lineno" ] || continue
+        printf 'TODO marker: %s:%s: %s\n' "$file" "$lineno" "${content## }" >&2
+        todo_violations=$((todo_violations + 1))
+      done < <(grep -nE 'TODO' "$file" 2>/dev/null || true)
+      ;;
+  esac
+done
+
+if [ "$fmt_violations" -gt 0 ]; then
+  echo "" >&2
+  echo "agent-infra pre-commit: $fmt_violations file(s) need gofmt." >&2
+  echo "Run: gofmt -w <files>   (or: make fmt)" >&2
+fi
+
+if [ "$todo_violations" -gt 0 ]; then
+  echo "" >&2
+  echo "agent-infra pre-commit: $todo_violations TODO marker(s) in production code." >&2
+  echo "File a beads issue instead: bd create --title '...' --description '...'" >&2
+  echo "See project CLAUDE.md §Beads Issue Tracker." >&2
+fi
+
+if [ "$fmt_violations" -gt 0 ] || [ "$todo_violations" -gt 0 ]; then
+  exit 1
+fi
+
 exit 0
