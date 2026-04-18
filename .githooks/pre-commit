@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Pre-commit hook: block imports from EdgeSync/ or go-libfossil/ internal/ subtrees.
+# Activate: run `git config core.hooksPath .githooks` from the repo root.
+# This keeps agent-infra honest about the public API boundary documented in README §Development setup.
+
+set -euo pipefail
+
+# Module paths — mirrored from reference/EdgeSync/go.mod and reference/go-libfossil/go.mod.
+# If either upstream renames its module, update these constants.
+EDGESYNC_MODULE="github.com/dmestas/edgesync"
+LIBFOSSIL_MODULE="github.com/danmestas/go-libfossil"
+
+# Collect staged .go files (Added, Copied, Modified, Renamed). Null-delimited for safety.
+mapfile -d '' staged < <(git diff --cached --name-only --diff-filter=ACMR -z -- '*.go' || true)
+
+if [ "${#staged[@]}" -eq 0 ]; then
+  exit 0
+fi
+
+violations=0
+
+for file in "${staged[@]}"; do
+  # Skip files that were staged-deleted or vanished between diff and grep.
+  [ -f "$file" ] || continue
+
+  # Match import lines referencing <module>/internal/... — handles both
+  # single-line `import "..."` and block-form `"..."` entries.
+  # Double-quoted strings containing "<module>/internal" are the signal.
+  while IFS=: read -r lineno content; do
+    # lineno is empty when grep finds nothing — skip.
+    [ -n "$lineno" ] || continue
+    printf 'forbidden import: %s:%s: %s\n' "$file" "$lineno" "${content## }" >&2
+    violations=$((violations + 1))
+  done < <(
+    grep -nE "\"(${EDGESYNC_MODULE//\//\\/}|${LIBFOSSIL_MODULE//\//\\/})/internal(/|\")" "$file" 2>/dev/null || true
+  )
+done
+
+if [ "$violations" -gt 0 ]; then
+  echo "" >&2
+  echo "agent-infra pre-commit: $violations forbidden import(s) detected." >&2
+  echo "agent-infra must consume only the public API of EdgeSync and go-libfossil." >&2
+  echo "See README §Development setup." >&2
+  exit 1
+fi
+
+exit 0
