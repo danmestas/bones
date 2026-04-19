@@ -83,3 +83,40 @@ func eventFromMessage(msg notify.Message) ChatMessage {
 		replyTo:   msg.ReplyTo,
 	}
 }
+
+// PresenceChange is the Event fired on coord.WatchPresence when an
+// agent appears in or disappears from the presence substrate. Up is
+// true when the agent became reachable (first heartbeat or return
+// after an outage); false when the agent went away (clean shutdown
+// deletes the entry; missed heartbeats expire it via KV TTL).
+//
+// All fields are unexported to keep the Coord public surface
+// migration-ready (parallel with ChatMessage above and Task/Presence
+// in types.go).
+type PresenceChange struct {
+	agentID   string
+	project   string
+	up        bool
+	timestamp time.Time
+}
+
+// eventTag seals PresenceChange as a coord.Event implementation.
+func (PresenceChange) eventTag() {}
+
+// AgentID returns the identifier of the agent whose presence changed.
+func (p PresenceChange) AgentID() string { return p.agentID }
+
+// Project returns the project segment of the agent.
+func (p PresenceChange) Project() string { return p.project }
+
+// Up reports the direction of the change: true for became-online,
+// false for went-offline. A Down event with no prior Up on the same
+// consumer's watch is possible — the watch started after the initial
+// Up — and a consumer that cares about the full picture should seed
+// state from coord.Who before WatchPresence.
+func (p PresenceChange) Up() bool { return p.up }
+
+// Timestamp returns the wall-clock time the watcher observed the
+// change, NOT the original event time at the substrate. Observed-time
+// semantics match notify's delivery model.
+func (p PresenceChange) Timestamp() time.Time { return p.timestamp }

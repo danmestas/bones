@@ -16,7 +16,7 @@ import (
 const seedTaskID = "agent-infra-c46close"
 
 // seedClaimedTask writes a claimed task record bound to the Coord's
-// configured AgentID. The record is created directly via c.tasks.Create
+// configured AgentID. The record is created directly via c.sub.tasks.Create
 // so the test is same-package; that path sits below invariant 13's
 // transition DAG (Create has no prior state to transition from) but
 // still runs invariant 11's claimed_by/status coupling check, so the
@@ -34,7 +34,7 @@ func seedClaimedTask(t *testing.T, c *Coord, id string) {
 		UpdatedAt:     now,
 		SchemaVersion: tasks.SchemaVersion,
 	}
-	if err := c.tasks.Create(context.Background(), rec); err != nil {
+	if err := c.sub.tasks.Create(context.Background(), rec); err != nil {
 		t.Fatalf("seed claimed task: %v", err)
 	}
 }
@@ -52,7 +52,7 @@ func seedOpenTask(t *testing.T, c *Coord, id string) {
 		UpdatedAt:     now,
 		SchemaVersion: tasks.SchemaVersion,
 	}
-	if err := c.tasks.Create(context.Background(), rec); err != nil {
+	if err := c.sub.tasks.Create(context.Background(), rec); err != nil {
 		t.Fatalf("seed open task: %v", err)
 	}
 }
@@ -73,7 +73,7 @@ func seedClaimedByOther(
 		UpdatedAt:     now,
 		SchemaVersion: tasks.SchemaVersion,
 	}
-	if err := c.tasks.Create(context.Background(), rec); err != nil {
+	if err := c.sub.tasks.Create(context.Background(), rec); err != nil {
 		t.Fatalf("seed peer-claimed task: %v", err)
 	}
 }
@@ -95,7 +95,7 @@ func seedClosedTask(t *testing.T, c *Coord, id string) {
 		ClosedReason:  "prior close",
 		SchemaVersion: tasks.SchemaVersion,
 	}
-	if err := c.tasks.Create(context.Background(), rec); err != nil {
+	if err := c.sub.tasks.Create(context.Background(), rec); err != nil {
 		t.Fatalf("seed closed task: %v", err)
 	}
 }
@@ -119,7 +119,7 @@ func TestCloseTask_HappyPath(t *testing.T) {
 	}
 	after := time.Now().UTC()
 
-	got, _, err := c.tasks.Get(context.Background(), seedTaskID)
+	got, _, err := c.sub.tasks.Get(context.Background(), seedTaskID)
 	if err != nil {
 		t.Fatalf("Get post-close: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestCloseTask_OpenTask_ReturnsAgentMismatch(t *testing.T) {
 		t.Fatalf("CloseTask: got %v, want ErrAgentMismatch", err)
 	}
 
-	got, _, gerr := c.tasks.Get(context.Background(), seedTaskID)
+	got, _, gerr := c.sub.tasks.Get(context.Background(), seedTaskID)
 	if gerr != nil {
 		t.Fatalf("Get: %v", gerr)
 	}
@@ -195,7 +195,7 @@ func TestCloseTask_ClaimedByOther_ReturnsAgentMismatch(t *testing.T) {
 		t.Fatalf("CloseTask: got %v, want ErrAgentMismatch", err)
 	}
 
-	got, _, gerr := c.tasks.Get(context.Background(), seedTaskID)
+	got, _, gerr := c.sub.tasks.Get(context.Background(), seedTaskID)
 	if gerr != nil {
 		t.Fatalf("Get: %v", gerr)
 	}
@@ -239,7 +239,7 @@ func TestCloseTask_AlreadyClosed(t *testing.T) {
 		)
 	}
 
-	got, _, gerr := c.tasks.Get(context.Background(), seedTaskID)
+	got, _, gerr := c.sub.tasks.Get(context.Background(), seedTaskID)
 	if gerr != nil {
 		t.Fatalf("Get: %v", gerr)
 	}

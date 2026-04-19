@@ -1,7 +1,7 @@
 # Coord Invariants
 
 The coord surface is defined as much by what it refuses as by what it does. The
-seventeen invariants below are asserted at the entry of every public method. An
+nineteen invariants below are asserted at the entry of every public method. An
 assertion failure is a programmer error — the caller violated a contract — and it
 panics via `internal/assert`. An operating error — resource busy, not found,
 mismatch — returns a sentinel error through the standard `(_, error)` return.
@@ -11,7 +11,8 @@ for conditions the caller is expected to handle.
 Invariants 1-10 are the Phase 1 coord-API contract. Invariants 11-16 extend the
 set for Phase 2's task-state surface, entailed by ADR 0005 (tasks in NATS KV)
 and ADR 0007 (Claim task-CAS ordering). Invariant 17 extends it for Phase 3's
-chat surface, entailed by ADR 0008.
+chat surface, entailed by ADR 0008. Invariants 18-19 extend it for Phase 4's
+presence surface, entailed by ADR 0009.
 
 `Config.Validate` is the one exception to the panic-on-contract-violation rule. It runs
 at `Open(ctx, cfg)` against operator-supplied values and returns an error. Bad operator
@@ -253,6 +254,45 @@ push it onto every caller. See ADR 0008.
 same shape as invariant 7's hold-release closure. Planned: the Phase 3
 `coord.Subscribe` implementation ticket.
 
+### 18. Presence heartbeat lifecycle is bounded by Open/Close
+
+**Invariant.** The heartbeat goroutine started by `coord.Open` (for the
+presence substrate) is terminated before `coord.Close` returns. On Close the
+agent's presence KV entry is deleted explicitly — not merely abandoned to TTL
+expiry — and the goroutine is joined via a done channel before teardown
+proceeds to the next substrate.
+
+**Rationale.** A heartbeat that outlives `Close` is a goroutine leak and a
+racy write against a substrate that the caller believes is torn down. Leaving
+the KV entry to TTL expiry (rather than deleting it) would mean that every
+agent shutdown looks like a crash to its peers, which defeats the point of
+`EventDown` as a clean-exit signal. ADR 0009 is explicit that both the
+goroutine and the entry must be cleaned up synchronously.
+
+**Enforcement site.** `internal/presence.Manager.Close`: an atomic `closed`
+CAS guards idempotency; `hbCancel()` cancels the heartbeat context; `<-hbDone`
+blocks until `heartbeatLoop` exits; then `kv.Delete` removes the entry (errors
+swallowed — TTL is the fallback if the substrate is already degraded).
+
+### 19. Presence TTL is exactly 3 × HeartbeatInterval, fixed in code
+
+**Invariant.** The presence KV bucket is created with
+`TTL = 3 * Config.HeartbeatInterval`. The multiplier is a package constant
+(`internal/presence.TTLMultiplier = 3`), not a Config knob. Tightening or
+relaxing the bound is an ADR-level change.
+
+**Rationale.** A multiplier below 3 produces flapping presence under normal
+ticker jitter and transient KV latency — every GC pause or brief network hitch
+looks like an agent going offline, then coming back. A multiplier far above 3
+delays `EventDown` surfacing beyond the point where callers can act on it.
+Exposing the multiplier to operators would be a foot-gun with no legitimate
+use case: either the default is right or it needs ADR-level discussion. ADR
+0009 fixes the value so misconfiguration is impossible.
+
+**Enforcement site.** `internal/presence.TTLMultiplier` constant, consumed
+exactly once in `Open` when the KV bucket is declared. A change to the
+constant is a visible diff that pairs naturally with an ADR amendment.
+
 ## Where the invariants live
 
 Invariants 6 and 7 are the load-bearing guarantees of ADR 0002 (scoped holds via
@@ -260,5 +300,6 @@ closure/return-release). Invariant 10 is the no-error-swallowing corollary to AD
 (substrate hiding). Invariants 11-16 are entailed by ADRs 0005 (tasks in NATS KV)
 and 0007 (Claim task-CAS ordering); ADR 0006 is the narrowing that made those
 invariants the task-conflict contract rather than fork-merge policy. Invariant 17
-is entailed by ADR 0008 (chat substrate). This document is the canonical list;
-coord method godoc will cite these numbers rather than restating the reasoning.
+is entailed by ADR 0008 (chat substrate). Invariants 18-19 are entailed by ADR 0009
+(presence substrate). This document is the canonical list; coord method godoc
+will cite these numbers rather than restating the reasoning.

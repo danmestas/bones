@@ -28,7 +28,7 @@ import (
 func (c *Coord) Ready(ctx context.Context) ([]Task, error) {
 	c.assertOpen("Ready")
 	assert.NotNil(ctx, "coord.Ready: ctx is nil")
-	records, err := c.tasks.List(ctx)
+	records, err := c.sub.tasks.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("coord.Ready: %w", err)
 	}

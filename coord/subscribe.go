@@ -71,9 +71,9 @@ func (c *Coord) watchChat(
 	ctx context.Context, pattern string,
 ) <-chan notify.Message {
 	if pattern == "" {
-		return c.chat.WatchAll(ctx)
+		return c.sub.chat.WatchAll(ctx)
 	}
-	return c.chat.Watch(ctx, pattern)
+	return c.sub.chat.Watch(ctx, pattern)
 }
 
 // reserveSubscriberSlot increments subsActive and rolls back if the new
