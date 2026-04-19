@@ -1,10 +1,19 @@
 package coord
 
 import (
+	"strings"
 	"time"
 
 	"github.com/dmestas/edgesync/leaf/agent/notify"
 )
+
+// reactionBodyPrefix is the in-band tag that marks a notify.Message as
+// a reaction rather than a chat post. Bodies that start with this
+// prefix are translated into Reaction events by eventFromMessage;
+// every other body surfaces as ChatMessage. Kept private because the
+// encoding is a substrate detail per ADR 0003 — callers React and
+// receive Reaction, they never observe the wire format.
+const reactionBodyPrefix = "REACT:"
 
 // Event is the type of value delivered on coord.Subscribe's channel.
 // Phase 3 ships ChatMessage as the only concrete type; later phases
@@ -38,6 +47,7 @@ type Event interface {
 type ChatMessage struct {
 	from      string
 	thread    string
+	messageID string
 	body      string
 	timestamp time.Time
 	replyTo   string
@@ -56,6 +66,12 @@ func (m ChatMessage) From() string { return m.from }
 // consumer needs it.
 func (m ChatMessage) Thread() string { return m.thread }
 
+// MessageID returns the substrate-assigned identifier for this
+// message. Opaque to callers — consumers pass it back to coord.React
+// as the target identifier without interpreting the contents. Added
+// in Phase 4 per ADR 0009; source-compatible extension.
+func (m ChatMessage) MessageID() string { return m.messageID }
+
 // Body returns the message payload as a string.
 func (m ChatMessage) Body() string { return m.body }
 
@@ -71,18 +87,97 @@ func (m ChatMessage) ReplyTo() string { return m.replyTo }
 // package boundary per ADR 0003. Mirrors the taskFromRecord helper in
 // coord/types.go.
 //
-// The Thread field is populated from msg.ThreadShort() because that
-// matches coord.Post's caller-visible thread identity; if later phases
-// need the full UUID the translator is the single edit site.
-func eventFromMessage(msg notify.Message) ChatMessage {
+// Phase 4 routes REACT-prefixed bodies to Reaction instead of
+// ChatMessage (ADR 0009); a malformed REACT body (missing the second
+// colon) surfaces as an ordinary ChatMessage, so garbage on the wire
+// degrades to a visible chat post rather than being silently dropped.
+func eventFromMessage(msg notify.Message) Event {
+	if r, ok := reactionFromMessage(msg); ok {
+		return r
+	}
 	return ChatMessage{
 		from:      msg.From,
 		thread:    msg.ThreadShort(),
+		messageID: msg.ID,
 		body:      msg.Body,
 		timestamp: msg.Timestamp,
 		replyTo:   msg.ReplyTo,
 	}
 }
+
+// Reaction is the coord.Subscribe surface for a peer's reaction to
+// another message. It carries the target messageID (whatever coord.
+// React was called with, opaque substrate identifier) plus the caller-
+// provided reaction string. Reactions are delivered on the same event
+// channel as ChatMessage; consumers discriminate via the Event type
+// switch per ADR 0008.
+//
+// Reactions piggyback on the chat substrate — no separate KV bucket,
+// no new NATS subject. The in-band encoding is a substrate detail and
+// never appears on the public surface.
+type Reaction struct {
+	from      string
+	thread    string
+	target    string
+	reaction  string
+	timestamp time.Time
+}
+
+// eventTag seals Reaction as a coord.Event implementation.
+func (Reaction) eventTag() {}
+
+// From returns the agent identifier of the reactor.
+func (r Reaction) From() string { return r.from }
+
+// Thread returns the 8-character short thread identifier the reaction
+// was posted under. Matches ChatMessage.Thread so consumers that track
+// per-thread state can route on a single field.
+func (r Reaction) Thread() string { return r.thread }
+
+// Target returns the MessageID of the chat message this reaction
+// applies to. Opaque — the caller passed it into coord.React and
+// received it back unchanged, consistent with ADR 0003's substrate-
+// hiding rule for identifiers.
+func (r Reaction) Target() string { return r.target }
+
+// Body returns the reaction payload as a string. Coord does not
+// validate or normalize the content — emoji, text, or arbitrary bytes
+// all pass through untouched.
+func (r Reaction) Body() string { return r.reaction }
+
+// Timestamp returns the UTC wall-clock time the reaction was created.
+func (r Reaction) Timestamp() time.Time { return r.timestamp }
+
+// reactionFromMessage parses a notify.Message into a Reaction when its
+// body matches the REACT-prefix encoding. The format is
+// "REACT:<messageID>:<reaction>" — the first colon after the prefix
+// splits target from reaction content, so a reaction payload may itself
+// contain colons without ambiguity. A body that starts with the prefix
+// but lacks a second colon is treated as malformed and returns
+// (Reaction{}, false), letting eventFromMessage fall through to
+// ChatMessage translation.
+func reactionFromMessage(msg notify.Message) (Reaction, bool) {
+	if !strings.HasPrefix(msg.Body, reactionBodyPrefix) {
+		return Reaction{}, false
+	}
+	rest := msg.Body[len(reactionBodyPrefix):]
+	idx := strings.IndexByte(rest, ':')
+	if idx < 0 {
+		return Reaction{}, false
+	}
+	return Reaction{
+		from:      msg.From,
+		thread:    msg.ThreadShort(),
+		target:    rest[:idx],
+		reaction:  rest[idx+1:],
+		timestamp: msg.Timestamp,
+	}, true
+}
+
+// _ is a compile-time assertion that Reaction satisfies Event. A
+// failing assertion here means we lost the sealed-interface seal and
+// external packages could construct Reaction values directly.
+var _ Event = Reaction{}
 
 // PresenceChange is the Event fired on coord.WatchPresence when an
 // agent appears in or disappears from the presence substrate. Up is
