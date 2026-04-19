@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/danmestas/agent-infra/internal/testutil/natstest"
 )
 
 // nilCtx is a typed-nil context.Context used to exercise the nil-ctx
@@ -15,7 +17,9 @@ var nilCtx context.Context
 
 // validConfig returns a fully-valid Config for Coord lifecycle tests.
 // Fields mirror baselineConfig in config_test.go; kept separate so the
-// two test files remain readable in isolation.
+// two test files remain readable in isolation. The NATSURL here is a
+// loopback stub — tests that reach the NATS dial use validConfigWithURL
+// instead.
 func validConfig() Config {
 	return Config{
 		AgentID:           "test-agent",
@@ -28,7 +32,17 @@ func validConfig() Config {
 		HeartbeatInterval: 5 * time.Second,
 		NATSReconnectWait: 2 * time.Second,
 		NATSMaxReconnects: 5,
+		NATSURL:           "nats://127.0.0.1:0",
 	}
+}
+
+// validConfigWithURL returns validConfig with NATSURL overridden to
+// point at a live test NATS server. Use for tests that actually invoke
+// Open past the Config.Validate gate.
+func validConfigWithURL(url string) Config {
+	cfg := validConfig()
+	cfg.NATSURL = url
+	return cfg
 }
 
 // requirePanic asserts fn panics with a value whose string form
@@ -49,21 +63,29 @@ func requirePanic(t *testing.T, fn func(), wantContains string) {
 	fn()
 }
 
-// mustOpen constructs a Coord from validConfig or fails the test.
+// mustOpen constructs a Coord bound to a live embedded JetStream server
+// and registers teardown via t.Cleanup. Use from tests that need an
+// opened Coord — including the invariant-panic tests, which never reach
+// NATS but still require a non-nil receiver.
 func mustOpen(t *testing.T) *Coord {
 	t.Helper()
-	c, err := Open(context.Background(), validConfig())
+	nc, _ := natstest.NewJetStreamServer(t)
+	cfg := validConfigWithURL(nc.ConnectedUrl())
+	c, err := Open(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("Open: unexpected error: %v", err)
 	}
 	if c == nil {
 		t.Fatalf("Open: returned nil Coord")
 	}
+	t.Cleanup(func() { _ = c.Close() })
 	return c
 }
 
 func TestOpen_Valid(t *testing.T) {
-	c, err := Open(context.Background(), validConfig())
+	nc, _ := natstest.NewJetStreamServer(t)
+	cfg := validConfigWithURL(nc.ConnectedUrl())
+	c, err := Open(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("Open: unexpected error: %v", err)
 	}
@@ -106,21 +128,6 @@ func TestClose_Idempotent(t *testing.T) {
 	}
 	if err := c.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
-	}
-}
-
-func TestClaim_ReturnsNotImplemented(t *testing.T) {
-	c := mustOpen(t)
-	defer func() { _ = c.Close() }()
-	files := []string{"/a", "/b"}
-	rel, err := c.Claim(
-		context.Background(), TaskID("t-1"), files, 10*time.Second,
-	)
-	if !errors.Is(err, ErrNotImplemented) {
-		t.Fatalf("Claim: want ErrNotImplemented, got %v", err)
-	}
-	if rel != nil {
-		t.Fatalf("Claim: want nil release closure, got %T", rel)
 	}
 }
 
