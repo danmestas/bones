@@ -1,7 +1,7 @@
 # Coord Invariants
 
 The coord surface is defined as much by what it refuses as by what it does. The
-sixteen invariants below are asserted at the entry of every public method. An
+seventeen invariants below are asserted at the entry of every public method. An
 assertion failure is a programmer error — the caller violated a contract — and it
 panics via `internal/assert`. An operating error — resource busy, not found,
 mismatch — returns a sentinel error through the standard `(_, error)` return.
@@ -10,7 +10,8 @@ for conditions the caller is expected to handle.
 
 Invariants 1-10 are the Phase 1 coord-API contract. Invariants 11-16 extend the
 set for Phase 2's task-state surface, entailed by ADR 0005 (tasks in NATS KV)
-and ADR 0007 (Claim task-CAS ordering).
+and ADR 0007 (Claim task-CAS ordering). Invariant 17 extends it for Phase 3's
+chat surface, entailed by ADR 0008.
 
 `Config.Validate` is the one exception to the panic-on-contract-violation rule. It runs
 at `Open(ctx, cfg)` against operator-supplied values and returns an error. Bad operator
@@ -234,12 +235,30 @@ constructs one that chains the un-claim CAS and the hold releases, wrapped in
 the existing `sync.Once` guard that already gives invariant 7. Planned: issues
 agent-infra-zsj (task-CAS step) and agent-infra-k35 (closure rewiring).
 
+### 17. Subscribe's close closure is idempotent
+
+**Invariant.** The closure returned by `coord.Subscribe` is safe to call more
+than once. The first invocation cancels the internal ctx, drains the substrate
+unsubscribe path, and closes the delivered event channel, returning the first
+non-nil error from any step. Subsequent invocations return nil and take no
+action.
+
+**Rationale.** Mirrors invariant 7 for `Claim`'s release closure. `defer
+close()` is the idiomatic cleanup shape; callers may also call `close()`
+explicitly to exit the subscribe loop early. Neither path should error, and
+coord is the right place to absorb the first-vs-later bookkeeping rather than
+push it onto every caller. See ADR 0008.
+
+**Enforcement site.** Enforced inside the closure via a `sync.Once` guard,
+same shape as invariant 7's hold-release closure. Planned: the Phase 3
+`coord.Subscribe` implementation ticket.
+
 ## Where the invariants live
 
 Invariants 6 and 7 are the load-bearing guarantees of ADR 0002 (scoped holds via
 closure/return-release). Invariant 10 is the no-error-swallowing corollary to ADR 0003
 (substrate hiding). Invariants 11-16 are entailed by ADRs 0005 (tasks in NATS KV)
 and 0007 (Claim task-CAS ordering); ADR 0006 is the narrowing that made those
-invariants the task-conflict contract rather than fork-merge policy. This document
-is the canonical list; coord method godoc will cite these numbers rather than
-restating the reasoning.
+invariants the task-conflict contract rather than fork-merge policy. Invariant 17
+is entailed by ADR 0008 (chat substrate). This document is the canonical list;
+coord method godoc will cite these numbers rather than restating the reasoning.
