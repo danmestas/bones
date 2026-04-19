@@ -16,6 +16,7 @@ func baselineConfig() Config {
 		MaxHoldsPerClaim:  32,
 		MaxSubscribers:    32,
 		MaxTaskFiles:      32,
+		MaxReadyReturn:    256,
 		MaxTaskValueSize:  8 * 1024,
 		TaskHistoryDepth:  8,
 		OperationTimeout:  10 * time.Second,
@@ -86,6 +87,16 @@ func TestConfigValidate_Invalid(t *testing.T) {
 			name:    "zero MaxTaskFiles",
 			mutate:  func(c *Config) { c.MaxTaskFiles = 0 },
 			wantKey: "MaxTaskFiles",
+		},
+		{
+			name:    "zero MaxReadyReturn",
+			mutate:  func(c *Config) { c.MaxReadyReturn = 0 },
+			wantKey: "MaxReadyReturn",
+		},
+		{
+			name:    "negative MaxReadyReturn",
+			mutate:  func(c *Config) { c.MaxReadyReturn = -1 },
+			wantKey: "MaxReadyReturn",
 		},
 		{
 			name:    "zero MaxTaskValueSize",
