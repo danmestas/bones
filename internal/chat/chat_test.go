@@ -410,6 +410,84 @@ func TestWatch_UseAfterClose(t *testing.T) {
 	}
 }
 
+// TestWatchPattern_WildcardDelivery is the substrate-level analog of
+// coord.TestSubscribePattern_WildcardReceivesAll. Manager A subscribes
+// with pattern "*" (which forwards unchanged to notify as a NATS
+// subject wildcard), Manager B Sends to "t1", and A must receive the
+// message. The point of the pattern path is that "*" leaves the
+// ThreadShort untouched — no hash round-trip — so delivery lands on
+// the raw <proj>.* subject.
+func TestWatchPattern_WildcardDelivery(t *testing.T) {
+	nc, _ := natstest.NewTestServer(t)
+
+	cfgA := validConfig(t)
+	cfgA.AgentID = "agent-infra-aaaa"
+	cfgA.Nats = nc
+	cfgB := validConfig(t)
+	cfgB.AgentID = "agent-infra-bbbb"
+	cfgB.FossilRepoPath = filepath.Join(t.TempDir(), "b.fossil")
+	cfgB.Nats = nc
+
+	mA, err := chat.Open(context.Background(), cfgA)
+	if err != nil {
+		t.Fatalf("Open A: %v", err)
+	}
+	defer func() { _ = mA.Close() }()
+	mB, err := chat.Open(context.Background(), cfgB)
+	if err != nil {
+		t.Fatalf("Open B: %v", err)
+	}
+	defer func() { _ = mB.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := mA.WatchPattern(ctx, "*")
+
+	if err := mB.Send(context.Background(), "t1", "hi-pat"); err != nil {
+		t.Fatalf("B.Send: %v", err)
+	}
+
+	select {
+	case msg, ok := <-stream:
+		if !ok {
+			t.Fatalf("stream: closed before delivery")
+		}
+		if msg.Body != "hi-pat" {
+			t.Fatalf("Body=%q, want %q", msg.Body, "hi-pat")
+		}
+	case <-time.After(deterministicTestTimeout):
+		t.Fatalf("no WatchPattern delivery within %s",
+			deterministicTestTimeout)
+	}
+}
+
+// TestWatchPattern_InvariantPanics pins the nil-ctx and empty-pattern
+// preconditions that distinguish WatchPattern from WatchAll (which
+// accepts empty by definition). Empty-pattern callers at the chat
+// layer should use WatchAll; the panic documents that contract.
+func TestWatchPattern_InvariantPanics(t *testing.T) {
+	nc, _ := natstest.NewTestServer(t)
+	cfg := validConfig(t)
+	cfg.Nats = nc
+	m, err := chat.Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	t.Run("nil ctx", func(t *testing.T) {
+		var nilCtx context.Context
+		requirePanic(t, func() {
+			_ = m.WatchPattern(nilCtx, "*")
+		}, "ctx is nil")
+	})
+	t.Run("empty pattern", func(t *testing.T) {
+		requirePanic(t, func() {
+			_ = m.WatchPattern(context.Background(), "")
+		}, "pattern is empty")
+	})
+}
+
 // TestRequest_RespondRoundTrip covers both halves of the req/reply
 // substrate in one pass: a single Manager Respond-registers a handler
 // and Requests on the same subject, proving the wire path is

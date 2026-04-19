@@ -47,7 +47,7 @@ func (c *Coord) Subscribe(
 ) (<-chan Event, func() error, error) {
 	c.assertOpen("Subscribe")
 	assert.NotNil(ctx, "coord.Subscribe: ctx is nil")
-	if err := c.reserveSubscriberSlot(); err != nil {
+	if err := c.reserveSubscriberSlot("coord.Subscribe"); err != nil {
 		return nil, nil, err
 	}
 	relayCtx, cancel := context.WithCancel(ctx)
@@ -77,15 +77,16 @@ func (c *Coord) watchChat(
 }
 
 // reserveSubscriberSlot increments subsActive and rolls back if the new
-// count exceeds Config.MaxSubscribers, returning ErrTooManySubscribers.
-// Extracted so Subscribe itself stays below the 70-line funlen cap.
-func (c *Coord) reserveSubscriberSlot() error {
+// count exceeds Config.MaxSubscribers, returning ErrTooManySubscribers
+// wrapped with the caller-supplied method prefix. prefix is
+// "coord.Subscribe" or "coord.SubscribePattern" so the error text names
+// the actual entry point. Extracted so each Subscribe variant stays
+// below the 70-line funlen cap.
+func (c *Coord) reserveSubscriberSlot(prefix string) error {
 	next := c.subsActive.Add(1)
 	if int(next) > c.cfg.MaxSubscribers {
 		c.subsActive.Add(-1)
-		return fmt.Errorf(
-			"coord.Subscribe: %w", ErrTooManySubscribers,
-		)
+		return fmt.Errorf("%s: %w", prefix, ErrTooManySubscribers)
 	}
 	return nil
 }
