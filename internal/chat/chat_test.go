@@ -324,3 +324,229 @@ func TestSend_DeterministicAcrossRestart(t *testing.T) {
 		)
 	}
 }
+
+// reqRespTimeout bounds the request/reply round trips below. Generous
+// enough for CI jitter but tight enough that no-responder tests return
+// fast.
+const reqRespTimeout = 2 * time.Second
+
+// TestWatch_NamedDelivery exercises the Watch path in isolation from
+// coord.Subscribe: Manager A subscribes to thread "t1" via Watch,
+// Manager B Sends to "t1", and A must receive the message. Both
+// Managers compute the same ThreadShort from SHA-256("agent-infra:t1")
+// so the delivery path closes at the chat layer alone, not via the
+// coord wrapper. Also covers threadShort — the helper is unreachable
+// via WatchAll.
+func TestWatch_NamedDelivery(t *testing.T) {
+	nc, _ := natstest.NewTestServer(t)
+
+	cfgA := validConfig(t)
+	cfgA.AgentID = "agent-infra-aaaa"
+	cfgA.Nats = nc
+	cfgB := validConfig(t)
+	cfgB.AgentID = "agent-infra-bbbb"
+	cfgB.FossilRepoPath = filepath.Join(t.TempDir(), "b.fossil")
+	cfgB.Nats = nc
+
+	mA, err := chat.Open(context.Background(), cfgA)
+	if err != nil {
+		t.Fatalf("Open A: %v", err)
+	}
+	defer func() { _ = mA.Close() }()
+	mB, err := chat.Open(context.Background(), cfgB)
+	if err != nil {
+		t.Fatalf("Open B: %v", err)
+	}
+	defer func() { _ = mB.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := mA.Watch(ctx, "t1")
+
+	if err := mB.Send(context.Background(), "t1", "hi"); err != nil {
+		t.Fatalf("B.Send: %v", err)
+	}
+
+	select {
+	case msg, ok := <-stream:
+		if !ok {
+			t.Fatalf("stream: closed before delivery")
+		}
+		if msg.Body != "hi" {
+			t.Fatalf("Body=%q, want %q", msg.Body, "hi")
+		}
+	case <-time.After(deterministicTestTimeout):
+		t.Fatalf(
+			"no named-Watch delivery within %s",
+			deterministicTestTimeout,
+		)
+	}
+}
+
+// TestWatch_UseAfterClose verifies the closed-Manager path returns an
+// already-closed channel rather than panicking. Deferred consumer
+// drains stay quiet when chat is torn down during shutdown.
+func TestWatch_UseAfterClose(t *testing.T) {
+	nc, _ := natstest.NewTestServer(t)
+	cfg := validConfig(t)
+	cfg.Nats = nc
+
+	m, err := chat.Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	ch := m.Watch(context.Background(), "t1")
+	select {
+	case _, ok := <-ch:
+		if ok {
+			t.Fatalf("Watch: expected closed channel, got open recv")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatalf("Watch: channel not closed within 100ms")
+	}
+}
+
+// TestRequest_RespondRoundTrip covers both halves of the req/reply
+// substrate in one pass: a single Manager Respond-registers a handler
+// and Requests on the same subject, proving the wire path is
+// symmetrical and the handler's reply reaches the caller unchanged.
+// Single Manager on purpose — the surface is subject-string in,
+// payload-bytes out, and spans no project/thread state.
+func TestRequest_RespondRoundTrip(t *testing.T) {
+	nc, _ := natstest.NewTestServer(t)
+	cfg := validConfig(t)
+	cfg.Nats = nc
+
+	m, err := chat.Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	unsub, err := m.Respond(
+		"test.echo",
+		func(payload []byte) ([]byte, error) {
+			return append([]byte("echo:"), payload...), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Respond: %v", err)
+	}
+	defer func() { _ = unsub() }()
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(), reqRespTimeout,
+	)
+	defer cancel()
+	reply, err := m.Request(ctx, "test.echo", []byte("ping"))
+	if err != nil {
+		t.Fatalf("Request: %v", err)
+	}
+	if string(reply) != "echo:ping" {
+		t.Fatalf("reply = %q, want %q", string(reply), "echo:ping")
+	}
+}
+
+// TestRequest_NoResponder pins the no-responder error lane. A Request
+// on an unsubscribed subject with a tight deadline returns a
+// non-nil error wrapped with the chat.Request prefix; the inner
+// sentinel is nats.ErrNoResponders (when the server reports it) or
+// context.DeadlineExceeded (when the deadline fires first). Callers
+// distinguish via errors.Is; this test only pins that some error
+// surfaces with the wrap prefix.
+func TestRequest_NoResponder(t *testing.T) {
+	nc, _ := natstest.NewTestServer(t)
+	cfg := validConfig(t)
+	cfg.Nats = nc
+
+	m, err := chat.Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(), 200*time.Millisecond,
+	)
+	defer cancel()
+	_, err = m.Request(ctx, "nobody.here", []byte("hi"))
+	if err == nil {
+		t.Fatalf("Request: expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "chat.Request") {
+		t.Fatalf("Request: err %q missing wrap prefix", err)
+	}
+}
+
+// TestRespond_UnsubscribeIdempotent pins the sync.Once-guarded
+// unsubscribe: calling the returned closure more than once returns
+// nil on every subsequent call without re-invoking nc.Subscribe's
+// teardown. Idempotent teardown lets callers defer the unsubscribe
+// without worrying about a double-close panic from an explicit
+// earlier call.
+func TestRespond_UnsubscribeIdempotent(t *testing.T) {
+	nc, _ := natstest.NewTestServer(t)
+	cfg := validConfig(t)
+	cfg.Nats = nc
+
+	m, err := chat.Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	unsub, err := m.Respond(
+		"test.idem",
+		func([]byte) ([]byte, error) { return nil, nil },
+	)
+	if err != nil {
+		t.Fatalf("Respond: %v", err)
+	}
+	if err := unsub(); err != nil {
+		t.Fatalf("first unsub: %v", err)
+	}
+	if err := unsub(); err != nil {
+		t.Fatalf("second unsub: expected nil, got %v", err)
+	}
+}
+
+// TestRespond_HandlerError covers ADR 0008's "no error payloads"
+// contract: when handler returns a non-nil error, Respond silently
+// drops the reply and the Request side sees a timeout instead of a
+// serialized error. That is the documented behavior — callers that
+// need richer error semantics layer them in the payload shape.
+func TestRespond_HandlerError(t *testing.T) {
+	nc, _ := natstest.NewTestServer(t)
+	cfg := validConfig(t)
+	cfg.Nats = nc
+
+	m, err := chat.Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+
+	unsub, err := m.Respond(
+		"test.herror",
+		func([]byte) ([]byte, error) {
+			return nil, fmt.Errorf("handler boom")
+		},
+	)
+	if err != nil {
+		t.Fatalf("Respond: %v", err)
+	}
+	defer func() { _ = unsub() }()
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(), 300*time.Millisecond,
+	)
+	defer cancel()
+	_, err = m.Request(ctx, "test.herror", []byte("ping"))
+	if err == nil {
+		t.Fatalf("Request: expected timeout, got nil")
+	}
+}
