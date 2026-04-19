@@ -13,12 +13,17 @@ import (
 
 	"github.com/danmestas/agent-infra/internal/assert"
 	"github.com/danmestas/agent-infra/internal/holds"
+	"github.com/danmestas/agent-infra/internal/tasks"
 )
 
 // holdsBucket is the JetStream KV bucket name coord uses to back
 // file-scoped holds. The bucket identifier is a substrate detail per
 // ADR 0003 and therefore lives here, not on Config.
 const holdsBucket = "agent-infra-holds"
+
+// tasksBucket is the JetStream KV bucket name coord uses to back task
+// records per ADR 0005. Also substrate-internal per ADR 0003.
+const tasksBucket = "agent-infra-tasks"
 
 // Coord is the public entry point for agent-infra. Construct one via
 // Open and Close it at shutdown. All coordination — hold acquisition,
@@ -31,6 +36,7 @@ type Coord struct {
 	cfg    Config
 	nc     *nats.Conn
 	holds  *holds.Manager
+	tasks  *tasks.Manager
 	mu     sync.Mutex // protects closed
 	closed bool
 }
@@ -64,7 +70,19 @@ func Open(ctx context.Context, cfg Config) (*Coord, error) {
 		nc.Close()
 		return nil, fmt.Errorf("coord.Open: holds: %w", err)
 	}
-	return &Coord{cfg: cfg, nc: nc, holds: hm}, nil
+	tm, err := tasks.Open(ctx, tasks.Config{
+		NATSURL:          cfg.NATSURL,
+		BucketName:       tasksBucket,
+		HistoryDepth:     cfg.TaskHistoryDepth,
+		MaxValueSize:     int32(cfg.MaxTaskValueSize),
+		OperationTimeout: cfg.OperationTimeout,
+	})
+	if err != nil {
+		_ = hm.Close()
+		nc.Close()
+		return nil, fmt.Errorf("coord.Open: tasks: %w", err)
+	}
+	return &Coord{cfg: cfg, nc: nc, holds: hm, tasks: tm}, nil
 }
 
 // Close shuts down the Coord. Safe to call more than once; subsequent
@@ -83,6 +101,9 @@ func (c *Coord) Close() error {
 		return nil
 	}
 	c.closed = true
+	if c.tasks != nil {
+		_ = c.tasks.Close()
+	}
 	if c.holds != nil {
 		_ = c.holds.Close()
 	}
@@ -239,30 +260,6 @@ func (c *Coord) releaseClosure(held []string) func() error {
 		})
 		return firstErr
 	}
-}
-
-// Ready returns tasks eligible for claim. Phase 1 stub: returns
-// (nil, ErrNotImplemented) after asserting invariants 1 and 8.
-func (c *Coord) Ready(ctx context.Context) ([]Task, error) {
-	c.assertOpen("Ready")
-	assert.NotNil(ctx, "coord.Ready: ctx is nil")
-	return nil, ErrNotImplemented
-}
-
-// CloseTask marks a task closed with an explanatory reason. Phase 1
-// stub: returns ErrNotImplemented after asserting invariants 1, 2, 8.
-// The receiver-lifecycle method Close (io.Closer shape) is distinct
-// from this domain verb.
-func (c *Coord) CloseTask(
-	ctx context.Context, taskID TaskID, reason string,
-) error {
-	c.assertOpen("CloseTask")
-	assert.NotNil(ctx, "coord.CloseTask: ctx is nil")
-	assert.NotEmpty(
-		string(taskID), "coord.CloseTask: taskID is empty",
-	)
-	_ = reason
-	return ErrNotImplemented
 }
 
 // Post publishes a message to a chat thread. Phase 1 stub: returns

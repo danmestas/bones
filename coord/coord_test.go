@@ -133,27 +133,6 @@ func TestClose_Idempotent(t *testing.T) {
 	}
 }
 
-func TestReady_ReturnsNotImplemented(t *testing.T) {
-	c := mustOpen(t)
-	defer func() { _ = c.Close() }()
-	tasks, err := c.Ready(context.Background())
-	if !errors.Is(err, ErrNotImplemented) {
-		t.Fatalf("Ready: want ErrNotImplemented, got %v", err)
-	}
-	if tasks != nil {
-		t.Fatalf("Ready: want nil slice, got %v", tasks)
-	}
-}
-
-func TestCloseTask_ReturnsNotImplemented(t *testing.T) {
-	c := mustOpen(t)
-	defer func() { _ = c.Close() }()
-	err := c.CloseTask(context.Background(), TaskID("t-1"), "done")
-	if !errors.Is(err, ErrNotImplemented) {
-		t.Fatalf("CloseTask: want ErrNotImplemented, got %v", err)
-	}
-}
-
 func TestPost_ReturnsNotImplemented(t *testing.T) {
 	c := mustOpen(t)
 	defer func() { _ = c.Close() }()
@@ -181,7 +160,10 @@ func TestUseAfterClosePanics(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	requirePanic(t, func() {
-		_, _ = c.Ready(context.Background())
+		_, _ = c.Claim(
+			context.Background(), TaskID("t"),
+			[]string{"/a"}, 10*time.Second,
+		)
 	}, "coord is closed")
 }
 
@@ -244,33 +226,6 @@ func TestClaim_InvariantPanics(t *testing.T) {
 				c.cfg.HoldTTLMax+time.Second,
 			)
 		}, "exceeds HoldTTLMax")
-	})
-}
-
-func TestReady_InvariantPanics(t *testing.T) {
-	c := mustOpen(t)
-	defer func() { _ = c.Close() }()
-	t.Run("nil ctx", func(t *testing.T) {
-		requirePanic(t, func() {
-			_, _ = c.Ready(nilCtx)
-		}, "ctx is nil")
-	})
-}
-
-func TestCloseTask_InvariantPanics(t *testing.T) {
-	c := mustOpen(t)
-	defer func() { _ = c.Close() }()
-	t.Run("nil ctx", func(t *testing.T) {
-		requirePanic(t, func() {
-			_ = c.CloseTask(nilCtx, TaskID("t"), "r")
-		}, "ctx is nil")
-	})
-	t.Run("empty taskID", func(t *testing.T) {
-		requirePanic(t, func() {
-			_ = c.CloseTask(
-				context.Background(), TaskID(""), "r",
-			)
-		}, "taskID is empty")
 	})
 }
 
