@@ -35,5 +35,25 @@ var ErrAgentMismatch = errors.New("coord: agent mismatch")
 // substrate transition error.
 var ErrTaskAlreadyClosed = errors.New("coord: task already closed")
 
+// ErrAskTimeout reports that Ask's ctx deadline elapsed before a reply
+// arrived on the inbox subject. Per ADR 0008, ErrAskTimeout also fires
+// when no recipient is subscribed to the ask subject — the substrate
+// cannot distinguish "no one listening" from "listener is slow"
+// cheaply, and the caller-observable behavior is identical either way.
+// Callers that need presence semantics layer a registry on top (Phase
+// 4 work). Distinct from context.Canceled: ErrAskTimeout is the reply-
+// wait boundary; context.Canceled is upstream cancellation.
+var ErrAskTimeout = errors.New("coord: ask timed out")
+
+// ErrTooManySubscribers reports that Subscribe was called when the
+// number of active subscribers on this Coord already equals
+// Config.MaxSubscribers. Per ADR 0008 and the invariant-9 bound on
+// MaxSubscribers, this is an operator-config-shaped error returned at
+// the Subscribe entry; the caller may retry after an existing
+// subscription's close closure has run.
+var ErrTooManySubscribers = errors.New(
+	"coord: too many subscribers",
+)
+
 // ErrNotImplemented is returned by Phase 1 stub methods.
 var ErrNotImplemented = errors.New("coord: not implemented")
