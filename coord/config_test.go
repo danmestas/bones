@@ -17,6 +17,7 @@ func baselineConfig() Config {
 		MaxSubscribers:    32,
 		MaxTaskFiles:      32,
 		MaxTaskValueSize:  8 * 1024,
+		TaskHistoryDepth:  8,
 		OperationTimeout:  10 * time.Second,
 		HeartbeatInterval: 5 * time.Second,
 		NATSReconnectWait: 2 * time.Second,
@@ -95,6 +96,11 @@ func TestConfigValidate_Invalid(t *testing.T) {
 			name:    "negative MaxTaskValueSize",
 			mutate:  func(c *Config) { c.MaxTaskValueSize = -1 },
 			wantKey: "MaxTaskValueSize",
+		},
+		{
+			name:    "zero TaskHistoryDepth",
+			mutate:  func(c *Config) { c.TaskHistoryDepth = 0 },
+			wantKey: "TaskHistoryDepth",
 		},
 		{
 			name:    "zero OperationTimeout",
