@@ -234,3 +234,69 @@ func (m *Manager) Request(
 	}
 	return msg.Data, nil
 }
+
+// Respond registers a NATS subscription on subject that drives handler
+// for every incoming request. handler receives the request payload and
+// returns either a reply payload or an error. On a nil-error return,
+// Respond publishes the reply via msg.Respond. On a non-nil error
+// return, no reply is published — by design: the chat substrate does
+// not model error payloads (see ADR 0008), so handler failure is
+// surfaced to the Ask caller as a no-responders timeout. The effect is
+// that handler errors and "no handler registered" are indistinguishable
+// from the ask side; callers that need richer error semantics layer
+// them in the payload shape.
+//
+// The returned closure is an idempotent unsubscribe: the first call
+// tears down the subscription; subsequent calls are no-ops and return
+// nil. Sync.Once-guarded so concurrent callers cannot double-close the
+// underlying subscription.
+//
+// Subject is forwarded to the NATS connection as-is; chat itself is
+// subject-agnostic. coord.Answer supplies "<proj>.ask.<agentID>".
+//
+// Returns ErrClosed if the Manager has been closed. A nil Manager or
+// nil handler panics (programmer error); empty subject panics. Any
+// error from nats.Conn.Subscribe is wrapped with the chat.Respond
+// prefix.
+func (m *Manager) Respond(
+	subject string,
+	handler func(payload []byte) ([]byte, error),
+) (func() error, error) {
+	assert.NotNil(m, "chat.Respond: receiver is nil")
+	assert.NotEmpty(subject, "chat.Respond: subject is empty")
+	assert.NotNil(handler, "chat.Respond: handler is nil")
+	if m.closed.Load() {
+		return nil, ErrClosed
+	}
+	sub, err := m.nc.Subscribe(subject, func(msg *nats.Msg) {
+		reply, herr := handler(msg.Data)
+		if herr != nil {
+			// Silent drop: ADR 0008 says the substrate does not
+			// model error payloads. Ask side sees ErrAskTimeout.
+			return
+		}
+		_ = msg.Respond(reply)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("chat.Respond: %w", err)
+	}
+	// Flush forces the SUB proto to round-trip to the server before
+	// Respond returns. Without this, a Request arriving on the
+	// subscribed subject immediately after Respond returns can land
+	// before the server has registered our interest, yielding a
+	// spurious no-responders timeout. The cost is one synchronous
+	// round-trip at registration time; the payoff is that
+	// Answer-then-Ask races don't flake on CI.
+	if err := m.nc.Flush(); err != nil {
+		_ = sub.Unsubscribe()
+		return nil, fmt.Errorf("chat.Respond: flush: %w", err)
+	}
+	var once sync.Once
+	return func() error {
+		var firstErr error
+		once.Do(func() {
+			firstErr = sub.Unsubscribe()
+		})
+		return firstErr
+	}, nil
+}
