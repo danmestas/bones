@@ -11,3 +11,6 @@ reference/*/
 # Go workspace — developer-local copy of go.work.example. Do NOT commit.
 go.work
 go.work.sum
+
+# Claude Code / scheduled_tasks runtime state (local-only).
+.claude/
