@@ -28,6 +28,7 @@ func validConfig() Config {
 		MaxHoldsPerClaim:  32,
 		MaxSubscribers:    32,
 		MaxTaskFiles:      32,
+		MaxTaskValueSize:  8 * 1024,
 		OperationTimeout:  10 * time.Second,
 		HeartbeatInterval: 5 * time.Second,
 		NATSReconnectWait: 2 * time.Second,
