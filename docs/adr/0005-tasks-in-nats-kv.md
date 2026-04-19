@@ -82,8 +82,11 @@ All timestamps are wall-clock UTC, same rule `holds.Hold` uses.
 
 **Status enum.** Exactly `open | claimed | closed`. No `blocked` or
 `deferred` in Phase 2. Legal transitions are `open → claimed`,
-`claimed → closed`, and `open → closed` — a fixed DAG with no backwards
-edges, enforced by invariant 13 (see ADR 0006 and docs/invariants.md).
+`claimed → closed`, `open → closed`, and `claimed → open` — the last
+edge added by ADR 0007 so `coord.Claim`'s release closure can return a
+claimed (but not yet closed) task to the open pool (invariant 16).
+`closed` remains terminal; no edge out of it is legal. Enforced by
+invariant 13 (see docs/invariants.md).
 
 **TaskID shape.** `<proj>-<8 char nanoid>`, e.g. `agent-infra-k2h7zq3f`.
 Alphabet is lowercase alphanumeric (`abcdefghijklmnopqrstuvwxyz0123456789`,
@@ -145,8 +148,9 @@ TaskID format is fixed by this ADR. Changing the alphabet, length, or
 shape later would be an API break per invariant 15 and would require a
 new ADR plus a migration story for existing bucket contents.
 
-Invariants 11–15 (documented in docs/invariants.md per ADR 0006 / issue
-agent-infra-gi7) are the contract surface of this decision. Every
-`coord` method that touches task state asserts against them at entry or
-exit: claimed_by/status coupling (11), closer identity (12), transition
-DAG (13), value size cap (14), ID shape (15).
+Invariants 11–16 (documented in docs/invariants.md per ADR 0006 /
+issue agent-infra-gi7, with invariant 16 added by ADR 0007) are the
+contract surface of this decision. Every `coord` method that touches
+task state asserts against them at entry or exit: claimed_by/status
+coupling (11), closer identity (12), transition DAG (13), value size
+cap (14), ID shape (15), release-closure symmetry (16).
