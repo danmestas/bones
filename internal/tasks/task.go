@@ -11,8 +11,9 @@ import (
 const SchemaVersion = 1
 
 // Status is the task lifecycle state. ADR 0005 fixes the enum to
-// exactly these three values; invariant 13 enforces the transition
-// DAG (open→claimed, open→closed, claimed→closed) at write time.
+// exactly these three values; invariant 13 (amended by ADR 0007)
+// enforces the transition DAG (open→claimed, open→closed,
+// claimed→closed, claimed→open) at write time.
 type Status string
 
 // StatusOpen marks a task that has been declared but not yet claimed.

@@ -11,8 +11,8 @@ import (
 )
 
 // Smoke tests for coord.Claim under real contention. These exercise
-// the whole Open → Claim → Release → Close path against two Coord
-// instances sharing a single embedded JetStream server, i.e. the
+// the whole Open → OpenTask → Claim → Release → Close path against two
+// Coord instances sharing a single embedded JetStream server, i.e. the
 // closest thing to production wiring without leaving the test binary.
 // The serial tests in claim_test.go cover logic; these cover races.
 
@@ -29,40 +29,38 @@ type claimResult struct {
 	err     error
 }
 
-// claim invokes c.Claim on the given files and returns the result as
-// a value the caller can inspect. Kept tiny so goroutine bodies in
-// the race tests below stay focused on actually racing.
-func claim(
-	c *Coord, task string, files []string,
-) claimResult {
-	rel, err := c.Claim(
-		context.Background(), TaskID(task), files, smokeTTL,
-	)
+// claim invokes c.Claim on the given TaskID and returns the result as
+// a value the caller can inspect. Kept tiny so goroutine bodies in the
+// race tests below stay focused on actually racing.
+func claim(c *Coord, id TaskID) claimResult {
+	rel, err := c.Claim(context.Background(), id, smokeTTL)
 	return claimResult{release: rel, err: err}
 }
 
-// TestClaimSmoke_ConcurrentContention races two agents at overlapping
-// file sets on a shared NATS substrate. The winner's identity is
+// TestClaimSmoke_ConcurrentContention races two agents at the same
+// task record on a shared NATS substrate. The winner's identity is
 // non-deterministic by design; the outcome shape — exactly one winner,
-// exactly one ErrHeldByAnother, loser holds nothing — is not.
+// exactly one ErrTaskAlreadyClaimed, loser holds nothing — is not.
 //
-// After the race, the winner releases, the loser reclaims the full
-// overlap (proving the winner's release actually freed the files),
-// then both Coords close and a fresh Coord claims the same files
+// After the race, the winner releases, the loser re-claims the same
+// task (proving the winner's release actually un-claimed the record),
+// then both Coords close and a fresh Coord claims the same task
 // (proving no orphaned KV entries survived Close).
 func TestClaimSmoke_ConcurrentContention(t *testing.T) {
 	nc, _ := natstest.NewJetStreamServer(t)
 	url := nc.ConnectedUrl()
 	cA := newCoordOnURL(t, url, "agent-A")
 	cB := newCoordOnURL(t, url, "agent-B")
+	ctx := context.Background()
 
-	// Overlapping but distinct sets: /x/b is contested, /x/a is
-	// A-only, /x/c is B-only. Whichever agent wins must hold all
-	// of its requested files; the loser must hold none.
-	filesA := []string{"/x/a", "/x/b"}
-	filesB := []string{"/x/b", "/x/c"}
+	// Same task record — the two agents race on the task-CAS, not on
+	// files. Per ADR 0007 this is where the contention sentinel lives.
+	id, err := cA.OpenTask(ctx, "race", []string{"/x/a", "/x/b"})
+	if err != nil {
+		t.Fatalf("OpenTask: %v", err)
+	}
 
-	resultA, resultB := raceClaim(cA, cB, filesA, filesB)
+	resultA, resultB := raceClaim(cA, cB, id)
 
 	// Assert outcome shape without biasing toward either winner.
 	aOK := resultA.err == nil
@@ -75,52 +73,44 @@ func TestClaimSmoke_ConcurrentContention(t *testing.T) {
 		)
 	}
 
-	// Unpack winner/loser without a bias toward either.
 	var (
 		winnerRel  func() error
 		loserErr   error
 		loserRel   func() error
 		loserCoord *Coord
-		loserFiles []string
 	)
 	if aOK {
 		winnerRel = resultA.release
 		loserErr = resultB.err
 		loserRel = resultB.release
 		loserCoord = cB
-		loserFiles = filesB
 	} else {
 		winnerRel = resultB.release
 		loserErr = resultA.err
 		loserRel = resultA.release
 		loserCoord = cA
-		loserFiles = filesA
 	}
 
 	if winnerRel == nil {
 		t.Fatalf("winner: release closure was nil")
 	}
-	if !errors.Is(loserErr, ErrHeldByAnother) {
-		t.Fatalf("loser: got %v, want ErrHeldByAnother", loserErr)
+	if !errors.Is(loserErr, ErrTaskAlreadyClaimed) {
+		t.Fatalf(
+			"loser: got %v, want ErrTaskAlreadyClaimed", loserErr,
+		)
 	}
 	if loserRel != nil {
 		t.Fatalf("loser: release was non-nil on error")
 	}
 
-	// Free the winner's hold; the loser should then be able to claim
-	// its full set (including the contested /x/b) serially.
+	// Free the winner's claim; the loser should then claim it cleanly.
 	if err := winnerRel(); err != nil {
 		t.Fatalf("winner release: %v", err)
 	}
-
-	rel2, err := loserCoord.Claim(
-		context.Background(), TaskID("t-loser-retry"),
-		loserFiles, smokeTTL,
-	)
+	rel2, err := loserCoord.Claim(ctx, id, smokeTTL)
 	if err != nil {
 		t.Fatalf(
-			"loser reclaim after winner release: got %v, want nil",
-			err,
+			"loser reclaim after winner release: got %v, want nil", err,
 		)
 	}
 	if err := rel2(); err != nil {
@@ -128,8 +118,8 @@ func TestClaimSmoke_ConcurrentContention(t *testing.T) {
 	}
 
 	// Close both participating Coords, then verify no KV entries
-	// linger: a fresh Coord on the same substrate must claim every
-	// file from the overlap immediately.
+	// linger: a fresh Coord on the same substrate must claim a fresh
+	// task with overlapping files immediately.
 	if err := cA.Close(); err != nil {
 		t.Fatalf("cA Close: %v", err)
 	}
@@ -137,10 +127,13 @@ func TestClaimSmoke_ConcurrentContention(t *testing.T) {
 		t.Fatalf("cB Close: %v", err)
 	}
 	cC := newCoordOnURL(t, url, "agent-C")
-	all := []string{"/x/a", "/x/b", "/x/c"}
-	rel3, err := cC.Claim(
-		context.Background(), TaskID("t-postclose"), all, smokeTTL,
+	cID, err := cC.OpenTask(
+		ctx, "postclose", []string{"/x/a", "/x/b", "/x/c"},
 	)
+	if err != nil {
+		t.Fatalf("fresh Coord OpenTask: %v", err)
+	}
+	rel3, err := cC.Claim(ctx, cID, smokeTTL)
 	if err != nil {
 		t.Fatalf(
 			"fresh Coord claim after prior Close: got %v, want nil "+
@@ -153,13 +146,11 @@ func TestClaimSmoke_ConcurrentContention(t *testing.T) {
 	}
 }
 
-// raceClaim fires cA.Claim(filesA) and cB.Claim(filesB) from two
-// goroutines gated on a shared start channel so they launch as close
-// to simultaneously as the Go scheduler permits. Returns the two
-// results in (A, B) order.
-func raceClaim(
-	cA, cB *Coord, filesA, filesB []string,
-) (claimResult, claimResult) {
+// raceClaim fires cA.Claim(id) and cB.Claim(id) from two goroutines
+// gated on a shared start channel so they launch as close to
+// simultaneously as the Go scheduler permits. Returns the two results
+// in (A, B) order.
+func raceClaim(cA, cB *Coord, id TaskID) (claimResult, claimResult) {
 	var (
 		wg       sync.WaitGroup
 		rA, rB   claimResult
@@ -169,12 +160,12 @@ func raceClaim(
 	go func() {
 		defer wg.Done()
 		<-startGun
-		rA = claim(cA, "t-A", filesA)
+		rA = claim(cA, id)
 	}()
 	go func() {
 		defer wg.Done()
 		<-startGun
-		rB = claim(cB, "t-B", filesB)
+		rB = claim(cB, id)
 	}()
 	close(startGun)
 	wg.Wait()
@@ -183,8 +174,8 @@ func raceClaim(
 
 // TestClaimSmoke_ReclaimAcrossAgents proves the shared-NATS fixture
 // itself by running the sequential release-then-reclaim path on it:
-// agent-A claims, releases; agent-B (distinct Coord, same substrate)
-// immediately claims the same files. Complements
+// agent-A opens a task, claims it, releases; agent-B (distinct Coord,
+// same substrate) immediately claims the same task. Complements
 // TestClaim_ReleaseThenReclaim in claim_test.go; the duplication is
 // deliberate — this variant documents the smoke fixture and catches
 // regressions that would trip only when two Coords share a server.
@@ -194,9 +185,12 @@ func TestClaimSmoke_ReclaimAcrossAgents(t *testing.T) {
 	cA := newCoordOnURL(t, url, "agent-A")
 	cB := newCoordOnURL(t, url, "agent-B")
 	ctx := context.Background()
-	files := []string{"/s/a", "/s/b"}
 
-	relA, err := cA.Claim(ctx, TaskID("t-sA"), files, smokeTTL)
+	id, err := cA.OpenTask(ctx, "seq", []string{"/s/a", "/s/b"})
+	if err != nil {
+		t.Fatalf("OpenTask: %v", err)
+	}
+	relA, err := cA.Claim(ctx, id, smokeTTL)
 	if err != nil {
 		t.Fatalf("A Claim: %v", err)
 	}
@@ -204,7 +198,7 @@ func TestClaimSmoke_ReclaimAcrossAgents(t *testing.T) {
 		t.Fatalf("A release: %v", err)
 	}
 
-	relB, err := cB.Claim(ctx, TaskID("t-sB"), files, smokeTTL)
+	relB, err := cB.Claim(ctx, id, smokeTTL)
 	if err != nil {
 		t.Fatalf("B Claim after A release: %v", err)
 	}

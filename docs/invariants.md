@@ -168,13 +168,17 @@ in `coord/errors.go`). Planned: issue agent-infra-zsj.
 ### 13. Status transitions are a fixed DAG
 
 **Invariant.** Legal status transitions are `open → claimed`, `claimed → closed`,
-and `open → closed`. No backwards edges (`closed → open`, `claimed → open`,
-`closed → claimed`), no self-loops, no transitions skipping the DAG.
+`open → closed`, and `claimed → open` (the release-side un-claim edge added
+by ADR 0007). No other backwards edges (`closed → open`, `closed → claimed`),
+no transitions skipping the DAG. `closed` is terminal.
 
 **Rationale.** A closed task that could be re-opened would invalidate every
 audit consumer downstream of it — chat summaries, compaction, future ADR
-references all assume close is terminal. The three-edge DAG is the smallest
-shape that expresses the intended lifecycle.
+references all assume close is terminal. The `claimed → open` edge is a
+distinct case: ADR 0007 requires release to return a claimed (but not yet
+closed) task to the open pool so callers that defer the release closure do
+not leak claims. That reversal happens strictly before any audit boundary
+has been crossed; closed remains the one-way sink.
 
 **Enforcement site.** Asserted in `internal/tasks/` at every status-changing
 write: the old status is read from the CAS-loaded record, the new status is the

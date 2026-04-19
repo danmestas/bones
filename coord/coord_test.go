@@ -160,10 +160,12 @@ func TestUseAfterClosePanics(t *testing.T) {
 	if err := c.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+	// Fabricated TaskID: the receiver panics on "coord is closed" at
+	// assertOpen before any NATS call, so the record need not exist.
 	requirePanic(t, func() {
 		_, _ = c.Claim(
-			context.Background(), TaskID("t"),
-			[]string{"/a"}, 10*time.Second,
+			context.Background(), TaskID("agent-infra-clos0001"),
+			10*time.Second,
 		)
 	}, "coord is closed")
 }
@@ -172,59 +174,27 @@ func TestClaim_InvariantPanics(t *testing.T) {
 	c := mustOpen(t)
 	defer func() { _ = c.Close() }()
 	ctx := context.Background()
-	goodFiles := []string{"/a", "/b"}
 	goodTTL := 10 * time.Second
 
 	t.Run("nil ctx", func(t *testing.T) {
 		requirePanic(t, func() {
-			_, _ = c.Claim(nilCtx, TaskID("t"), goodFiles, goodTTL)
+			_, _ = c.Claim(nilCtx, TaskID("t"), goodTTL)
 		}, "ctx is nil")
 	})
 	t.Run("empty taskID", func(t *testing.T) {
 		requirePanic(t, func() {
-			_, _ = c.Claim(ctx, TaskID(""), goodFiles, goodTTL)
+			_, _ = c.Claim(ctx, TaskID(""), goodTTL)
 		}, "taskID is empty")
-	})
-	t.Run("empty files", func(t *testing.T) {
-		requirePanic(t, func() {
-			_, _ = c.Claim(ctx, TaskID("t"), []string{}, goodTTL)
-		}, "files is empty")
-	})
-	t.Run("too many files", func(t *testing.T) {
-		big := make([]string, c.cfg.MaxHoldsPerClaim+1)
-		for i := range big {
-			big[i] = fmt.Sprintf("/f-%04d", i)
-		}
-		requirePanic(t, func() {
-			_, _ = c.Claim(ctx, TaskID("t"), big, goodTTL)
-		}, "exceeds MaxHoldsPerClaim")
-	})
-	t.Run("non-absolute file", func(t *testing.T) {
-		requirePanic(t, func() {
-			_, _ = c.Claim(
-				ctx, TaskID("t"),
-				[]string{"relative/path"}, goodTTL,
-			)
-		}, "not absolute")
-	})
-	t.Run("unsorted files", func(t *testing.T) {
-		requirePanic(t, func() {
-			_, _ = c.Claim(
-				ctx, TaskID("t"),
-				[]string{"/b", "/a"}, goodTTL,
-			)
-		}, "not sorted")
 	})
 	t.Run("ttl zero", func(t *testing.T) {
 		requirePanic(t, func() {
-			_, _ = c.Claim(ctx, TaskID("t"), goodFiles, 0)
+			_, _ = c.Claim(ctx, TaskID("t"), 0)
 		}, "ttl must be > 0")
 	})
 	t.Run("ttl exceeds max", func(t *testing.T) {
 		requirePanic(t, func() {
 			_, _ = c.Claim(
-				ctx, TaskID("t"), goodFiles,
-				c.cfg.HoldTTLMax+time.Second,
+				ctx, TaskID("t"), c.cfg.HoldTTLMax+time.Second,
 			)
 		}, "exceeds HoldTTLMax")
 	})
