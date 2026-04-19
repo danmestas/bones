@@ -15,7 +15,9 @@ jobs:
         with:
           go-version: '1.26.0'
           cache: true
-      - uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
+      # The golangci-lint-action binary is built with an older Go and ships a
+      # v1 binary by default; we pin v2 (matches .golangci.yml schema) and let
+      # setup-go's toolchain build it so the Go version matches go.mod.
+      - name: Install golangci-lint v2
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4
       - run: make check
