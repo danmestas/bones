@@ -207,6 +207,31 @@ func (m *Manager) Watch(
 	})
 }
 
+// WatchAll returns a channel of notify.Message values for every thread
+// in this Manager's project. The channel closes when ctx is canceled.
+// This is the project-wide counterpart to Watch: coord.Subscribe routes
+// through WatchAll when the caller passes an empty pattern (ADR 0008
+// documents empty = project-wide), and through Watch otherwise.
+//
+// Downstream, this maps to notify.Service.Watch with an empty
+// ThreadShort — which notify interprets as a wildcard subscribe across
+// every thread subject under the project.
+//
+// A nil Manager or nil ctx panics (programmer error). Use-after-close
+// returns an already-closed channel, same shape as Watch.
+func (m *Manager) WatchAll(ctx context.Context) <-chan notify.Message {
+	assert.NotNil(m, "chat.WatchAll: receiver is nil")
+	assert.NotNil(ctx, "chat.WatchAll: ctx is nil")
+	if m.closed.Load() {
+		ch := make(chan notify.Message)
+		close(ch)
+		return ch
+	}
+	return m.service.Watch(ctx, notify.WatchOpts{
+		Project: m.cfg.ProjectPrefix,
+	})
+}
+
 // Request sends payload to subject via NATS request/reply and returns
 // the reply payload. ctx bounds the wait — a deadline-less ctx on an
 // offline recipient never returns. Phase 3C's coord.Ask builds the

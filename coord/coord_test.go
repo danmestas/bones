@@ -47,6 +47,25 @@ func validConfigWithURL(url string) Config {
 	return cfg
 }
 
+// newCoordWithMaxSubs opens a Coord against an existing NATS URL with
+// Config.MaxSubscribers overridden. Used by Subscribe tests that need a
+// tighter cap than the default 32 to exercise ErrTooManySubscribers.
+// Cleanup is registered via t.Cleanup.
+func newCoordWithMaxSubs(
+	t *testing.T, url, agentID string, maxSubs int,
+) *Coord {
+	t.Helper()
+	cfg := validConfigWithURL(url)
+	cfg.AgentID = agentID
+	cfg.MaxSubscribers = maxSubs
+	c, err := Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Open(%s): %v", agentID, err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
 // requirePanic asserts fn panics with a value whose string form
 // contains wantContains.
 func requirePanic(t *testing.T, fn func(), wantContains string) {

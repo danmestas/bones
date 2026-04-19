@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -50,6 +51,14 @@ type Coord struct {
 	chat   *chat.Manager
 	mu     sync.Mutex // protects closed
 	closed bool
+
+	// subsActive counts live Subscribe subscriptions against
+	// Config.MaxSubscribers. Atomic so Subscribe entry and each close
+	// closure can read-modify the count without mutex contention on
+	// c.mu. Incremented optimistically at Subscribe entry and rolled
+	// back if the new count exceeds the cap; the close closure
+	// decrements it exactly once via sync.Once (invariant 17).
+	subsActive atomic.Int32
 }
 
 // Open constructs a Coord and validates its configuration per
