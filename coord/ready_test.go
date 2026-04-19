@@ -9,7 +9,7 @@ import (
 )
 
 // readyBaseline returns a well-formed open task record ready for
-// c.tasks.Create. Fields mirror what the ADR 0005 ID generator would
+// c.sub.tasks.Create. Fields mirror what the ADR 0005 ID generator would
 // produce; callers override status, claimed_by, and timestamps to
 // exercise specific Ready filter paths.
 func readyBaseline(id string, created time.Time) tasks.Task {
@@ -29,7 +29,7 @@ func readyBaseline(id string, created time.Time) tasks.Task {
 // rejects invariant-11 mismatches and fixed-enum violations.
 func seedTask(t *testing.T, c *Coord, rec tasks.Task) {
 	t.Helper()
-	if err := c.tasks.Create(context.Background(), rec); err != nil {
+	if err := c.sub.tasks.Create(context.Background(), rec); err != nil {
 		t.Fatalf("seed Create %q: %v", rec.ID, err)
 	}
 }
@@ -44,7 +44,7 @@ func seedRawTask(t *testing.T, c *Coord, rec tasks.Task) {
 	if err != nil {
 		t.Fatalf("seedRaw EncodeForTest %q: %v", rec.ID, err)
 	}
-	kv := c.tasks.KVForTest()
+	kv := c.sub.tasks.KVForTest()
 	if _, err := kv.Put(context.Background(), rec.ID, payload); err != nil {
 		t.Fatalf("seedRaw Put %q: %v", rec.ID, err)
 	}

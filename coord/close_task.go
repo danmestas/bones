@@ -40,7 +40,7 @@ func (c *Coord) CloseTask(
 		string(taskID), "coord.CloseTask: taskID is empty",
 	)
 	mutate := c.closeMutator(reason)
-	err := c.tasks.Update(ctx, string(taskID), mutate)
+	err := c.sub.tasks.Update(ctx, string(taskID), mutate)
 	return translateCloseErr(err)
 }
 

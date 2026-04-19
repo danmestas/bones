@@ -35,7 +35,7 @@ func TestOpenTask_HappyPath(t *testing.T) {
 		t.Fatalf("OpenTask: id %q violates ADR 0005 shape", id)
 	}
 
-	rec, _, err := c.tasks.Get(ctx, string(id))
+	rec, _, err := c.sub.tasks.Get(ctx, string(id))
 	if err != nil {
 		t.Fatalf("tasks.Get(%q): %v", id, err)
 	}
@@ -71,7 +71,7 @@ func TestOpenTask_SortsFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenTask: %v", err)
 	}
-	rec, _, err := c.tasks.Get(ctx, string(id))
+	rec, _, err := c.sub.tasks.Get(ctx, string(id))
 	if err != nil {
 		t.Fatalf("tasks.Get: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestOpenTask_DeduplicatesFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenTask: %v", err)
 	}
-	rec, _, err := c.tasks.Get(ctx, string(id))
+	rec, _, err := c.sub.tasks.Get(ctx, string(id))
 	if err != nil {
 		t.Fatalf("tasks.Get: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestOpenTask_DeduplicatesUnsorted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenTask: %v", err)
 	}
-	rec, _, err := c.tasks.Get(ctx, string(id))
+	rec, _, err := c.sub.tasks.Get(ctx, string(id))
 	if err != nil {
 		t.Fatalf("tasks.Get: %v", err)
 	}

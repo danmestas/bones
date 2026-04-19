@@ -14,6 +14,7 @@ import (
 	"github.com/danmestas/agent-infra/internal/assert"
 	"github.com/danmestas/agent-infra/internal/chat"
 	"github.com/danmestas/agent-infra/internal/holds"
+	"github.com/danmestas/agent-infra/internal/presence"
 	"github.com/danmestas/agent-infra/internal/tasks"
 )
 
@@ -26,19 +27,28 @@ const holdsBucket = "agent-infra-holds"
 // records per ADR 0005. Also substrate-internal per ADR 0003.
 const tasksBucket = "agent-infra-tasks"
 
+// presenceBucket is the JetStream KV bucket name coord uses to back
+// the presence substrate per ADR 0009. Entry TTL is 3x
+// Config.HeartbeatInterval and is set at bucket-creation time by
+// internal/presence.Open.
+const presenceBucket = "agent-infra-presence"
+
 // Coord is the public entry point for agent-infra. Construct one via
 // Open and Close it at shutdown. All coordination — hold acquisition,
-// task ready queries, chat messaging — flows through methods on *Coord.
+// task ready queries, chat messaging, presence — flows through methods
+// on *Coord.
 //
 // Methods are safe to call concurrently; the closed-state check is
 // mutex-guarded so Close may race with in-flight calls without a data
 // race.
+//
+// Substrate-backed Managers live on an unexported substrate aggregate
+// (see substrate.go). ADR 0008 foreshadowed this refactor; ADR 0009's
+// presence work was the trigger. Accessors within the coord package
+// use c.sub.<mgr>; external callers see only method names per ADR 0001.
 type Coord struct {
 	cfg    Config
-	nc     *nats.Conn
-	holds  *holds.Manager
-	tasks  *tasks.Manager
-	chat   *chat.Manager
+	sub    *substrate
 	mu     sync.Mutex // protects closed
 	closed bool
 
@@ -64,6 +74,21 @@ func Open(ctx context.Context, cfg Config) (*Coord, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("coord.Open: invalid config: %w", err)
 	}
+	sub, err := openSubstrate(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &Coord{cfg: cfg, sub: sub}, nil
+}
+
+// openSubstrate assembles the substrate aggregate for a fresh Coord.
+// Each Manager opens in sequence; on any failure the partial
+// substrate is torn down before the error return so no connections
+// or goroutines leak. Split off Open so the assembly flow stays
+// below the 70-line funlen cap as Phase 4+ Managers are added.
+func openSubstrate(
+	ctx context.Context, cfg Config,
+) (*substrate, error) {
 	nc, err := nats.Connect(
 		cfg.NATSURL,
 		nats.ReconnectWait(cfg.NATSReconnectWait),
@@ -72,42 +97,45 @@ func Open(ctx context.Context, cfg Config) (*Coord, error) {
 	if err != nil {
 		return nil, fmt.Errorf("coord.Open: nats connect: %w", err)
 	}
-	hm, err := holds.Open(ctx, nc, holds.Config{
+	s := &substrate{nc: nc}
+	if s.holds, err = holds.Open(ctx, nc, holds.Config{
 		Bucket:     holdsBucket,
 		HoldTTLMax: cfg.HoldTTLMax,
-	})
-	if err != nil {
-		nc.Close()
+	}); err != nil {
+		s.close()
 		return nil, fmt.Errorf("coord.Open: holds: %w", err)
 	}
-	tm, err := tasks.Open(ctx, tasks.Config{
+	if s.tasks, err = tasks.Open(ctx, tasks.Config{
 		NATSURL:          cfg.NATSURL,
 		BucketName:       tasksBucket,
 		HistoryDepth:     cfg.TaskHistoryDepth,
 		MaxValueSize:     int32(cfg.MaxTaskValueSize),
 		OperationTimeout: cfg.OperationTimeout,
-	})
-	if err != nil {
-		_ = hm.Close()
-		nc.Close()
+	}); err != nil {
+		s.close()
 		return nil, fmt.Errorf("coord.Open: tasks: %w", err)
 	}
-	cm, err := chat.Open(ctx, chat.Config{
+	if s.chat, err = chat.Open(ctx, chat.Config{
 		AgentID:        cfg.AgentID,
 		ProjectPrefix:  projectPrefix(cfg.AgentID),
 		Nats:           nc,
 		FossilRepoPath: cfg.ChatFossilRepoPath,
 		MaxSubscribers: cfg.MaxSubscribers,
-	})
-	if err != nil {
-		_ = tm.Close()
-		_ = hm.Close()
-		nc.Close()
+	}); err != nil {
+		s.close()
 		return nil, fmt.Errorf("coord.Open: chat: %w", err)
 	}
-	return &Coord{
-		cfg: cfg, nc: nc, holds: hm, tasks: tm, chat: cm,
-	}, nil
+	if s.presence, err = presence.Open(ctx, presence.Config{
+		AgentID:           cfg.AgentID,
+		Project:           projectPrefix(cfg.AgentID),
+		Bucket:            presenceBucket,
+		NATSConn:          nc,
+		HeartbeatInterval: cfg.HeartbeatInterval,
+	}); err != nil {
+		s.close()
+		return nil, fmt.Errorf("coord.Open: presence: %w", err)
+	}
+	return s, nil
 }
 
 // projectPrefix derives the <proj> segment from an AgentID shaped
@@ -146,18 +174,7 @@ func (c *Coord) Close() error {
 		return nil
 	}
 	c.closed = true
-	if c.chat != nil {
-		_ = c.chat.Close()
-	}
-	if c.tasks != nil {
-		_ = c.tasks.Close()
-	}
-	if c.holds != nil {
-		_ = c.holds.Close()
-	}
-	if c.nc != nil {
-		c.nc.Close()
-	}
+	c.sub.close()
 	return nil
 }
 
@@ -251,7 +268,7 @@ func (c *Coord) assertClaimPreconditions(
 func (c *Coord) acquireTaskCAS(
 	ctx context.Context, taskID TaskID,
 ) ([]string, error) {
-	rec, _, err := c.tasks.Get(ctx, string(taskID))
+	rec, _, err := c.sub.tasks.Get(ctx, string(taskID))
 	if err != nil {
 		if errors.Is(err, tasks.ErrNotFound) {
 			return nil, fmt.Errorf("coord.Claim: %w", ErrTaskNotFound)
@@ -265,7 +282,7 @@ func (c *Coord) acquireTaskCAS(
 	}
 	files := append([]string(nil), rec.Files...)
 	mutate := c.claimMutator()
-	if err := c.tasks.Update(ctx, string(taskID), mutate); err != nil {
+	if err := c.sub.tasks.Update(ctx, string(taskID), mutate); err != nil {
 		return nil, translateClaimCASErr(err)
 	}
 	return files, nil
@@ -320,7 +337,7 @@ func (c *Coord) claimAll(
 		TTL:          ttl,
 	}
 	for _, f := range files {
-		if err := c.holds.Announce(ctx, f, h); err != nil {
+		if err := c.sub.holds.Announce(ctx, f, h); err != nil {
 			return held, err
 		}
 		held = append(held, f)
@@ -333,7 +350,7 @@ func (c *Coord) claimAll(
 // path and a secondary failure must not mask the primary cause.
 func (c *Coord) rollback(ctx context.Context, held []string) {
 	for _, f := range held {
-		_ = c.holds.Release(ctx, f, c.cfg.AgentID)
+		_ = c.sub.holds.Release(ctx, f, c.cfg.AgentID)
 	}
 }
 
@@ -353,7 +370,7 @@ func (c *Coord) undoTaskCAS(ctx context.Context, taskID TaskID) {
 		cur.UpdatedAt = time.Now().UTC()
 		return cur, nil
 	}
-	_ = c.tasks.Update(ctx, string(taskID), mutate)
+	_ = c.sub.tasks.Update(ctx, string(taskID), mutate)
 }
 
 // errClaimCASNoOp is an internal sentinel the release-side and
@@ -423,7 +440,7 @@ func (c *Coord) releaseTaskCAS(
 		cur.UpdatedAt = time.Now().UTC()
 		return cur, nil
 	}
-	err := c.tasks.Update(ctx, string(taskID), mutate)
+	err := c.sub.tasks.Update(ctx, string(taskID), mutate)
 	switch {
 	case err == nil:
 		return nil
@@ -446,7 +463,7 @@ func (c *Coord) releaseHolds(
 ) error {
 	var first error
 	for _, f := range held {
-		err := c.holds.Release(ctx, f, c.cfg.AgentID)
+		err := c.sub.holds.Release(ctx, f, c.cfg.AgentID)
 		if err == nil || errors.Is(err, holds.ErrClosed) {
 			continue
 		}
@@ -487,7 +504,7 @@ func (c *Coord) Post(
 	c.assertOpen("Post")
 	assert.NotNil(ctx, "coord.Post: ctx is nil")
 	assert.NotEmpty(thread, "coord.Post: thread is empty")
-	if err := c.chat.Send(ctx, thread, string(msg)); err != nil {
+	if err := c.sub.chat.Send(ctx, thread, string(msg)); err != nil {
 		return fmt.Errorf("coord.Post: %w", err)
 	}
 	return nil
@@ -533,7 +550,7 @@ func (c *Coord) Ask(
 		return "", fmt.Errorf("coord.Ask: %w", context.Canceled)
 	}
 	subject := projectPrefix(c.cfg.AgentID) + ".ask." + recipient
-	reply, err := c.chat.Request(ctx, subject, []byte(question))
+	reply, err := c.sub.chat.Request(ctx, subject, []byte(question))
 	if err != nil {
 		return "", translateAskErr(err)
 	}
@@ -609,7 +626,7 @@ func (c *Coord) Answer(
 		}
 		return []byte(reply), nil
 	}
-	unsub, err := c.chat.Respond(subject, wrap)
+	unsub, err := c.sub.chat.Respond(subject, wrap)
 	if err != nil {
 		return nil, fmt.Errorf("coord.Answer: %w", err)
 	}

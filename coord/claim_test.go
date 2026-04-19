@@ -86,7 +86,7 @@ func TestClaim_HappyPath(t *testing.T) {
 		t.Fatalf("Claim: expected non-nil release closure")
 	}
 
-	mid, _, err := c.tasks.Get(ctx, string(id))
+	mid, _, err := c.sub.tasks.Get(ctx, string(id))
 	if err != nil {
 		t.Fatalf("Get post-Claim: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestClaim_HappyPath(t *testing.T) {
 		t.Fatalf("release: %v", err)
 	}
 
-	post, _, err := c.tasks.Get(ctx, string(id))
+	post, _, err := c.sub.tasks.Get(ctx, string(id))
 	if err != nil {
 		t.Fatalf("Get post-release: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestClaim_ReleaseAfterCloseTask(t *testing.T) {
 		t.Fatalf("release after CloseTask: got %v, want nil", err)
 	}
 
-	post, _, err := c.tasks.Get(ctx, string(id))
+	post, _, err := c.sub.tasks.Get(ctx, string(id))
 	if err != nil {
 		t.Fatalf("Get post-release: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestClaim_HoldContentionRollsBackTaskCAS(t *testing.T) {
 	}
 
 	// Task record must be back at open with empty claimed_by.
-	rec, _, err := cA.tasks.Get(ctx, string(aID))
+	rec, _, err := cA.sub.tasks.Get(ctx, string(aID))
 	if err != nil {
 		t.Fatalf("Get post-fail: %v", err)
 	}

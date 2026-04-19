@@ -3,6 +3,7 @@ package coord
 import (
 	"time"
 
+	"github.com/danmestas/agent-infra/internal/presence"
 	"github.com/danmestas/agent-infra/internal/tasks"
 )
 
@@ -47,6 +48,47 @@ func (t Task) CreatedAt() time.Time { return t.createdAt }
 
 // UpdatedAt returns the UTC wall-clock time of the most recent write.
 func (t Task) UpdatedAt() time.Time { return t.updatedAt }
+
+// Presence is a read-only view of an agent's liveness entry as
+// returned by coord.Who. Callers obtain Presences via coord.Who and
+// inspect state via accessor methods; direct field access is not
+// possible by design so future schema migrations can evolve the
+// internal shape without breaking callers. Parallel to Task above.
+type Presence struct {
+	agentID   string
+	project   string
+	startedAt time.Time
+	lastSeen  time.Time
+}
+
+// AgentID returns the agent's unique identifier.
+func (p Presence) AgentID() string { return p.agentID }
+
+// Project returns the project segment the agent belongs to.
+func (p Presence) Project() string { return p.project }
+
+// StartedAt returns the UTC wall-clock time the agent's coord instance
+// called Open. Stable across the Manager's lifetime — a consumer
+// comparing two reads of the same AgentID can distinguish "same
+// process, still up" from "restarted" by watching this field.
+func (p Presence) StartedAt() time.Time { return p.startedAt }
+
+// LastSeen returns the UTC wall-clock time of the agent's most recent
+// heartbeat observed in the presence substrate.
+func (p Presence) LastSeen() time.Time { return p.lastSeen }
+
+// presenceFromEntry translates an internal/presence.Entry into the
+// public coord.Presence view. Kept unexported so the substrate type
+// never leaks across package boundaries per ADR 0003. Mirrors
+// taskFromRecord below.
+func presenceFromEntry(e presence.Entry) Presence {
+	return Presence{
+		agentID:   e.AgentID,
+		project:   e.Project,
+		startedAt: e.StartedAt,
+		lastSeen:  e.LastSeen,
+	}
+}
 
 // taskFromRecord translates an internal/tasks.Task into the public
 // coord.Task view. Kept unexported so the substrate type never leaks
