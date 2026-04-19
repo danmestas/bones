@@ -44,6 +44,11 @@ type Config struct {
 	// before Open returns an error or a live Coord surfaces a terminal
 	// disconnect.
 	NATSMaxReconnects int
+
+	// NATSURL is the URL coord.Open dials to reach the substrate. It
+	// never appears in any coord public method signature per ADR 0003;
+	// it lives on Config because it is operator-supplied input.
+	NATSURL string
 }
 
 // Validate checks every Config field against its documented bounds and
@@ -85,6 +90,9 @@ func (c Config) Validate() error {
 	}
 	if c.NATSMaxReconnects <= 0 {
 		return fmt.Errorf("coord.Config: NATSMaxReconnects: must be > 0")
+	}
+	if c.NATSURL == "" {
+		return fmt.Errorf("coord.Config: NATSURL: must be non-empty")
 	}
 	return nil
 }

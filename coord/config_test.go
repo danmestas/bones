@@ -20,6 +20,7 @@ func baselineConfig() Config {
 		HeartbeatInterval: 5 * time.Second,
 		NATSReconnectWait: 2 * time.Second,
 		NATSMaxReconnects: 5,
+		NATSURL:           "nats://127.0.0.1:4222",
 	}
 }
 
@@ -103,6 +104,11 @@ func TestConfigValidate_Invalid(t *testing.T) {
 			name:    "zero NATSMaxReconnects",
 			mutate:  func(c *Config) { c.NATSMaxReconnects = 0 },
 			wantKey: "NATSMaxReconnects",
+		},
+		{
+			name:    "empty NATSURL",
+			mutate:  func(c *Config) { c.NATSURL = "" },
+			wantKey: "NATSURL",
 		},
 	}
 	for _, tc := range cases {
