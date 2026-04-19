@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted 2026-04-18. Closes README Open Question #4.
+Accepted 2026-04-18. Closes README Open Question #4. Scope narrowed to code
+artifacts only by ADR 0006 (2026-04-19) — task conflicts use CAS per ADRs
+0005/0007.
 
 ## Context
 
