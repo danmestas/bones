@@ -187,3 +187,52 @@ func TestChatSmoke_SubscribeCloseIdempotent(t *testing.T) {
 		t.Fatalf("second close: expected nil, got %v", err)
 	}
 }
+
+// TestChatSmoke_NamedSubscribeCrossCoord proves the agent-infra-x0t
+// deterministic-thread-identity scheme works end-to-end: Coord A
+// subscribes with pattern="t1" (non-empty — the substrate-leak path
+// before x0t, now clean), Coord B posts to "t1", and A receives. The
+// test only passes if both Coords compute the same ThreadShort from
+// ("agent-infra", "t1"); a per-Manager cache (pre-x0t) would have
+// given them distinct ThreadShorts and A's subscribe would have seen
+// nothing.
+func TestChatSmoke_NamedSubscribeCrossCoord(t *testing.T) {
+	nc, _ := natstest.NewJetStreamServer(t)
+	url := nc.ConnectedUrl()
+	cA := newCoordOnURL(t, url, "agent-A")
+	cB := newCoordOnURL(t, url, "agent-B")
+
+	events, closeSub, err := cA.Subscribe(context.Background(), "t1")
+	if err != nil {
+		t.Fatalf("A.Subscribe: %v", err)
+	}
+	defer func() { _ = closeSub() }()
+
+	if err := cB.Post(
+		context.Background(), "t1", []byte("named-hello"),
+	); err != nil {
+		t.Fatalf("B.Post: %v", err)
+	}
+
+	select {
+	case evt, ok := <-events:
+		if !ok {
+			t.Fatalf("events: channel closed before delivery")
+		}
+		msg, isChat := evt.(ChatMessage)
+		if !isChat {
+			t.Fatalf("events: got %T, want ChatMessage", evt)
+		}
+		if msg.Body() != "named-hello" {
+			t.Fatalf("Body=%q, want %q", msg.Body(), "named-hello")
+		}
+		if msg.From() != "agent-B" {
+			t.Fatalf("From=%q, want %q", msg.From(), "agent-B")
+		}
+	case <-time.After(subscribeDeliveryTimeout):
+		t.Fatalf(
+			"events: no named cross-Coord message within %s",
+			subscribeDeliveryTimeout,
+		)
+	}
+}
