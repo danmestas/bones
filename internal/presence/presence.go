@@ -211,6 +211,33 @@ func (m *Manager) Who(ctx context.Context) ([]Entry, error) {
 	return out, nil
 }
 
+// Present reports whether agentID currently has a live presence entry
+// in this Manager's project. A live entry is a KV Put that has not
+// been deleted and has not yet aged past its TTL. Returns false (with
+// nil error) for missing, tombstoned, or expired entries — the caller
+// cannot distinguish those cases, and ADR 0009 treats them identically
+// (all three mean "not reachable").
+//
+// Cheaper than Who for a single-recipient check: one Get, no list or
+// scan. The ergonomic wrapper for admin-Ask-style pre-flights.
+//
+// Returns ErrClosed after Close. Substrate errors are wrapped with the
+// presence.Present prefix.
+func (m *Manager) Present(
+	ctx context.Context, agentID string,
+) (bool, error) {
+	assert.NotNil(ctx, "presence.Present: ctx is nil")
+	assert.NotEmpty(agentID, "presence.Present: agentID is empty")
+	if m.closed.Load() {
+		return false, ErrClosed
+	}
+	_, ok, err := m.readEntry(ctx, keyOf(m.cfg.Project, agentID))
+	if err != nil {
+		return false, fmt.Errorf("presence.Present: %w", err)
+	}
+	return ok, nil
+}
+
 // readEntry fetches the current entry for key and decodes it. A
 // missing key or a tombstone Operation returns (zero, false, nil) so
 // the caller distinguishes "no live entry" from a substrate error.

@@ -2,6 +2,7 @@ package presence
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -210,6 +211,96 @@ func TestWho_ProjectScoped(t *testing.T) {
 	}
 	if entries[0].Project != "proj-a" {
 		t.Fatalf("A sees wrong project: %q", entries[0].Project)
+	}
+}
+
+func TestPresent_SelfAndPeerAndMissing(t *testing.T) {
+	nc, _ := natstest.NewJetStreamServer(t)
+	cfgA := validConfig(nc)
+	cfgA.AgentID = "agent-infra-prs10001"
+	cfgB := validConfig(nc)
+	cfgB.AgentID = "agent-infra-prs20001"
+
+	mA, err := Open(context.Background(), cfgA)
+	if err != nil {
+		t.Fatalf("Open A: %v", err)
+	}
+	t.Cleanup(func() { _ = mA.Close() })
+	mB, err := Open(context.Background(), cfgB)
+	if err != nil {
+		t.Fatalf("Open B: %v", err)
+	}
+	t.Cleanup(func() { _ = mB.Close() })
+
+	selfOK, err := mA.Present(context.Background(), cfgA.AgentID)
+	if err != nil {
+		t.Fatalf("Present self: %v", err)
+	}
+	if !selfOK {
+		t.Fatalf("Present self: got false, want true")
+	}
+	peerOK, err := mA.Present(context.Background(), cfgB.AgentID)
+	if err != nil {
+		t.Fatalf("Present peer: %v", err)
+	}
+	if !peerOK {
+		t.Fatalf("Present peer: got false, want true")
+	}
+	ghostOK, err := mA.Present(context.Background(), "agent-infra-ghst0001")
+	if err != nil {
+		t.Fatalf("Present ghost: %v", err)
+	}
+	if ghostOK {
+		t.Fatalf("Present ghost: got true, want false")
+	}
+}
+
+func TestPresent_ProjectScoped(t *testing.T) {
+	nc, _ := natstest.NewJetStreamServer(t)
+	cfgA := validConfig(nc)
+	cfgA.AgentID = "proj-a-pres0001"
+	cfgA.Project = "proj-a"
+	cfgB := validConfig(nc)
+	cfgB.AgentID = "proj-b-pres0001"
+	cfgB.Project = "proj-b"
+
+	mA, err := Open(context.Background(), cfgA)
+	if err != nil {
+		t.Fatalf("Open A: %v", err)
+	}
+	t.Cleanup(func() { _ = mA.Close() })
+	mB, err := Open(context.Background(), cfgB)
+	if err != nil {
+		t.Fatalf("Open B: %v", err)
+	}
+	t.Cleanup(func() { _ = mB.Close() })
+
+	// A is in proj-a; asking about B (in proj-b) must report not-present
+	// because Present keys on the *caller's* project scope.
+	crossOK, err := mA.Present(context.Background(), cfgB.AgentID)
+	if err != nil {
+		t.Fatalf("Present cross-project: %v", err)
+	}
+	if crossOK {
+		t.Fatalf("Present cross-project: got true, want false (scope leak)")
+	}
+}
+
+func TestPresent_ErrClosed(t *testing.T) {
+	nc, _ := natstest.NewJetStreamServer(t)
+	m, err := Open(context.Background(), validConfig(nc))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	_, err = m.Present(context.Background(), "any-agent")
+	if err == nil {
+		t.Fatalf("Present after Close: expected ErrClosed, got nil")
+	}
+	if !errors.Is(err, ErrClosed) {
+		t.Fatalf("Present after Close: err %v is not ErrClosed", err)
 	}
 }
 
