@@ -17,5 +17,12 @@ var ErrTaskNotFound = errors.New("coord: task not found")
 // that does not own the claim.
 var ErrAgentMismatch = errors.New("coord: agent mismatch")
 
+// ErrTaskAlreadyClosed reports that CloseTask was invoked on a task
+// whose status is already closed. Invariant 13 makes closed terminal,
+// so this is the caller-observable surrender boundary for that rule —
+// callers that re-drive close on retry see this sentinel rather than a
+// substrate transition error.
+var ErrTaskAlreadyClosed = errors.New("coord: task already closed")
+
 // ErrNotImplemented is returned by Phase 1 stub methods.
 var ErrNotImplemented = errors.New("coord: not implemented")
