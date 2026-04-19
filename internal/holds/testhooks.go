@@ -2,6 +2,16 @@ package holds
 
 import "github.com/nats-io/nats.go/jetstream"
 
+// casRetryHook is called once per CAS retry in Announce. Production
+// code leaves it as a no-op; tests overwrite it via
+// SetCASRetryHookForTest to count retries deterministically without
+// mocking the KV bucket. Keeping the hook out of the hot path — one
+// indirect call per conflict, never on the fast path — is worth the
+// observability. The declaration lives in testhooks.go so the no-op
+// default and its Set*ForTest mutator are co-located, but the call
+// site is in production Announce (internal/holds/holds.go).
+var casRetryHook = func() {}
+
 // KVForTest returns the underlying JetStream KV handle so tests in
 // sibling packages can stage CAS-conflict scenarios by writing
 // directly to the bucket. Production code must not use this; the

@@ -157,10 +157,10 @@ manager, the struct starts to lose signal — at that point an internal
 composition (one `substrate` aggregate carrying the four managers)
 will be worth the refactor. Not in Phase 3 scope.
 
-The `isCASConflict` extraction ticket (agent-infra-5o0) is explicitly
-NOT a Phase 3 blocker. Post, Ask, and Subscribe do not lean on
-KV-CAS. 5o0 remains a hygiene item for when a third CAS consumer
-lands, most likely presence in Phase 4.
+The `isCASConflict` extraction ticket (agent-infra-5o0) was landed
+post-Phase-3 as a hygiene commit — the predicate and MaxRetries
+bound now live in `internal/jskv` so a third CAS consumer (presence
+in Phase 4) inherits them instead of copying a third time.
 
 Invariant 17 (Subscribe close closure idempotence, documented in
 docs/invariants.md) extends the contract surface. Invariants 1–10

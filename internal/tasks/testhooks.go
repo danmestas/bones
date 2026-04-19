@@ -2,6 +2,25 @@ package tasks
 
 import "github.com/nats-io/nats.go/jetstream"
 
+// casRetryHook is called once per CAS retry in Update. Production
+// code leaves it as a no-op; tests overwrite it via
+// SetCASRetryHookForTest to count retries deterministically without
+// mocking the KV bucket. Keeping the hook out of the hot path — one
+// indirect call per conflict, never on the fast path — is worth the
+// observability. The declaration lives in testhooks.go so the no-op
+// default and its Set*ForTest mutator are co-located, but the call
+// site is in production Update (internal/tasks/tasks.go).
+var casRetryHook = func() {}
+
+// updatePreWriteHook is called on every Update attempt after the Get
+// that reads the current record but before the revision-gated Update
+// call. Production code leaves it as a no-op. Tests use it to stage
+// revision-advancing Puts that force a CAS conflict on a specific
+// attempt — the only way to deterministically reach the retry-
+// exhaustion path without relying on scheduler timing. One indirect
+// call per attempt, never doing work outside test.
+var updatePreWriteHook = func() {}
+
 // KVForTest returns the underlying JetStream KV handle so tests in
 // sibling packages can stage CAS-conflict scenarios by writing directly
 // to the bucket. Production code must not use this; the public API

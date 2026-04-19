@@ -98,7 +98,7 @@ func TestUpdate_CAS_ConcurrentContention(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	// Keep racers well below maxCASRetries (8) so no single racer can
+	// Keep racers well below jskv.MaxRetries (8) so no single racer can
 	// lose all eight rounds; stress the loop without staging a forced-
 	// exhaustion (that path has its own test below).
 	const racers = 4
@@ -152,7 +152,7 @@ func TestUpdate_CAS_ConcurrentContention(t *testing.T) {
 // real. We simulate a perpetual-conflict scenario by installing a
 // pre-write hook that advances the revision before every Update call;
 // every attempt fails because the revision the CAS loop holds is
-// always stale, so after maxCASRetries iterations the Update must
+// always stale, so after jskv.MaxRetries iterations the Update must
 // surface ErrCASConflict.
 func TestUpdate_CAS_ExhaustedRetries(t *testing.T) {
 	m, _, cleanup := openTestManager(t)

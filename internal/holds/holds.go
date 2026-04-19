@@ -15,6 +15,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/danmestas/agent-infra/internal/assert"
+	"github.com/danmestas/agent-infra/internal/jskv"
 )
 
 // Config configures Open. Every field is required; there are no
@@ -109,16 +110,6 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-// maxCASRetries caps the read-decide-write loop in Announce. Each
-// retry costs one KV Get plus one conditional write, and every loss
-// means another caller advanced the revision — so the bound is really
-// "how much concurrent churn on a single key before we surrender."
-// Eight is generous: even pathological contention should converge in
-// two or three rounds in practice, and the hard cap keeps a stuck
-// Announce from stalling its caller indefinitely. A bounded loop is
-// TigerStyle; this is the bound.
-const maxCASRetries = 8
-
 // Announce places a hold on file for the agent described by h. The
 // operation is idempotent for the same AgentID: calling Announce twice
 // with the same agent refreshes ClaimedAt/ExpiresAt in lease-renewal
@@ -129,7 +120,7 @@ const maxCASRetries = 8
 // decides whether to Create (vacant), Update (renew or take over an
 // expired hold), and attempts the write with the observed revision.
 // On revision mismatch — another agent wrote between our Get and our
-// write — Announce retries up to maxCASRetries times before returning
+// write — Announce retries up to jskv.MaxRetries times before returning
 // the exhaustion error. Invariant 6 (atomic claim) is preserved: every
 // state transition is revision-gated and losers re-evaluate against
 // the post-conflict state.
@@ -152,7 +143,7 @@ func (m *Manager) Announce(
 	}
 
 	key := keyOf(file)
-	for attempt := 0; attempt < maxCASRetries; attempt++ {
+	for attempt := 0; attempt < jskv.MaxRetries; attempt++ {
 		done, err := m.announceAttempt(ctx, key, h)
 		if done {
 			return err
@@ -163,7 +154,7 @@ func (m *Manager) Announce(
 	}
 	return fmt.Errorf(
 		"holds.Announce: exhausted %d CAS retries for %q",
-		maxCASRetries, file,
+		jskv.MaxRetries, file,
 	)
 }
 
@@ -231,7 +222,7 @@ func (m *Manager) casVacant(
 		return true, fmt.Errorf("holds.Announce: encode: %w", err)
 	}
 	if _, err := m.kv.Create(ctx, key, payload); err != nil {
-		if isCASConflict(err) {
+		if jskv.IsConflict(err) {
 			return false, nil
 		}
 		return true, fmt.Errorf("holds.Announce: create: %w", err)
@@ -250,7 +241,7 @@ func (m *Manager) casRevision(
 		return true, fmt.Errorf("holds.Announce: encode: %w", err)
 	}
 	if _, err := m.kv.Update(ctx, key, payload, revision); err != nil {
-		if isCASConflict(err) {
+		if jskv.IsConflict(err) {
 			return false, nil
 		}
 		return true, fmt.Errorf("holds.Announce: update: %w", err)
