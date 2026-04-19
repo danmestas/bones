@@ -2,7 +2,6 @@ package coord
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -131,27 +130,6 @@ func TestClose_Idempotent(t *testing.T) {
 	}
 	if err := c.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
-	}
-}
-
-func TestPost_ReturnsNotImplemented(t *testing.T) {
-	c := mustOpen(t)
-	defer func() { _ = c.Close() }()
-	err := c.Post(context.Background(), "thread-1", []byte("hi"))
-	if !errors.Is(err, ErrNotImplemented) {
-		t.Fatalf("Post: want ErrNotImplemented, got %v", err)
-	}
-}
-
-func TestAsk_ReturnsNotImplemented(t *testing.T) {
-	c := mustOpen(t)
-	defer func() { _ = c.Close() }()
-	reply, err := c.Ask(context.Background(), "peer", "status?")
-	if !errors.Is(err, ErrNotImplemented) {
-		t.Fatalf("Ask: want ErrNotImplemented, got %v", err)
-	}
-	if reply != "" {
-		t.Fatalf("Ask: want empty reply, got %q", reply)
 	}
 }
 
