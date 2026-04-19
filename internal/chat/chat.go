@@ -252,6 +252,40 @@ func (m *Manager) WatchAll(ctx context.Context) <-chan notify.Message {
 	})
 }
 
+// WatchPattern returns a channel of notify.Message values for every
+// thread whose NATS subject segment matches pattern. Unlike Watch —
+// which hashes its thread argument into a deterministic ThreadShort —
+// WatchPattern passes pattern through to the substrate unchanged, so
+// callers can supply NATS subject wildcards ("*" for every thread, a
+// literal ThreadShort for a single known stream, or an already-hashed
+// short from a ChatMessage.Thread()).
+//
+// This is the substrate half of coord.SubscribePattern's option-1
+// resolution of ADR 0009's glob-Subscribe Open Question. The raw-
+// pattern leak is deliberate: callers see the NATS pattern shape that
+// ADR 0003 normally hides, the payoff being a Phase-4 deliverable
+// without a new KV bucket or per-Post registry writes.
+//
+// Empty pattern is asserted — use WatchAll for project-wide streams.
+// Use-after-close returns an already-closed channel, same shape as
+// Watch. A nil Manager or nil ctx panics (programmer error).
+func (m *Manager) WatchPattern(
+	ctx context.Context, pattern string,
+) <-chan notify.Message {
+	assert.NotNil(m, "chat.WatchPattern: receiver is nil")
+	assert.NotNil(ctx, "chat.WatchPattern: ctx is nil")
+	assert.NotEmpty(pattern, "chat.WatchPattern: pattern is empty")
+	if m.closed.Load() {
+		ch := make(chan notify.Message)
+		close(ch)
+		return ch
+	}
+	return m.service.Watch(ctx, notify.WatchOpts{
+		Project:     m.cfg.ProjectPrefix,
+		ThreadShort: pattern,
+	})
+}
+
 // Request sends payload to subject via NATS request/reply and returns
 // the reply payload. ctx bounds the wait — a deadline-less ctx on an
 // offline recipient never returns. Phase 3C's coord.Ask builds the
