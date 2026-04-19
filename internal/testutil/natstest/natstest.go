@@ -11,9 +11,13 @@
 //	    defer cleanup()
 //	    // nc is a connected *nats.Conn on a random port.
 //	}
+//
+// The default fixture runs without JetStream. Tests that need the KV
+// substrate (holds/coord) should call NewJetStreamServer instead.
 package natstest
 
 import (
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -35,22 +39,52 @@ const readyTimeout = 5 * time.Second
 // On any setup failure, NewTestServer calls t.Fatalf and does not return.
 func NewTestServer(t *testing.T) (*nats.Conn, func()) {
 	t.Helper()
+	return newServer(t, false)
+}
+
+// NewJetStreamServer starts an in-process nats-server with JetStream
+// enabled, storing state in a temporary directory that is removed when
+// cleanup runs. Use this for tests that exercise JetStream KV.
+//
+// The returned cleanup is the single teardown point for connection,
+// server, and store directory. Calling it more than once is a no-op.
+func NewJetStreamServer(t *testing.T) (*nats.Conn, func()) {
+	t.Helper()
+	return newServer(t, true)
+}
+
+// newServer is the shared implementation behind NewTestServer and
+// NewJetStreamServer. When jetStream is true, a transient StoreDir is
+// created and wired into cleanup.
+func newServer(t *testing.T, jetStream bool) (*nats.Conn, func()) {
+	t.Helper()
 
 	// NoLog short-circuits ConfigureLogger so the server starts with a nil
 	// logger and writes nothing to stderr. NoSigs skips the signal handler
-	// goroutine that a daemon needs but a test does not. JetStream stays
-	// off by default in v2.12, but set it explicitly so future upstream
-	// default changes cannot break us.
+	// goroutine that a daemon needs but a test does not.
 	opts := &natsserver.Options{
 		Host:      "127.0.0.1",
-		Port:      -1, // random free client port
+		Port:      -1,
 		NoLog:     true,
 		NoSigs:    true,
-		JetStream: false,
+		JetStream: jetStream,
+	}
+
+	var storeDir string
+	if jetStream {
+		dir, err := os.MkdirTemp("", "natstest-js-*")
+		if err != nil {
+			t.Fatalf("natstest: create store dir: %v", err)
+		}
+		storeDir = dir
+		opts.StoreDir = dir
 	}
 
 	s, err := natsserver.NewServer(opts)
 	if err != nil {
+		if storeDir != "" {
+			_ = os.RemoveAll(storeDir)
+		}
 		t.Fatalf("natstest: create server: %v", err)
 	}
 
@@ -58,6 +92,9 @@ func NewTestServer(t *testing.T) (*nats.Conn, func()) {
 	if !s.ReadyForConnections(readyTimeout) {
 		s.Shutdown()
 		s.WaitForShutdown()
+		if storeDir != "" {
+			_ = os.RemoveAll(storeDir)
+		}
 		t.Fatalf("natstest: server not ready within %s", readyTimeout)
 	}
 
@@ -65,6 +102,9 @@ func NewTestServer(t *testing.T) (*nats.Conn, func()) {
 	if err != nil {
 		s.Shutdown()
 		s.WaitForShutdown()
+		if storeDir != "" {
+			_ = os.RemoveAll(storeDir)
+		}
 		t.Fatalf("natstest: connect to %s: %v", s.ClientURL(), err)
 	}
 
@@ -74,6 +114,9 @@ func NewTestServer(t *testing.T) (*nats.Conn, func()) {
 			nc.Close()
 			s.Shutdown()
 			s.WaitForShutdown()
+			if storeDir != "" {
+				_ = os.RemoveAll(storeDir)
+			}
 		})
 	}
 	t.Cleanup(cleanup)
