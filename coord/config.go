@@ -37,6 +37,13 @@ type Config struct {
 	// supplies the number, and Validate rejects zero/negative.
 	MaxTaskValueSize int
 
+	// TaskHistoryDepth is the per-key JetStream KV history depth for the
+	// tasks bucket. ADR 0005 sets the recommended value at 8 (one entry
+	// per write: open, claim, up to ~4 updates, close, plus slack). The
+	// operator supplies the number; Validate rejects zero so there is no
+	// silent default at the coord layer.
+	TaskHistoryDepth uint8
+
 	// OperationTimeout bounds a single coord operation end-to-end.
 	OperationTimeout time.Duration
 
@@ -88,6 +95,9 @@ func (c Config) Validate() error {
 	}
 	if c.MaxTaskValueSize <= 0 {
 		return fmt.Errorf("coord.Config: MaxTaskValueSize: must be > 0")
+	}
+	if c.TaskHistoryDepth == 0 {
+		return fmt.Errorf("coord.Config: TaskHistoryDepth: must be > 0")
 	}
 	if c.OperationTimeout <= 0 {
 		return fmt.Errorf("coord.Config: OperationTimeout: must be > 0")

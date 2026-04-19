@@ -29,6 +29,7 @@ func validConfig() Config {
 		MaxSubscribers:    32,
 		MaxTaskFiles:      32,
 		MaxTaskValueSize:  8 * 1024,
+		TaskHistoryDepth:  8,
 		OperationTimeout:  10 * time.Second,
 		HeartbeatInterval: 5 * time.Second,
 		NATSReconnectWait: 2 * time.Second,

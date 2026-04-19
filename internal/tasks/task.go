@@ -1,0 +1,152 @@
+package tasks
+
+import (
+	"encoding/json"
+	"time"
+)
+
+// SchemaVersion is the currently-written task record schema. Every
+// Create stamps this on the record so future migrations can fan out on
+// observed version. ADR 0005 pins the initial value at 1.
+const SchemaVersion = 1
+
+// Status is the task lifecycle state. ADR 0005 fixes the enum to
+// exactly these three values; invariant 13 enforces the transition
+// DAG (open→claimed, open→closed, claimed→closed) at write time.
+type Status string
+
+// StatusOpen marks a task that has been declared but not yet claimed.
+// StatusClaimed marks a task currently held by one agent.
+// StatusClosed marks a terminal task; closed is a sink state.
+const (
+	StatusOpen    Status = "open"
+	StatusClaimed Status = "claimed"
+	StatusClosed  Status = "closed"
+)
+
+// validStatus reports whether s is one of the three legal enum values.
+// Unknown values — including the empty string — are rejected at every
+// Update and before every Create encode path.
+func validStatus(s Status) bool {
+	switch s {
+	case StatusOpen, StatusClaimed, StatusClosed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Task is the value stored at each TaskID key in the KV bucket. The
+// struct is persisted as JSON; every timestamp is wall-clock UTC so
+// that two processes reading the same entry reach the same verdict
+// regardless of local clock skew. ADR 0005 is the canonical schema.
+type Task struct {
+	// ID is the TaskID. It must equal the KV key at Create time; the
+	// duplication is deliberate — any future migration that walks the
+	// bucket can use the value-side ID without parsing the key.
+	ID string `json:"id"`
+
+	// Title is the human-readable task summary. Bounded by the caller;
+	// no enforcement here beyond the MaxValueSize cap.
+	Title string `json:"title"`
+
+	// Status is the lifecycle state; see Status/validStatus.
+	Status Status `json:"status"`
+
+	// ClaimedBy is the AgentID currently holding the claim. Invariant 11
+	// requires non-empty iff Status == StatusClaimed; Update enforces.
+	ClaimedBy string `json:"claimed_by,omitempty"`
+
+	// Files is the absolute-path list of files this task touches. Sorted
+	// by the writer (coord.OpenTask); this package stores it verbatim.
+	Files []string `json:"files"`
+
+	// Parent is the optional parent TaskID — empty when this is a root
+	// task in a decomposition chain.
+	Parent string `json:"parent,omitempty"`
+
+	// Context is the caller-supplied free-form metadata. ADR 0005 caps
+	// the effective size against MaxValueSize in concert with the other
+	// fields; this package only size-checks the encoded whole.
+	Context map[string]string `json:"context,omitempty"`
+
+	// CreatedAt is the wall-clock time of the initial Create.
+	CreatedAt time.Time `json:"created_at"`
+
+	// UpdatedAt is the wall-clock time of the most recent write.
+	UpdatedAt time.Time `json:"updated_at"`
+
+	// ClosedAt is the wall-clock time of transition into StatusClosed.
+	// Nil when Status != StatusClosed; pointer makes the zero value
+	// observable (and distinct from a legitimate January-1-0001 write).
+	ClosedAt *time.Time `json:"closed_at,omitempty"`
+
+	// ClosedBy is the AgentID that closed the task; empty if not closed.
+	ClosedBy string `json:"closed_by,omitempty"`
+
+	// ClosedReason is the free-form close reason; empty if not closed.
+	ClosedReason string `json:"closed_reason,omitempty"`
+
+	// SchemaVersion stamps the schema this record was written against.
+	SchemaVersion int `json:"schema_version"`
+}
+
+// encode serializes a Task to JSON bytes for KV storage. Separated from
+// any size check so callers can inspect the encoded length before the
+// CAS write path.
+func encode(t Task) ([]byte, error) {
+	return json.Marshal(t)
+}
+
+// decode deserializes a Task from KV bytes. An error here means the
+// bucket contains a corrupted entry, which the caller surfaces.
+func decode(b []byte) (Task, error) {
+	var t Task
+	if err := json.Unmarshal(b, &t); err != nil {
+		return Task{}, err
+	}
+	return t, nil
+}
+
+// EventKind identifies the shape of a task state change delivered by
+// Watch.
+type EventKind int
+
+// EventCreated, EventUpdated, and EventDeleted are the three shapes of
+// task state changes a Watch subscriber observes.
+const (
+	// EventCreated fires on the first Put for a key. The accompanying
+	// Event.Task holds the decoded record.
+	EventCreated EventKind = iota + 1
+
+	// EventUpdated fires on subsequent Puts for an existing key. The
+	// accompanying Event.Task holds the decoded post-update record.
+	EventUpdated
+
+	// EventDeleted fires on Delete or Purge. Event.Task is the zero
+	// value; Event.ID carries the affected key.
+	EventDeleted
+)
+
+// String returns a human-readable name for the EventKind.
+func (k EventKind) String() string {
+	switch k {
+	case EventCreated:
+		return "Created"
+	case EventUpdated:
+		return "Updated"
+	case EventDeleted:
+		return "Deleted"
+	default:
+		return "Unknown"
+	}
+}
+
+// Event is delivered to Watch callers on each observed task change. ID
+// is the TaskID the event concerns; Kind identifies the shape; Task is
+// populated for EventCreated and EventUpdated.
+type Event struct {
+	ID   string
+	Kind EventKind
+	Task Task
+}
