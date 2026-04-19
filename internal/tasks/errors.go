@@ -21,7 +21,7 @@ var ErrAlreadyExists = errors.New("tasks: record already exists")
 // when composing higher-level verbs.
 var ErrNotFound = errors.New("tasks: record not found")
 
-// ErrCASConflict reports that Update exhausted maxCASRetries without
+// ErrCASConflict reports that Update exhausted jskv.MaxRetries without
 // converging. Under normal contention this should never surface; its
 // presence in a call site's error handling is the explicit surrender
 // boundary for the CAS retry loop.

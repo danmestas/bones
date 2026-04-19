@@ -12,6 +12,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/danmestas/agent-infra/internal/assert"
+	"github.com/danmestas/agent-infra/internal/jskv"
 )
 
 // Config configures Open. Every field is required; there are no silent
@@ -51,16 +52,6 @@ type Config struct {
 // defaultChanBuffer is the Watch channel buffer used when Config leaves
 // ChanBuffer at zero. Mirrors internal/holds.
 const defaultChanBuffer = 32
-
-// maxCASRetries caps the read-decide-write loop in Update. Each retry
-// costs one KV Get plus one conditional Update, and every loss means
-// another caller advanced the revision — so the bound is really "how
-// much concurrent churn on a single key before we surrender." Eight is
-// generous: even pathological contention should converge in two or
-// three rounds in practice, and the hard cap keeps a stuck Update from
-// stalling its caller indefinitely. A bounded loop is TigerStyle.
-// Matches internal/holds for consistency across the CAS surface.
-const maxCASRetries = 8
 
 // Manager owns a JetStream KV bucket that stores task records. Every
 // public method is safe to call concurrently. Close is idempotent.
@@ -214,7 +205,7 @@ func (m *Manager) Get(
 // returning a non-nil error aborts the update and propagates the error
 // unwrapped so callers can switch on mutate's own sentinels. On
 // revision conflict the loop re-reads the record and re-invokes
-// mutate, up to maxCASRetries times, before surfacing ErrCASConflict.
+// mutate, up to jskv.MaxRetries times, before surfacing ErrCASConflict.
 // Invariants 11, 13, and 14 are checked on each attempt against the
 // value mutate returned.
 func (m *Manager) Update(
@@ -228,7 +219,7 @@ func (m *Manager) Update(
 	if m.done.Load() {
 		return ErrClosed
 	}
-	for attempt := 0; attempt < maxCASRetries; attempt++ {
+	for attempt := 0; attempt < jskv.MaxRetries; attempt++ {
 		done, err := m.updateAttempt(ctx, id, mutate)
 		if done {
 			return err
@@ -265,7 +256,7 @@ func (m *Manager) updateAttempt(
 	}
 	updatePreWriteHook()
 	if _, err := m.kv.Update(ctx, id, payload, revision); err != nil {
-		if isCASConflict(err) {
+		if jskv.IsConflict(err) {
 			return false, nil
 		}
 		return true, fmt.Errorf("tasks.Update: %w", err)
