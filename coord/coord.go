@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
 
 	"github.com/danmestas/agent-infra/internal/assert"
+	"github.com/danmestas/agent-infra/internal/chat"
 	"github.com/danmestas/agent-infra/internal/holds"
 	"github.com/danmestas/agent-infra/internal/tasks"
 )
@@ -23,6 +27,14 @@ const holdsBucket = "agent-infra-holds"
 // records per ADR 0005. Also substrate-internal per ADR 0003.
 const tasksBucket = "agent-infra-tasks"
 
+// chatFossilFile is the filename coord appends to a per-coord temp
+// directory to locate the chat fossil repo. Phase 3A creates a fresh
+// MkdirTemp on every Open so concurrent in-process coords never share
+// a repo path; Phase 3D may promote the location to a Config field
+// once operators have a reason to pin it. Substrate-internal per
+// ADR 0003.
+const chatFossilFile = "agent-infra-chat.fossil"
+
 // Coord is the public entry point for agent-infra. Construct one via
 // Open and Close it at shutdown. All coordination — hold acquisition,
 // task ready queries, chat messaging — flows through methods on *Coord.
@@ -35,6 +47,7 @@ type Coord struct {
 	nc     *nats.Conn
 	holds  *holds.Manager
 	tasks  *tasks.Manager
+	chat   *chat.Manager
 	mu     sync.Mutex // protects closed
 	closed bool
 }
@@ -80,7 +93,65 @@ func Open(ctx context.Context, cfg Config) (*Coord, error) {
 		nc.Close()
 		return nil, fmt.Errorf("coord.Open: tasks: %w", err)
 	}
-	return &Coord{cfg: cfg, nc: nc, holds: hm, tasks: tm}, nil
+	repoPath, err := chatRepoPath(cfg.AgentID)
+	if err != nil {
+		_ = tm.Close()
+		_ = hm.Close()
+		nc.Close()
+		return nil, fmt.Errorf("coord.Open: chat repo: %w", err)
+	}
+	cm, err := chat.Open(ctx, chat.Config{
+		AgentID:        cfg.AgentID,
+		ProjectPrefix:  projectPrefix(cfg.AgentID),
+		Nats:           nc,
+		FossilRepoPath: repoPath,
+		MaxSubscribers: cfg.MaxSubscribers,
+	})
+	if err != nil {
+		_ = tm.Close()
+		_ = hm.Close()
+		nc.Close()
+		return nil, fmt.Errorf("coord.Open: chat: %w", err)
+	}
+	return &Coord{
+		cfg: cfg, nc: nc, holds: hm, tasks: tm, chat: cm,
+	}, nil
+}
+
+// projectPrefix derives the <proj> segment from an AgentID shaped
+// <proj>-<suffix> per ADR 0005. It takes everything up to the LAST
+// hyphen — "agent-infra-abc123" yields "agent-infra". This runs after
+// Config.Validate's non-empty check so an empty AgentID cannot reach
+// here in production; the assertions catch a caller that bypasses
+// Validate.
+func projectPrefix(agentID string) string {
+	assert.NotEmpty(agentID, "coord: projectPrefix: agentID is empty")
+	idx := strings.LastIndex(agentID, "-")
+	assert.Precondition(
+		idx > 0,
+		"coord: projectPrefix: agentID %q has no hyphen", agentID,
+	)
+	assert.Precondition(
+		idx < len(agentID)-1,
+		"coord: projectPrefix: agentID %q has empty suffix", agentID,
+	)
+	return agentID[:idx]
+}
+
+// chatRepoPath returns a fresh filesystem path at which this coord's
+// chat Fossil repo lives. Phase 3A creates a per-coord temp directory
+// so concurrent coord.Open calls (most often in-process tests) do not
+// collide on a shared path, and libfossil.Create never sees a
+// pre-existing repo file. Phase 3D may promote this to a Config field
+// once operators have a reason to pin the location; until then, the
+// transient repo is consistent with chat's "durable storage lives in
+// notify, not coord" posture from ADR 0008.
+func chatRepoPath(agentID string) (string, error) {
+	dir, err := os.MkdirTemp("", "agent-infra-chat-*")
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, agentID+"-"+chatFossilFile), nil
 }
 
 // Close shuts down the Coord. Safe to call more than once; subsequent
@@ -99,6 +170,9 @@ func (c *Coord) Close() error {
 		return nil
 	}
 	c.closed = true
+	if c.chat != nil {
+		_ = c.chat.Close()
+	}
 	if c.tasks != nil {
 		_ = c.tasks.Close()
 	}
