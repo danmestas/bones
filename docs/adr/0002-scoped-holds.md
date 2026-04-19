@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted 2026-04-18.
+Accepted 2026-04-18. Signature superseded in part by ADR 0007 (2026-04-19) —
+files argument removed; see ADR 0007 for the amended shape.
 
 ## Context
 
