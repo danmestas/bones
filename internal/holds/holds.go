@@ -109,16 +109,30 @@ func (m *Manager) Close() error {
 	return nil
 }
 
+// maxCASRetries caps the read-decide-write loop in Announce. Each
+// retry costs one KV Get plus one conditional write, and every loss
+// means another caller advanced the revision — so the bound is really
+// "how much concurrent churn on a single key before we surrender."
+// Eight is generous: even pathological contention should converge in
+// two or three rounds in practice, and the hard cap keeps a stuck
+// Announce from stalling its caller indefinitely. A bounded loop is
+// TigerStyle; this is the bound.
+const maxCASRetries = 8
+
 // Announce places a hold on file for the agent described by h. The
 // operation is idempotent for the same AgentID: calling Announce twice
 // with the same agent refreshes ClaimedAt/ExpiresAt in lease-renewal
 // style. Returns ErrHeldByAnother if a different agent already owns a
 // non-expired hold on the same file.
 //
-// Phase 1 note: the read-then-write path is not CAS-protected. Two
-// concurrent Announces for the same file may race; the KV layer
-// resolves the tie via last-writer-wins. The fossil fork model (ADR
-// 0004) absorbs the residual inconsistency.
+// The write path is CAS-atomic. Announce reads the current KV entry,
+// decides whether to Create (vacant), Update (renew or take over an
+// expired hold), and attempts the write with the observed revision.
+// On revision mismatch — another agent wrote between our Get and our
+// write — Announce retries up to maxCASRetries times before returning
+// the exhaustion error. Invariant 6 (atomic claim) is preserved: every
+// state transition is revision-gated and losers re-evaluate against
+// the post-conflict state.
 func (m *Manager) Announce(
 	ctx context.Context, file string, h Hold,
 ) error {
@@ -138,25 +152,120 @@ func (m *Manager) Announce(
 	}
 
 	key := keyOf(file)
-	existing, ok, err := m.readHold(ctx, key)
-	if err != nil {
-		return fmt.Errorf("holds.Announce: read: %w", err)
+	for attempt := 0; attempt < maxCASRetries; attempt++ {
+		done, err := m.announceAttempt(ctx, key, h)
+		if done {
+			return err
+		}
+		// done == false means a CAS conflict was observed; loop and
+		// re-evaluate against the newly-written state.
+		casRetryHook()
 	}
-	if ok && existing.AgentID != h.AgentID {
-		return ErrHeldByAnother
-	}
+	return fmt.Errorf(
+		"holds.Announce: exhausted %d CAS retries for %q",
+		maxCASRetries, file,
+	)
+}
 
+// announceAttempt performs one iteration of the CAS loop. The first
+// return is true when a final verdict has been reached — success,
+// ErrHeldByAnother, or an unrecoverable error — and the caller should
+// propagate the error value directly. When the first return is false,
+// a CAS conflict was observed and the caller should retry.
+func (m *Manager) announceAttempt(
+	ctx context.Context, key string, h Hold,
+) (bool, error) {
+	entry, err := m.kv.Get(ctx, key)
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return m.casVacant(ctx, key, h)
+	}
+	if err != nil {
+		return true, fmt.Errorf("holds.Announce: get: %w", err)
+	}
+	if entry.Operation() != jetstream.KeyValuePut {
+		// Delete/Purge marker — treat as vacant but CAS against the
+		// observed revision so we don't clobber a concurrent writer.
+		return m.casRevision(ctx, key, h, entry.Revision())
+	}
+	existing, err := decode(entry.Value())
+	if err != nil {
+		return true, fmt.Errorf("holds.Announce: decode: %w", err)
+	}
+	return m.decideAnnounce(ctx, key, h, existing, entry.Revision())
+}
+
+// decideAnnounce chooses between renew, take-expired, and reject based
+// on the decoded existing hold. Splitting the decision off keeps
+// announceAttempt short enough to reason about as one sequence of
+// branches.
+func (m *Manager) decideAnnounce(
+	ctx context.Context,
+	key string,
+	h, existing Hold,
+	revision uint64,
+) (bool, error) {
+	now := time.Now().UTC()
+	expired := existing.ExpiresAt.Before(now)
+	sameAgent := existing.AgentID == h.AgentID
+	switch {
+	case sameAgent:
+		// Lease renewal — still CAS-protected so a racing release
+		// doesn't turn our Update into a phantom claim.
+		return m.casRevision(ctx, key, h, revision)
+	case expired:
+		// Previous holder's lease ran out; we may take over under CAS.
+		return m.casRevision(ctx, key, h, revision)
+	default:
+		return true, ErrHeldByAnother
+	}
+}
+
+// casVacant attempts the initial Create on a vacant key. A CAS
+// conflict here means another caller Created between our Get and our
+// Create; the loop will retry and see the new entry.
+func (m *Manager) casVacant(
+	ctx context.Context, key string, h Hold,
+) (bool, error) {
+	payload, err := stamped(h)
+	if err != nil {
+		return true, fmt.Errorf("holds.Announce: encode: %w", err)
+	}
+	if _, err := m.kv.Create(ctx, key, payload); err != nil {
+		if isCASConflict(err) {
+			return false, nil
+		}
+		return true, fmt.Errorf("holds.Announce: create: %w", err)
+	}
+	return true, nil
+}
+
+// casRevision performs a revision-gated Update. A CAS conflict means
+// the revision moved between our Get and our Update; the loop will
+// retry against the new state.
+func (m *Manager) casRevision(
+	ctx context.Context, key string, h Hold, revision uint64,
+) (bool, error) {
+	payload, err := stamped(h)
+	if err != nil {
+		return true, fmt.Errorf("holds.Announce: encode: %w", err)
+	}
+	if _, err := m.kv.Update(ctx, key, payload, revision); err != nil {
+		if isCASConflict(err) {
+			return false, nil
+		}
+		return true, fmt.Errorf("holds.Announce: update: %w", err)
+	}
+	return true, nil
+}
+
+// stamped freshens ClaimedAt and ExpiresAt to the current wall clock
+// and encodes the result. Each CAS attempt re-stamps so the losing
+// retry doesn't carry a stale pre-conflict lease deadline.
+func stamped(h Hold) ([]byte, error) {
 	now := time.Now().UTC()
 	h.ClaimedAt = now
 	h.ExpiresAt = now.Add(h.TTL)
-	payload, err := encode(h)
-	if err != nil {
-		return fmt.Errorf("holds.Announce: encode: %w", err)
-	}
-	if _, err := m.kv.Put(ctx, key, payload); err != nil {
-		return fmt.Errorf("holds.Announce: put: %w", err)
-	}
-	return nil
+	return encode(h)
 }
 
 // Release removes the hold on file if and only if it is owned by
