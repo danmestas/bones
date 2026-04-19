@@ -481,17 +481,40 @@ func (c *Coord) releaseHolds(
 	return first
 }
 
-// Post publishes a message to a chat thread. Phase 1 stub: returns
-// ErrNotImplemented after asserting invariants 1, 8, and the thread
-// non-empty precondition.
+// Post publishes a message body to a chat thread via the internal
+// chat.Manager, which routes through EdgeSync notify per ADR 0008.
+// Persistence is delegated to notify's Fossil backing — coord itself
+// owns no chat-message state.
+//
+// ctx is pre-checked inside chat.Send before any repo or NATS work, so
+// a canceled ctx short-circuits cleanly. Once notify.Service.Send is
+// entered, it runs to completion: the upstream API takes no ctx and
+// cannot be interrupted mid-write. ADR 0008 documents the limitation;
+// observed write latency is sub-millisecond in normal operation.
+//
+// Invariants asserted (panics on violation — programmer errors):
+// 1 (ctx non-nil), 8 (Coord not closed). The thread-non-empty
+// precondition is likewise a programmer error and panics.
+//
+// Operator errors returned:
+//
+//	context.Canceled / context.DeadlineExceeded — ctx finalized
+//	    before chat.Send entered notify; surfaces wrapped with the
+//	    coord.Post prefix.
+//	chat.ErrClosed — the chat manager was closed underneath (usually
+//	    via Coord.Close racing with an in-flight Post).
+//	Any substrate error from notify — e.g. a NATS publish or Fossil
+//	    write failure — surfaces wrapped with the coord.Post prefix.
 func (c *Coord) Post(
 	ctx context.Context, thread string, msg []byte,
 ) error {
 	c.assertOpen("Post")
 	assert.NotNil(ctx, "coord.Post: ctx is nil")
 	assert.NotEmpty(thread, "coord.Post: thread is empty")
-	_ = msg
-	return ErrNotImplemented
+	if err := c.chat.Send(ctx, thread, string(msg)); err != nil {
+		return fmt.Errorf("coord.Post: %w", err)
+	}
+	return nil
 }
 
 // Ask sends a synchronous question to a peer agent and waits for a

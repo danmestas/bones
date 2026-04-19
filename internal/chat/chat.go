@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"sync/atomic"
 
 	libfossil "github.com/danmestas/go-libfossil"
@@ -40,6 +41,16 @@ type Manager struct {
 	repo    *libfossil.Repo
 	nc      *nats.Conn
 	closed  atomic.Bool
+
+	// threads caches caller-supplied thread names against the
+	// notify-assigned ThreadShort. notify.Send requires a pre-existing
+	// thread for ThreadShort != "" or else fails with "thread not
+	// found"; sends with empty ThreadShort auto-generate a new thread.
+	// We bridge the two by looking up the caller's name here: hit →
+	// reuse the short; miss → send with empty short, cache the result.
+	// See agent-infra-<follow-up> for the cross-Manager / cross-restart
+	// identity limitation this cache implies.
+	threads sync.Map // map[string]string: caller name → ThreadShort
 }
 
 // Open validates cfg, opens (or creates) the Fossil repo at
@@ -125,11 +136,12 @@ func (m *Manager) Close() error {
 	return first
 }
 
-// Send publishes body to thread via the notify service. The Project on
-// the outgoing SendOpts is cfg.ProjectPrefix, and ThreadShort is the
-// caller-supplied thread argument — callers are responsible for
-// passing a notify-shaped short thread identifier (ADR 0008 defers
-// thread-shape formalization).
+// Send publishes body to thread via the notify service. thread is a
+// caller-supplied name that Manager maps to a notify ThreadShort via
+// the per-Manager threads cache: a cache hit reuses the existing
+// notify thread; a miss sends with empty ThreadShort so notify
+// auto-generates a fresh thread, and the returned ThreadShort is
+// stored against the caller's name for subsequent Sends.
 //
 // ctx is pre-checked: a canceled context short-circuits before any
 // repo or NATS work. Once notify.Service.Send is entered, it runs to
@@ -137,6 +149,11 @@ func (m *Manager) Close() error {
 // sub-millisecond in normal operation. ADR 0008 documents the
 // limitation; coord.Post is the public surface where the caller-facing
 // version of the same sentence lives.
+//
+// The cache is per-Manager, so two Managers on the same substrate that
+// both post to "t1" create two distinct notify threads. Cross-Manager
+// and cross-restart thread identity is an ADR 0008 follow-up; Phase 3B
+// ships the naming gap documented, not worked around.
 func (m *Manager) Send(
 	ctx context.Context, thread, body string,
 ) error {
@@ -148,14 +165,18 @@ func (m *Manager) Send(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	_, err := m.service.Send(notify.SendOpts{
-		Project:     m.cfg.ProjectPrefix,
-		Body:        body,
-		ThreadShort: thread,
-	})
+	opts := notify.SendOpts{
+		Project: m.cfg.ProjectPrefix,
+		Body:    body,
+	}
+	if cached, ok := m.threads.Load(thread); ok {
+		opts.ThreadShort = cached.(string)
+	}
+	msg, err := m.service.Send(opts)
 	if err != nil {
 		return fmt.Errorf("chat.Send: %w", err)
 	}
+	m.threads.Store(thread, msg.ThreadShort())
 	return nil
 }
 
