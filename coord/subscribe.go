@@ -17,10 +17,11 @@ import (
 //
 // pattern is the coord-facing thread filter. An empty pattern selects
 // every thread in this agent's project (the documented project-wide
-// path, used by the 2w5 smoke test); a non-empty pattern is passed
-// through to the substrate as a notify ThreadShort. Glob patterns are a
-// Phase 4 follow-up; the non-empty-ThreadShort leak is tracked as
-// agent-infra-x0t.
+// path, used by the 2w5 smoke test); the non-empty pattern is a
+// caller-supplied thread name, mapped deterministically to a notify
+// ThreadShort via SHA-256 — two Coords watching the same name
+// subscribe to the same stream (see ADR 0008's 2026-04-19 update).
+// Glob patterns are a Phase 4 follow-up.
 //
 // Invariants asserted (panics on violation — programmer errors):
 // 1 (ctx non-nil), 8 (Coord not closed). pattern is NOT asserted
@@ -60,9 +61,12 @@ func (c *Coord) Subscribe(
 
 // watchChat returns a <-chan notify.Message matching pattern. An empty
 // pattern routes through chat.WatchAll (project-wide wildcard); a
-// non-empty pattern is passed through to chat.Watch as the notify
-// ThreadShort. Extracted so Subscribe stays below the 70-line funlen
-// cap and so the empty-is-project-wide branch has a single home.
+// non-empty pattern is passed through to chat.Watch as a caller
+// thread name — chat.Watch hashes it into the same deterministic
+// ThreadShort that chat.Send uses, so publishers and subscribers
+// converge on one NATS subject without coordination. Extracted so
+// Subscribe stays below the 70-line funlen cap and so the
+// empty-is-project-wide branch has a single home.
 func (c *Coord) watchChat(
 	ctx context.Context, pattern string,
 ) <-chan notify.Message {

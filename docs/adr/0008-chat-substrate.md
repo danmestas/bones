@@ -170,3 +170,35 @@ Presence, reactions, media payloads, glob-pattern Subscribe, and an
 admin-override Ask target are all explicit Phase 4+ concerns. Phase 3
 delivers chat narrowly — the three stubbed methods go real — and
 stops there.
+
+## Update (2026-04-19): deterministic thread identity
+
+The Phase 3B thread cache was a per-Manager `sync.Map` bridging
+caller-supplied names to notify-assigned ThreadShorts. Two Managers on
+the same substrate posting to "t1" therefore created two separate
+notify threads, and restarts lost the mapping. That broke the multi-
+agent chat contract this ADR asserts.
+
+Resolved in agent-infra-x0t (2026-04-19) via a deterministic hash:
+Thread UUID = "thread-" + first 32 chars of SHA-256(project + ":" +
+name) hex-encoded, and ThreadShort is the first 8 chars of that hash —
+matching the shape `notify.Message.ThreadShort()` derives from the
+full Thread UUID. Every Manager on the same substrate computes the
+same Thread UUID for the same (project, name) pair, so publishes
+converge on one NATS subject and subscriptions read one stream.
+
+Implementation: `internal/chat.Manager.Send` bypasses
+`notify.Service.Send` (whose `resolveThread` would reject unknown
+ThreadShorts) and builds the message directly via
+`notify.NewMessage`, overwrites `msg.Thread` with the deterministic
+UUID, then calls `notify.CommitMessage` + `notify.Publish`. Watch
+continues to use `notify.Service.Watch` with the computed
+ThreadShort.
+
+No coordination substrate (KV bucket, lock service) is required. The
+trade-off is that two names that happen to hash-collide at the 8-char
+ThreadShort level would share a NATS subject — at 2^32 of space the
+probability is far below any operational concern and collisions do
+not corrupt messages, only multiplex them. No new invariant; the
+mechanism is internal to `internal/chat` and does not touch the coord
+public surface.

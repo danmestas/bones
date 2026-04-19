@@ -2,6 +2,8 @@ package chat
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -41,16 +43,6 @@ type Manager struct {
 	repo    *libfossil.Repo
 	nc      *nats.Conn
 	closed  atomic.Bool
-
-	// threads caches caller-supplied thread names against the
-	// notify-assigned ThreadShort. notify.Send requires a pre-existing
-	// thread for ThreadShort != "" or else fails with "thread not
-	// found"; sends with empty ThreadShort auto-generate a new thread.
-	// We bridge the two by looking up the caller's name here: hit →
-	// reuse the short; miss → send with empty short, cache the result.
-	// See agent-infra-<follow-up> for the cross-Manager / cross-restart
-	// identity limitation this cache implies.
-	threads sync.Map // map[string]string: caller name → ThreadShort
 }
 
 // Open validates cfg, opens (or creates) the Fossil repo at
@@ -136,24 +128,48 @@ func (m *Manager) Close() error {
 	return first
 }
 
-// Send publishes body to thread via the notify service. thread is a
-// caller-supplied name that Manager maps to a notify ThreadShort via
-// the per-Manager threads cache: a cache hit reuses the existing
-// notify thread; a miss sends with empty ThreadShort so notify
-// auto-generates a fresh thread, and the returned ThreadShort is
-// stored against the caller's name for subsequent Sends.
+// threadUUID computes the deterministic notify Thread UUID for a
+// (project, name) pair. SHA-256 of "project:name", hex-encoded, first
+// 32 chars, prefixed with "thread-". Same inputs → same output on
+// every Manager and every restart — this is how cross-Manager and
+// cross-restart thread identity is preserved without a coordination
+// substrate. The 32-hex suffix matches notify's NewMessage shape so
+// Message.ThreadShort() (which takes the first 8 chars after the
+// "thread-" prefix) gives the expected value.
+func threadUUID(project, name string) string {
+	h := sha256.Sum256([]byte(project + ":" + name))
+	return "thread-" + hex.EncodeToString(h[:])[:32]
+}
+
+// threadShort returns the 8-char ThreadShort that notify derives from
+// the full Thread UUID. Same as notify.Message.ThreadShort() would
+// return for a message with Thread = threadUUID(project, name).
+func threadShort(project, name string) string {
+	return threadUUID(project, name)[len("thread-") : len("thread-")+8]
+}
+
+// Send publishes body to a chat thread. thread is a caller-supplied
+// name that Manager maps to a deterministic notify Thread UUID via
+// SHA-256(project + ":" + name). Two Managers on the same substrate
+// that both post to "t1" compute the same Thread UUID and therefore
+// publish on the same NATS subject — cross-Manager and cross-restart
+// thread identity falls out of the hash with no coordination substrate.
+//
+// Send bypasses notify.Service.Send because Service.Send's
+// resolveThread rejects unknown ThreadShorts (they must have a
+// pre-existing fossil entry), and we want to OWN the Thread UUID, not
+// have notify generate it. Instead: build the notify.Message via
+// notify.NewMessage (correct ID/timestamp/shape), overwrite Thread
+// with the deterministic UUID, commit to the local repo, and publish
+// on the computed NATS subject.
 //
 // ctx is pre-checked: a canceled context short-circuits before any
-// repo or NATS work. Once notify.Service.Send is entered, it runs to
-// completion — the upstream API takes no ctx, and write latency is
-// sub-millisecond in normal operation. ADR 0008 documents the
-// limitation; coord.Post is the public surface where the caller-facing
-// version of the same sentence lives.
+// repo or NATS work. Once CommitMessage is entered, it runs to
+// completion — the upstream call takes no ctx, and write latency is
+// sub-millisecond in normal operation.
 //
-// The cache is per-Manager, so two Managers on the same substrate that
-// both post to "t1" create two distinct notify threads. Cross-Manager
-// and cross-restart thread identity is an ADR 0008 follow-up; Phase 3B
-// ships the naming gap documented, not worked around.
+// See docs/adr/0008-chat-substrate.md "Update (2026-04-19)" for the
+// deterministic-identity scheme and its rationale.
 func (m *Manager) Send(
 	ctx context.Context, thread, body string,
 ) error {
@@ -165,27 +181,31 @@ func (m *Manager) Send(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	opts := notify.SendOpts{
-		Project: m.cfg.ProjectPrefix,
-		Body:    body,
-	}
-	if cached, ok := m.threads.Load(thread); ok {
-		opts.ThreadShort = cached.(string)
-	}
-	msg, err := m.service.Send(opts)
-	if err != nil {
+	msg := notify.NewMessage(notify.MessageOpts{
+		Project:  m.cfg.ProjectPrefix,
+		From:     m.cfg.AgentID,
+		FromName: m.cfg.AgentID,
+		Body:     body,
+	})
+	msg.Thread = threadUUID(m.cfg.ProjectPrefix, thread)
+	if err := notify.CommitMessage(m.repo, msg); err != nil {
 		return fmt.Errorf("chat.Send: %w", err)
 	}
-	m.threads.Store(thread, msg.ThreadShort())
+	if err := notify.Publish(m.nc, msg); err != nil {
+		return fmt.Errorf("chat.Send: %w", err)
+	}
 	return nil
 }
 
 // Watch returns a channel of notify.Message values for the given
-// thread. The channel closes when ctx is canceled. Thin passthrough to
-// notify.Service.Watch; the notify.Message type crosses the package
-// boundary because this is an INTERNAL package — the translation into
-// coord.ChatMessage (ADR 0003, ADR 0008) lives in coord and ships
-// with Phase 3D's Subscribe implementation.
+// thread. thread is a caller-supplied name — chat hashes it internally
+// into the same deterministic ThreadShort that Send uses, so a Watch
+// on "t1" receives every message any Manager has Sent to "t1" on this
+// project/substrate. The channel closes when ctx is canceled.
+//
+// The notify.Message type crosses the package boundary because this is
+// an INTERNAL package — the translation into coord.ChatMessage (ADR
+// 0003, ADR 0008) lives in coord.
 //
 // A nil Manager, nil ctx, or empty thread panics (programmer error).
 // Use-after-close returns an already-closed channel rather than
@@ -203,7 +223,7 @@ func (m *Manager) Watch(
 	}
 	return m.service.Watch(ctx, notify.WatchOpts{
 		Project:     m.cfg.ProjectPrefix,
-		ThreadShort: thread,
+		ThreadShort: threadShort(m.cfg.ProjectPrefix, thread),
 	})
 }
 
