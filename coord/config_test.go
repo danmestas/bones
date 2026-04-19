@@ -10,20 +10,21 @@ import (
 // point for every Validate subtest.
 func baselineConfig() Config {
 	return Config{
-		AgentID:           "test-agent",
-		HoldTTLDefault:    30 * time.Second,
-		HoldTTLMax:        5 * time.Minute,
-		MaxHoldsPerClaim:  32,
-		MaxSubscribers:    32,
-		MaxTaskFiles:      32,
-		MaxReadyReturn:    256,
-		MaxTaskValueSize:  8 * 1024,
-		TaskHistoryDepth:  8,
-		OperationTimeout:  10 * time.Second,
-		HeartbeatInterval: 5 * time.Second,
-		NATSReconnectWait: 2 * time.Second,
-		NATSMaxReconnects: 5,
-		NATSURL:           "nats://127.0.0.1:4222",
+		AgentID:            "test-agent",
+		HoldTTLDefault:     30 * time.Second,
+		HoldTTLMax:         5 * time.Minute,
+		MaxHoldsPerClaim:   32,
+		MaxSubscribers:     32,
+		MaxTaskFiles:       32,
+		MaxReadyReturn:     256,
+		MaxTaskValueSize:   8 * 1024,
+		TaskHistoryDepth:   8,
+		OperationTimeout:   10 * time.Second,
+		HeartbeatInterval:  5 * time.Second,
+		NATSReconnectWait:  2 * time.Second,
+		NATSMaxReconnects:  5,
+		NATSURL:            "nats://127.0.0.1:4222",
+		ChatFossilRepoPath: "/tmp/coord-baseline-chat.fossil",
 	}
 }
 
@@ -137,6 +138,11 @@ func TestConfigValidate_Invalid(t *testing.T) {
 			name:    "empty NATSURL",
 			mutate:  func(c *Config) { c.NATSURL = "" },
 			wantKey: "NATSURL",
+		},
+		{
+			name:    "empty ChatFossilRepoPath",
+			mutate:  func(c *Config) { c.ChatFossilRepoPath = "" },
+			wantKey: "ChatFossilRepoPath",
 		},
 	}
 	for _, tc := range cases {
