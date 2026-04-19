@@ -55,5 +55,19 @@ var ErrTooManySubscribers = errors.New(
 	"coord: too many subscribers",
 )
 
+// ErrAgentOffline reports that AskAdmin's presence pre-flight could not
+// find the recipient in the project's presence bucket. Distinct from
+// ErrAskTimeout: ErrAgentOffline is a pre-flight check against a known
+// directory (the presence KV), whereas ErrAskTimeout fires only after
+// the reply-wait deadline elapses against an actual substrate publish.
+// Callers that want the old "send and hope" behavior continue to use
+// Ask; AskAdmin is the opt-in to the stronger pre-flight.
+//
+// Entries can age out between the pre-flight and the publish, so a
+// clean AskAdmin that returns ErrAskTimeout is still possible. The
+// sentinel only narrows the "no one was listening at pre-flight time"
+// branch.
+var ErrAgentOffline = errors.New("coord: agent offline")
+
 // ErrNotImplemented is returned by Phase 1 stub methods.
 var ErrNotImplemented = errors.New("coord: not implemented")

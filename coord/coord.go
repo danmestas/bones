@@ -552,14 +552,15 @@ func (c *Coord) Ask(
 	subject := projectPrefix(c.cfg.AgentID) + ".ask." + recipient
 	reply, err := c.sub.chat.Request(ctx, subject, []byte(question))
 	if err != nil {
-		return "", translateAskErr(err)
+		return "", translateAskErr("coord.Ask", err)
 	}
 	return string(reply), nil
 }
 
-// translateAskErr maps an error from chat.Request onto the coord.Ask
-// return surface. Kept separate so Ask itself stays below the 70-line
-// funlen cap and so the branch logic is testable in isolation.
+// translateAskErr maps an error from chat.Request onto an Ask-family
+// return surface. The prefix distinguishes Ask from AskAdmin so each
+// method's errors stay self-identifying; the translation table is the
+// same for both because the substrate failure modes are identical.
 //
 // The mapping is:
 //   - context.Canceled passes through unwrapped (distinct from
@@ -567,18 +568,18 @@ func (c *Coord) Ask(
 //   - context.DeadlineExceeded maps to ErrAskTimeout;
 //   - nats.ErrNoResponders maps to ErrAskTimeout — ADR 0008 deliberately
 //     collapses "no recipient" into the timeout case;
-//   - any other error wraps with the coord.Ask prefix verbatim.
-func translateAskErr(err error) error {
+//   - any other error wraps with the prefix verbatim.
+func translateAskErr(prefix string, err error) error {
 	if errors.Is(err, context.Canceled) {
-		return fmt.Errorf("coord.Ask: %w", context.Canceled)
+		return fmt.Errorf("%s: %w", prefix, context.Canceled)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("coord.Ask: %w", ErrAskTimeout)
+		return fmt.Errorf("%s: %w", prefix, ErrAskTimeout)
 	}
 	if errors.Is(err, nats.ErrNoResponders) {
-		return fmt.Errorf("coord.Ask: %w", ErrAskTimeout)
+		return fmt.Errorf("%s: %w", prefix, ErrAskTimeout)
 	}
-	return fmt.Errorf("coord.Ask: %w", err)
+	return fmt.Errorf("%s: %w", prefix, err)
 }
 
 // Answer registers handler as the responder for peer questions
