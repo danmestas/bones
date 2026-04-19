@@ -41,8 +41,10 @@ var ErrValueTooLarge = errors.New(
 var ErrInvalidStatus = errors.New("tasks: invalid status value")
 
 // ErrInvalidTransition reports that a mutation attempted a status edge
-// outside the ADR 0005 DAG: legal edges are open→claimed, open→closed,
-// and claimed→closed. Any backwards edge or self-loop is rejected.
+// outside the ADR 0005 DAG as amended by ADR 0007: legal edges are
+// open→claimed, open→closed, claimed→closed, and claimed→open (the
+// release-side un-claim edge). Any other backwards edge from closed
+// or self-loop on closed is rejected.
 var ErrInvalidTransition = errors.New(
 	"tasks: invalid status transition",
 )

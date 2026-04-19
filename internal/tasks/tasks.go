@@ -368,7 +368,9 @@ func validateForCreate(t Task) error {
 // proposed next value against the current record. Metadata updates
 // that leave status unchanged are permitted for non-terminal states
 // (open, claimed); closed is the audit-trail sink and rejects even
-// self-edges so the closed snapshot stays immutable.
+// self-edges so the closed snapshot stays immutable. The claimed→open
+// reverse edge is permitted per ADR 0007 to give coord.Claim's release
+// closure its un-claim step.
 func validateTransition(current, next Task) error {
 	if !validStatus(next.Status) {
 		return fmt.Errorf(
@@ -401,13 +403,17 @@ func checkInvariant11(t Task) error {
 }
 
 // legalEdge reports whether the (current → next) status transition is
-// acceptable. The ADR 0005 DAG covers the three status-changing edges:
-// open→claimed, open→closed, claimed→closed. Metadata updates that do
-// not change status are allowed from open and claimed (same-status
-// writes land in the KV bucket as new revisions, which the watcher
-// surfaces as EventUpdated). closed→closed is forbidden so a closed
-// task's record is frozen — invariant 13's audit-trail rationale rests
-// on closed being terminal in both status and content.
+// acceptable. The ADR 0005 DAG covers the three forward edges
+// open→claimed, open→closed, claimed→closed; ADR 0007 adds the
+// release-side un-claim edge claimed→open so coord.Claim's release
+// closure can return the task to the open pool (invariant 16).
+// Metadata updates that do not change status are allowed from open and
+// claimed (same-status writes land in the KV bucket as new revisions,
+// which the watcher surfaces as EventUpdated). closed→anything is
+// forbidden so a closed task's record is frozen — invariant 13's
+// audit-trail rationale rests on closed being terminal in both status
+// and content; open→claimed→open is reversible only for as long as the
+// task has not yet been closed.
 func legalEdge(current, next Status) bool {
 	if current == StatusClosed {
 		return false
@@ -421,6 +427,8 @@ func legalEdge(current, next Status) bool {
 	case current == StatusOpen && next == StatusClosed:
 		return true
 	case current == StatusClaimed && next == StatusClosed:
+		return true
+	case current == StatusClaimed && next == StatusOpen:
 		return true
 	default:
 		return false

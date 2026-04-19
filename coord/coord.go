@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
-	"sort"
 	"sync"
 	"time"
 
@@ -125,71 +123,67 @@ func (c *Coord) assertOpen(method string) {
 	)
 }
 
-// Claim acquires file-scoped holds for a task atomically (invariant 6).
-// Returns a release closure that is idempotent (invariant 7); callers
-// should defer it. files must be non-empty, bounded by
-// cfg.MaxHoldsPerClaim, every path absolute, and sorted before use per
-// invariant 4. ttl must be positive and at most cfg.HoldTTLMax per
-// invariant 5.
+// Claim atomically acquires a task for this agent. Reads the task
+// record from NATS KV; CAS-updates it to status=claimed,
+// claimed_by=cfg.AgentID; then acquires file-scoped holds on every
+// file declared in the record. If the CAS loses (task already claimed
+// by another agent, or closed), returns ErrTaskAlreadyClaimed and does
+// not attempt holds. If any hold fails, the task CAS is undone before
+// the error return.
 //
-// On partial acquisition failure every hold already secured is released
-// best-effort before the error return. ErrHeldByAnother from the holds
-// layer is translated to coord.ErrHeldByAnother so callers can switch
-// on the public sentinel.
+// The returned release closure is idempotent (invariant 7) and
+// symmetric with Claim: it CAS-un-claims the task record (status back
+// to open, claimed_by cleared) AND releases every hold. A task that
+// was concurrently closed by the claimer via CloseTask will NOT be
+// un-claimed by release — the closed state is terminal. Callers should
+// defer release; it is safe to defer even if CloseTask has already run.
+//
+// Invariants asserted (panics on violation — programmer errors):
+// 1 (ctx non-nil), 2 (TaskID non-empty), 5 (ttl > 0 and <= HoldTTLMax),
+// 8 (Coord not closed). Invariant 16 governs the release closure.
+//
+// Operator errors returned:
+//
+//	ErrTaskNotFound, ErrTaskAlreadyClaimed, ErrHeldByAnother.
 func (c *Coord) Claim(
 	ctx context.Context,
 	taskID TaskID,
-	files []string,
 	ttl time.Duration,
 ) (func() error, error) {
 	c.assertOpen("Claim")
-	c.assertClaimPreconditions(ctx, taskID, files, ttl)
-	held, err := c.claimAll(ctx, taskID, files, ttl)
+	c.assertClaimPreconditions(ctx, taskID, ttl)
+	files, err := c.acquireTaskCAS(ctx, taskID)
 	if err != nil {
+		return nil, err
+	}
+	held, herr := c.claimAll(ctx, taskID, files, ttl)
+	if herr != nil {
 		c.rollback(ctx, held)
-		if errors.Is(err, holds.ErrHeldByAnother) {
-			return nil, fmt.Errorf(
-				"coord.Claim: %w", ErrHeldByAnother,
-			)
+		c.undoTaskCAS(ctx, taskID)
+		if errors.Is(herr, holds.ErrHeldByAnother) {
+			return nil, fmt.Errorf("coord.Claim: %w", ErrHeldByAnother)
 		}
-		return nil, fmt.Errorf("coord.Claim: %w", err)
+		return nil, fmt.Errorf("coord.Claim: %w", herr)
 	}
 	assert.Postcondition(
 		len(held) == len(files),
 		"coord.Claim: held=%d files=%d (invariant 6 violation)",
 		len(held), len(files),
 	)
-	return c.releaseClosure(held), nil
+	return c.releaseClosure(taskID, held), nil
 }
 
-// assertClaimPreconditions panics on any invariant-4, -5, or -1/-2
-// violation. Kept separate so Claim itself fits the 70-line funlen cap.
+// assertClaimPreconditions panics on invariant-1, -2, or -5 violations.
+// Kept separate so Claim itself fits the 70-line funlen cap. File-shape
+// checks (invariant 4) live in OpenTask now that files come from the
+// task record rather than the Claim caller.
 func (c *Coord) assertClaimPreconditions(
 	ctx context.Context,
 	taskID TaskID,
-	files []string,
 	ttl time.Duration,
 ) {
 	assert.NotNil(ctx, "coord.Claim: ctx is nil")
 	assert.NotEmpty(string(taskID), "coord.Claim: taskID is empty")
-	assert.Precondition(
-		len(files) > 0, "coord.Claim: files is empty",
-	)
-	assert.Precondition(
-		len(files) <= c.cfg.MaxHoldsPerClaim,
-		"coord.Claim: len(files)=%d exceeds MaxHoldsPerClaim=%d",
-		len(files), c.cfg.MaxHoldsPerClaim,
-	)
-	for _, f := range files {
-		assert.Precondition(
-			filepath.IsAbs(f),
-			"coord.Claim: file not absolute: %q", f,
-		)
-	}
-	assert.Precondition(
-		sort.StringsAreSorted(files),
-		"coord.Claim: files not sorted",
-	)
 	assert.Precondition(ttl > 0, "coord.Claim: ttl must be > 0")
 	assert.Precondition(
 		ttl <= c.cfg.HoldTTLMax,
@@ -198,9 +192,70 @@ func (c *Coord) assertClaimPreconditions(
 	)
 }
 
+// acquireTaskCAS reads the task record and CAS-mutates it to
+// status=claimed, claimed_by=agentID. Returns the record's file list so
+// the caller can drive hold acquisition without a second Get. A task
+// already in a non-open state — claimed or closed — short-circuits to
+// ErrTaskAlreadyClaimed; a missing record surfaces as ErrTaskNotFound.
+// Any other substrate error is wrapped with the coord.Claim prefix.
+func (c *Coord) acquireTaskCAS(
+	ctx context.Context, taskID TaskID,
+) ([]string, error) {
+	rec, _, err := c.tasks.Get(ctx, string(taskID))
+	if err != nil {
+		if errors.Is(err, tasks.ErrNotFound) {
+			return nil, fmt.Errorf("coord.Claim: %w", ErrTaskNotFound)
+		}
+		return nil, fmt.Errorf("coord.Claim: %w", err)
+	}
+	if rec.Status != tasks.StatusOpen || rec.ClaimedBy != "" {
+		return nil, fmt.Errorf(
+			"coord.Claim: %w", ErrTaskAlreadyClaimed,
+		)
+	}
+	files := append([]string(nil), rec.Files...)
+	mutate := c.claimMutator()
+	if err := c.tasks.Update(ctx, string(taskID), mutate); err != nil {
+		return nil, translateClaimCASErr(err)
+	}
+	return files, nil
+}
+
+// claimMutator returns the mutate closure passed to tasks.Update for
+// the acquire-side CAS. The closure re-checks status==open and
+// claimed_by=="" against the just-read record inside Update's retry
+// loop so a racing writer between our Get and the CAS surfaces as
+// ErrTaskAlreadyClaimed rather than a malformed transition.
+func (c *Coord) claimMutator() func(tasks.Task) (tasks.Task, error) {
+	agent := c.cfg.AgentID
+	return func(cur tasks.Task) (tasks.Task, error) {
+		if cur.Status != tasks.StatusOpen || cur.ClaimedBy != "" {
+			return cur, ErrTaskAlreadyClaimed
+		}
+		cur.Status = tasks.StatusClaimed
+		cur.ClaimedBy = agent
+		cur.UpdatedAt = time.Now().UTC()
+		return cur, nil
+	}
+}
+
+// translateClaimCASErr maps an error from the acquire-side
+// tasks.Update into the coord.Claim return surface. The mutator
+// sentinel passes through unwrapped under ErrTaskAlreadyClaimed;
+// substrate errors are wrapped with the coord.Claim prefix.
+func translateClaimCASErr(err error) error {
+	if errors.Is(err, ErrTaskAlreadyClaimed) {
+		return fmt.Errorf("coord.Claim: %w", ErrTaskAlreadyClaimed)
+	}
+	if errors.Is(err, tasks.ErrNotFound) {
+		return fmt.Errorf("coord.Claim: %w", ErrTaskNotFound)
+	}
+	return fmt.Errorf("coord.Claim: %w", err)
+}
+
 // claimAll announces a hold on every requested file in order.
-// CheckoutPath is the TaskID — it is opaque to holds and a sensible
-// debug breadcrumb on the stored entry. Returns the slice of files
+// CheckoutPath is the TaskID — opaque to holds and a sensible debug
+// breadcrumb on the stored entry. Returns the slice of files
 // successfully announced so the caller can roll back on error.
 func (c *Coord) claimAll(
 	ctx context.Context,
@@ -232,27 +287,56 @@ func (c *Coord) rollback(ctx context.Context, held []string) {
 	}
 }
 
-// releaseClosure returns an idempotent release function that releases
-// every file in held. The closure uses sync.Once so the second and
-// subsequent calls are no-ops (invariant 7). Returned error is the
-// first non-nil Release error, if any; later errors are discarded.
+// undoTaskCAS rolls the task record back to status=open,
+// claimed_by="" after a hold-acquisition failure so invariant 6
+// (atomic claim) is not violated by a stuck task-level claim. Errors
+// are swallowed: this runs in the error path of Claim, and a secondary
+// CAS failure must not mask the primary hold error.
+func (c *Coord) undoTaskCAS(ctx context.Context, taskID TaskID) {
+	agent := c.cfg.AgentID
+	mutate := func(cur tasks.Task) (tasks.Task, error) {
+		if cur.Status != tasks.StatusClaimed || cur.ClaimedBy != agent {
+			return cur, errClaimCASNoOp
+		}
+		cur.Status = tasks.StatusOpen
+		cur.ClaimedBy = ""
+		cur.UpdatedAt = time.Now().UTC()
+		return cur, nil
+	}
+	_ = c.tasks.Update(ctx, string(taskID), mutate)
+}
+
+// errClaimCASNoOp is an internal sentinel the release-side and
+// rollback-side mutators return to short-circuit a tasks.Update with
+// no side effect. It never escapes the coord package: both callers
+// swallow it after observing the early return.
+var errClaimCASNoOp = errors.New(
+	"coord: claim CAS no-op (not our claim anymore)",
+)
+
+// releaseClosure returns an idempotent release function that undoes
+// the full Claim acquisition: it CAS-un-claims the task record AND
+// releases every hold. The closure uses sync.Once so the second and
+// subsequent calls are no-ops (invariant 7, 16). Returned error is the
+// first non-nil error from either step; later errors are discarded.
 //
 // The closure is safe to call after Coord.Close: once the Manager is
-// closed its Release returns ErrClosed, which the closure swallows so
-// deferred release-after-shutdown stays silent.
-func (c *Coord) releaseClosure(held []string) func() error {
+// closed its Release and Update return ErrClosed, which the closure
+// swallows so deferred release-after-shutdown stays silent. It is also
+// safe after CloseTask: a closed task is terminal, so the un-claim
+// step is a silent no-op and only the hold releases run.
+func (c *Coord) releaseClosure(
+	taskID TaskID, held []string,
+) func() error {
 	var once sync.Once
 	var firstErr error
-	agent := c.cfg.AgentID
-	mgr := c.holds
 	return func() error {
 		once.Do(func() {
 			ctx := context.Background()
-			for _, f := range held {
-				err := mgr.Release(ctx, f, agent)
-				if err == nil || errors.Is(err, holds.ErrClosed) {
-					continue
-				}
+			if err := c.releaseTaskCAS(ctx, taskID); err != nil {
+				firstErr = err
+			}
+			if err := c.releaseHolds(ctx, held); err != nil {
 				if firstErr == nil {
 					firstErr = err
 				}
@@ -260,6 +344,64 @@ func (c *Coord) releaseClosure(held []string) func() error {
 		})
 		return firstErr
 	}
+}
+
+// releaseTaskCAS un-claims the task record on behalf of this agent.
+// The mutate closure short-circuits to errClaimCASNoOp when the task
+// is already closed (CloseTask ran between Claim and release — closed
+// is terminal per invariant 13) or when the claim no longer belongs to
+// this agent. Swallows that sentinel plus tasks.ErrClosed (Coord torn
+// down) and tasks.ErrNotFound (record purged); every other error is
+// returned so callers that inspect the release error surface see real
+// substrate failures.
+func (c *Coord) releaseTaskCAS(
+	ctx context.Context, taskID TaskID,
+) error {
+	agent := c.cfg.AgentID
+	mutate := func(cur tasks.Task) (tasks.Task, error) {
+		if cur.Status == tasks.StatusClosed {
+			return cur, errClaimCASNoOp
+		}
+		if cur.Status != tasks.StatusClaimed || cur.ClaimedBy != agent {
+			return cur, errClaimCASNoOp
+		}
+		cur.Status = tasks.StatusOpen
+		cur.ClaimedBy = ""
+		cur.UpdatedAt = time.Now().UTC()
+		return cur, nil
+	}
+	err := c.tasks.Update(ctx, string(taskID), mutate)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, errClaimCASNoOp):
+		return nil
+	case errors.Is(err, tasks.ErrClosed):
+		return nil
+	case errors.Is(err, tasks.ErrNotFound):
+		return nil
+	default:
+		return err
+	}
+}
+
+// releaseHolds releases every hold acquired during Claim. Errors from
+// Release are collected as the first non-nil; holds.ErrClosed is
+// swallowed so a release after Coord.Close stays silent.
+func (c *Coord) releaseHolds(
+	ctx context.Context, held []string,
+) error {
+	var first error
+	for _, f := range held {
+		err := c.holds.Release(ctx, f, c.cfg.AgentID)
+		if err == nil || errors.Is(err, holds.ErrClosed) {
+			continue
+		}
+		if first == nil {
+			first = err
+		}
+	}
+	return first
 }
 
 // Post publishes a message to a chat thread. Phase 1 stub: returns
