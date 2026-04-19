@@ -1,0 +1,130 @@
+package coord
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+// baselineConfig returns a fully-valid Config used as the starting
+// point for every Validate subtest.
+func baselineConfig() Config {
+	return Config{
+		AgentID:           "test-agent",
+		HoldTTLDefault:    30 * time.Second,
+		HoldTTLMax:        5 * time.Minute,
+		MaxHoldsPerClaim:  32,
+		MaxSubscribers:    32,
+		MaxTaskFiles:      32,
+		OperationTimeout:  10 * time.Second,
+		HeartbeatInterval: 5 * time.Second,
+		NATSReconnectWait: 2 * time.Second,
+		NATSMaxReconnects: 5,
+	}
+}
+
+func TestConfigValidate_Valid(t *testing.T) {
+	cfg := baselineConfig()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("baseline config should validate, got err: %v", err)
+	}
+}
+
+func TestConfigValidate_Invalid(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*Config)
+		wantKey string
+	}{
+		{
+			name:    "empty AgentID",
+			mutate:  func(c *Config) { c.AgentID = "" },
+			wantKey: "AgentID",
+		},
+		{
+			name:    "zero HoldTTLDefault",
+			mutate:  func(c *Config) { c.HoldTTLDefault = 0 },
+			wantKey: "HoldTTLDefault",
+		},
+		{
+			name:    "negative HoldTTLDefault",
+			mutate:  func(c *Config) { c.HoldTTLDefault = -1 },
+			wantKey: "HoldTTLDefault",
+		},
+		{
+			name:    "zero HoldTTLMax",
+			mutate:  func(c *Config) { c.HoldTTLMax = 0 },
+			wantKey: "HoldTTLMax",
+		},
+		{
+			name: "HoldTTLDefault exceeds HoldTTLMax",
+			mutate: func(c *Config) {
+				c.HoldTTLDefault = 10 * time.Minute
+				c.HoldTTLMax = 1 * time.Minute
+			},
+			wantKey: "HoldTTLDefault",
+		},
+		{
+			name:    "zero MaxHoldsPerClaim",
+			mutate:  func(c *Config) { c.MaxHoldsPerClaim = 0 },
+			wantKey: "MaxHoldsPerClaim",
+		},
+		{
+			name:    "negative MaxHoldsPerClaim",
+			mutate:  func(c *Config) { c.MaxHoldsPerClaim = -1 },
+			wantKey: "MaxHoldsPerClaim",
+		},
+		{
+			name:    "zero MaxSubscribers",
+			mutate:  func(c *Config) { c.MaxSubscribers = 0 },
+			wantKey: "MaxSubscribers",
+		},
+		{
+			name:    "zero MaxTaskFiles",
+			mutate:  func(c *Config) { c.MaxTaskFiles = 0 },
+			wantKey: "MaxTaskFiles",
+		},
+		{
+			name:    "zero OperationTimeout",
+			mutate:  func(c *Config) { c.OperationTimeout = 0 },
+			wantKey: "OperationTimeout",
+		},
+		{
+			name:    "zero HeartbeatInterval",
+			mutate:  func(c *Config) { c.HeartbeatInterval = 0 },
+			wantKey: "HeartbeatInterval",
+		},
+		{
+			name:    "zero NATSReconnectWait",
+			mutate:  func(c *Config) { c.NATSReconnectWait = 0 },
+			wantKey: "NATSReconnectWait",
+		},
+		{
+			name:    "zero NATSMaxReconnects",
+			mutate:  func(c *Config) { c.NATSMaxReconnects = 0 },
+			wantKey: "NATSMaxReconnects",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baselineConfig()
+			tc.mutate(&cfg)
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("expected error for %s, got nil", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantKey) {
+				t.Fatalf(
+					"error %q does not contain field name %q",
+					err.Error(), tc.wantKey,
+				)
+			}
+			if !strings.Contains(err.Error(), "coord.Config:") {
+				t.Fatalf(
+					"error %q missing \"coord.Config:\" prefix",
+					err.Error(),
+				)
+			}
+		})
+	}
+}
