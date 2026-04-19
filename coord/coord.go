@@ -518,8 +518,28 @@ func (c *Coord) Post(
 }
 
 // Ask sends a synchronous question to a peer agent and waits for a
-// reply. Phase 1 stub: returns ("", ErrNotImplemented) after asserting
-// invariants 1, 8, and the recipient/question non-empty preconditions.
+// reply on the <proj>.ask.<recipient> subject. The reply, when it
+// arrives, is returned as a string. Recipient is opaque: coord does
+// not verify that anyone is listening before sending — if no peer has
+// Answer registered for the subject, the ctx deadline elapses and Ask
+// returns ErrAskTimeout. Per ADR 0008 this is deliberate: the substrate
+// cannot cheaply distinguish "no one listening" from "listener is
+// slow", and surfacing them identically keeps the caller's retry
+// strategy honest (both cases want another attempt or a give-up).
+//
+// Invariants asserted (panics on violation — programmer errors):
+// 1 (ctx non-nil), 8 (Coord not closed). Recipient and question
+// non-empty preconditions likewise panic.
+//
+// Operator errors returned:
+//
+//	ErrAskTimeout — ctx deadline elapsed, or no responder answered
+//	    within the deadline. Distinct from context.Canceled.
+//	context.Canceled — ctx was canceled (not deadlined) before or
+//	    during the request. Surfaces wrapped with the coord.Ask
+//	    prefix. Distinct from ErrAskTimeout.
+//	Any other substrate error — e.g. a NATS publish failure — is
+//	    wrapped with the coord.Ask prefix and returned verbatim.
 func (c *Coord) Ask(
 	ctx context.Context, recipient string, question string,
 ) (string, error) {
@@ -527,5 +547,95 @@ func (c *Coord) Ask(
 	assert.NotNil(ctx, "coord.Ask: ctx is nil")
 	assert.NotEmpty(recipient, "coord.Ask: recipient is empty")
 	assert.NotEmpty(question, "coord.Ask: question is empty")
-	return "", ErrNotImplemented
+	// Pre-check cancellation so a canceled ctx never reaches the
+	// substrate. NATS request/reply on a canceled ctx is ambiguous —
+	// it may surface as no-responders-style error even when the
+	// caller meant cancellation — so we short-circuit here to pin
+	// the documented distinction between context.Canceled and
+	// ErrAskTimeout.
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return "", fmt.Errorf("coord.Ask: %w", context.Canceled)
+	}
+	subject := projectPrefix(c.cfg.AgentID) + ".ask." + recipient
+	reply, err := c.chat.Request(ctx, subject, []byte(question))
+	if err != nil {
+		return "", translateAskErr(err)
+	}
+	return string(reply), nil
+}
+
+// translateAskErr maps an error from chat.Request onto the coord.Ask
+// return surface. Kept separate so Ask itself stays below the 70-line
+// funlen cap and so the branch logic is testable in isolation.
+//
+// The mapping is:
+//   - context.Canceled passes through unwrapped (distinct from
+//     ErrAskTimeout per ADR 0008);
+//   - context.DeadlineExceeded maps to ErrAskTimeout;
+//   - nats.ErrNoResponders maps to ErrAskTimeout — ADR 0008 deliberately
+//     collapses "no recipient" into the timeout case;
+//   - any other error wraps with the coord.Ask prefix verbatim.
+func translateAskErr(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return fmt.Errorf("coord.Ask: %w", context.Canceled)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("coord.Ask: %w", ErrAskTimeout)
+	}
+	if errors.Is(err, nats.ErrNoResponders) {
+		return fmt.Errorf("coord.Ask: %w", ErrAskTimeout)
+	}
+	return fmt.Errorf("coord.Ask: %w", err)
+}
+
+// Answer registers handler as the responder for peer questions
+// addressed to this agent. The subject subscribed on is
+// <proj>.ask.<c.cfg.AgentID>: peers call Ask with this agent's ID
+// as the recipient and their request lands in handler. The handler
+// returns either (reply, nil) to send a reply or ("", err) to drop
+// the request — ADR 0008 does not model error payloads, so a handler
+// error is indistinguishable from "no handler registered" from the
+// Ask caller's side (both surface as ErrAskTimeout).
+//
+// The handler receives context.Background, not the Ask caller's ctx:
+// the notify/NATS substrate has no per-message ctx to thread through,
+// and fabricating one with a timeout would introduce a second deadline
+// unrelated to the caller's. Handlers that need bounded work should
+// construct their own ctx inside.
+//
+// The returned closure is an idempotent unsubscribe: the first call
+// tears down the subscription; subsequent calls are no-ops and return
+// nil. sync.Once-guarded so concurrent defer sites cannot double-close.
+// Safe to call after Coord.Close: the underlying chat Manager will
+// have been torn down by then and the closure silently no-ops on the
+// already-closed subscription.
+//
+// Invariants asserted (panics on violation — programmer errors):
+// 1 (ctx non-nil), 8 (Coord not closed). handler non-nil likewise
+// panics.
+//
+// Operator errors returned:
+//
+//	Any substrate error from chat.Respond — e.g. a NATS subscribe
+//	    failure — surfaces wrapped with the coord.Answer prefix.
+func (c *Coord) Answer(
+	ctx context.Context,
+	handler func(ctx context.Context, question string) (string, error),
+) (func() error, error) {
+	c.assertOpen("Answer")
+	assert.NotNil(ctx, "coord.Answer: ctx is nil")
+	assert.NotNil(handler, "coord.Answer: handler is nil")
+	subject := projectPrefix(c.cfg.AgentID) + ".ask." + c.cfg.AgentID
+	wrap := func(payload []byte) ([]byte, error) {
+		reply, herr := handler(context.Background(), string(payload))
+		if herr != nil {
+			return nil, herr
+		}
+		return []byte(reply), nil
+	}
+	unsub, err := c.chat.Respond(subject, wrap)
+	if err != nil {
+		return nil, fmt.Errorf("coord.Answer: %w", err)
+	}
+	return unsub, nil
 }
