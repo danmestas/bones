@@ -28,6 +28,7 @@ func validConfig() Config {
 		MaxHoldsPerClaim:  32,
 		MaxSubscribers:    32,
 		MaxTaskFiles:      32,
+		MaxReadyReturn:    256,
 		MaxTaskValueSize:  8 * 1024,
 		TaskHistoryDepth:  8,
 		OperationTimeout:  10 * time.Second,

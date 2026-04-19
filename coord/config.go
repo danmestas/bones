@@ -30,6 +30,13 @@ type Config struct {
 	// MaxTaskFiles caps the number of files a single task may touch.
 	MaxTaskFiles int
 
+	// MaxReadyReturn caps the number of tasks coord.Ready returns in a
+	// single call. Ready scans the tasks bucket client-side, so an
+	// unbounded return would let a large bucket stall the caller and the
+	// substrate proportionally. The operator supplies the number; there
+	// is no silent default, and Validate rejects zero/negative.
+	MaxReadyReturn int
+
 	// MaxTaskValueSize is the upper bound on a task record's serialized
 	// JSON value, in bytes, enforced at every write in internal/tasks/
 	// per invariant 14. ADR 0005 recommends 8 KB; Config is the
@@ -92,6 +99,9 @@ func (c Config) Validate() error {
 	}
 	if c.MaxTaskFiles <= 0 {
 		return fmt.Errorf("coord.Config: MaxTaskFiles: must be > 0")
+	}
+	if c.MaxReadyReturn <= 0 {
+		return fmt.Errorf("coord.Config: MaxReadyReturn: must be > 0")
 	}
 	if c.MaxTaskValueSize <= 0 {
 		return fmt.Errorf("coord.Config: MaxTaskValueSize: must be > 0")
