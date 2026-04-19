@@ -332,6 +332,9 @@ func (c *Coord) releaseClosure(
 	var firstErr error
 	return func() error {
 		once.Do(func() {
+			// Background — release must run to completion even when
+			// the claim's ctx has been canceled, and deferred rel()
+			// sites typically have no ctx of their own to thread in.
 			ctx := context.Background()
 			if err := c.releaseTaskCAS(ctx, taskID); err != nil {
 				firstErr = err
