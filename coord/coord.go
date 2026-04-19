@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,14 +25,6 @@ const holdsBucket = "agent-infra-holds"
 // tasksBucket is the JetStream KV bucket name coord uses to back task
 // records per ADR 0005. Also substrate-internal per ADR 0003.
 const tasksBucket = "agent-infra-tasks"
-
-// chatFossilFile is the filename coord appends to a per-coord temp
-// directory to locate the chat fossil repo. Phase 3A creates a fresh
-// MkdirTemp on every Open so concurrent in-process coords never share
-// a repo path; Phase 3D may promote the location to a Config field
-// once operators have a reason to pin it. Substrate-internal per
-// ADR 0003.
-const chatFossilFile = "agent-infra-chat.fossil"
 
 // Coord is the public entry point for agent-infra. Construct one via
 // Open and Close it at shutdown. All coordination — hold acquisition,
@@ -102,18 +92,11 @@ func Open(ctx context.Context, cfg Config) (*Coord, error) {
 		nc.Close()
 		return nil, fmt.Errorf("coord.Open: tasks: %w", err)
 	}
-	repoPath, err := chatRepoPath(cfg.AgentID)
-	if err != nil {
-		_ = tm.Close()
-		_ = hm.Close()
-		nc.Close()
-		return nil, fmt.Errorf("coord.Open: chat repo: %w", err)
-	}
 	cm, err := chat.Open(ctx, chat.Config{
 		AgentID:        cfg.AgentID,
 		ProjectPrefix:  projectPrefix(cfg.AgentID),
 		Nats:           nc,
-		FossilRepoPath: repoPath,
+		FossilRepoPath: cfg.ChatFossilRepoPath,
 		MaxSubscribers: cfg.MaxSubscribers,
 	})
 	if err != nil {
@@ -145,22 +128,6 @@ func projectPrefix(agentID string) string {
 		"coord: projectPrefix: agentID %q has empty suffix", agentID,
 	)
 	return agentID[:idx]
-}
-
-// chatRepoPath returns a fresh filesystem path at which this coord's
-// chat Fossil repo lives. Phase 3A creates a per-coord temp directory
-// so concurrent coord.Open calls (most often in-process tests) do not
-// collide on a shared path, and libfossil.Create never sees a
-// pre-existing repo file. Phase 3D may promote this to a Config field
-// once operators have a reason to pin the location; until then, the
-// transient repo is consistent with chat's "durable storage lives in
-// notify, not coord" posture from ADR 0008.
-func chatRepoPath(agentID string) (string, error) {
-	dir, err := os.MkdirTemp("", "agent-infra-chat-*")
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, agentID+"-"+chatFossilFile), nil
 }
 
 // Close shuts down the Coord. Safe to call more than once; subsequent

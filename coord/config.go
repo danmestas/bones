@@ -70,6 +70,16 @@ type Config struct {
 	// never appears in any coord public method signature per ADR 0003;
 	// it lives on Config because it is operator-supplied input.
 	NATSURL string
+
+	// ChatFossilRepoPath is the filesystem path at which coord.Open
+	// creates or opens this agent's chat Fossil repo. The operator owns
+	// cleanup; coord never calls RemoveAll. Pinning the location to
+	// Config (as opposed to the per-Open MkdirTemp used in Phase 3A)
+	// makes chat history replayable across restarts and keeps /tmp
+	// from growing over a long-running agent's lifetime. In tests,
+	// pass t.TempDir() — a fresh directory per test keeps two
+	// concurrent Coords on one substrate from colliding on the repo.
+	ChatFossilRepoPath string
 }
 
 // Validate checks every Config field against its documented bounds and
@@ -123,6 +133,11 @@ func (c Config) Validate() error {
 	}
 	if c.NATSURL == "" {
 		return fmt.Errorf("coord.Config: NATSURL: must be non-empty")
+	}
+	if c.ChatFossilRepoPath == "" {
+		return fmt.Errorf(
+			"coord.Config: ChatFossilRepoPath: must be non-empty",
+		)
 	}
 	return nil
 }

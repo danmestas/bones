@@ -3,6 +3,7 @@ package coord
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,31 +19,35 @@ var nilCtx context.Context
 // Fields mirror baselineConfig in config_test.go; kept separate so the
 // two test files remain readable in isolation. The NATSURL here is a
 // loopback stub — tests that reach the NATS dial use validConfigWithURL
-// instead.
-func validConfig() Config {
+// instead. ChatFossilRepoPath is bound to t.TempDir() so every test
+// gets a fresh Fossil repo without touching shared filesystem state.
+func validConfig(t *testing.T) Config {
+	t.Helper()
 	return Config{
-		AgentID:           "test-agent",
-		HoldTTLDefault:    30 * time.Second,
-		HoldTTLMax:        5 * time.Minute,
-		MaxHoldsPerClaim:  32,
-		MaxSubscribers:    32,
-		MaxTaskFiles:      32,
-		MaxReadyReturn:    256,
-		MaxTaskValueSize:  8 * 1024,
-		TaskHistoryDepth:  8,
-		OperationTimeout:  10 * time.Second,
-		HeartbeatInterval: 5 * time.Second,
-		NATSReconnectWait: 2 * time.Second,
-		NATSMaxReconnects: 5,
-		NATSURL:           "nats://127.0.0.1:0",
+		AgentID:            "test-agent",
+		HoldTTLDefault:     30 * time.Second,
+		HoldTTLMax:         5 * time.Minute,
+		MaxHoldsPerClaim:   32,
+		MaxSubscribers:     32,
+		MaxTaskFiles:       32,
+		MaxReadyReturn:     256,
+		MaxTaskValueSize:   8 * 1024,
+		TaskHistoryDepth:   8,
+		OperationTimeout:   10 * time.Second,
+		HeartbeatInterval:  5 * time.Second,
+		NATSReconnectWait:  2 * time.Second,
+		NATSMaxReconnects:  5,
+		NATSURL:            "nats://127.0.0.1:0",
+		ChatFossilRepoPath: filepath.Join(t.TempDir(), "chat.fossil"),
 	}
 }
 
 // validConfigWithURL returns validConfig with NATSURL overridden to
 // point at a live test NATS server. Use for tests that actually invoke
 // Open past the Config.Validate gate.
-func validConfigWithURL(url string) Config {
-	cfg := validConfig()
+func validConfigWithURL(t *testing.T, url string) Config {
+	t.Helper()
+	cfg := validConfig(t)
 	cfg.NATSURL = url
 	return cfg
 }
@@ -55,9 +60,12 @@ func newCoordWithMaxSubs(
 	t *testing.T, url, agentID string, maxSubs int,
 ) *Coord {
 	t.Helper()
-	cfg := validConfigWithURL(url)
+	cfg := validConfigWithURL(t, url)
 	cfg.AgentID = agentID
 	cfg.MaxSubscribers = maxSubs
+	cfg.ChatFossilRepoPath = filepath.Join(
+		t.TempDir(), agentID+"-chat.fossil",
+	)
 	c, err := Open(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("Open(%s): %v", agentID, err)
@@ -91,7 +99,7 @@ func requirePanic(t *testing.T, fn func(), wantContains string) {
 func mustOpen(t *testing.T) *Coord {
 	t.Helper()
 	nc, _ := natstest.NewJetStreamServer(t)
-	cfg := validConfigWithURL(nc.ConnectedUrl())
+	cfg := validConfigWithURL(t, nc.ConnectedUrl())
 	c, err := Open(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("Open: unexpected error: %v", err)
@@ -105,7 +113,7 @@ func mustOpen(t *testing.T) *Coord {
 
 func TestOpen_Valid(t *testing.T) {
 	nc, _ := natstest.NewJetStreamServer(t)
-	cfg := validConfigWithURL(nc.ConnectedUrl())
+	cfg := validConfigWithURL(t, nc.ConnectedUrl())
 	c, err := Open(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("Open: unexpected error: %v", err)
@@ -119,7 +127,7 @@ func TestOpen_Valid(t *testing.T) {
 }
 
 func TestOpen_InvalidConfig(t *testing.T) {
-	cfg := validConfig()
+	cfg := validConfig(t)
 	cfg.AgentID = ""
 	c, err := Open(context.Background(), cfg)
 	if err == nil {
@@ -137,8 +145,9 @@ func TestOpen_InvalidConfig(t *testing.T) {
 }
 
 func TestOpen_NilCtxPanics(t *testing.T) {
+	cfg := validConfig(t)
 	requirePanic(t, func() {
-		_, _ = Open(nilCtx, validConfig())
+		_, _ = Open(nilCtx, cfg)
 	}, "ctx is nil")
 }
 

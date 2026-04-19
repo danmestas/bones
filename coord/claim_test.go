@@ -3,6 +3,7 @@ package coord
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -21,11 +22,17 @@ func newTestCoord(t *testing.T, agentID string) *Coord {
 }
 
 // newCoordOnURL opens a Coord pointed at an existing NATS URL. Lets two
-// Coords share a substrate for contention tests.
+// Coords share a substrate for contention tests. Each agent gets its
+// own chat Fossil repo namespaced by agentID within the test's
+// t.TempDir() so two in-process Coords don't collide on the same repo
+// file.
 func newCoordOnURL(t *testing.T, url, agentID string) *Coord {
 	t.Helper()
-	cfg := validConfigWithURL(url)
+	cfg := validConfigWithURL(t, url)
 	cfg.AgentID = agentID
+	cfg.ChatFossilRepoPath = filepath.Join(
+		t.TempDir(), agentID+"-chat.fossil",
+	)
 	c, err := Open(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("Open(%s): %v", agentID, err)
