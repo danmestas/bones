@@ -20,7 +20,6 @@ linters:
     - errcheck      # no unchecked errors
     - govet         # standard vet checks
     - staticcheck   # primary correctness linter (bundles gosimple, stylecheck, unused)
-    - gofmt         # formatting drift
     - lll           # line length cap
     - funlen        # function size cap
     - misspell      # common spelling mistakes
@@ -34,8 +33,6 @@ linters:
     lll:
       line-length: 100
       tab-width: 4
-    gofmt:
-      simplify: true
     misspell:
       locale: US
   exclusions:
@@ -52,10 +49,23 @@ linters:
           - errcheck
           - govet
           - staticcheck
-          - gofmt
           - lll
           - funlen
           - misspell
+
+# golangci-lint v2 splits formatters from linters. gofmt lives here so it can
+# be run via `golangci-lint fmt` and still reported as drift by `run`. The
+# Makefile's fmt-check target is the source of truth for CI; this entry keeps
+# editor integrations consistent.
+formatters:
+  enable:
+    - gofmt
+  settings:
+    gofmt:
+      simplify: true
+  exclusions:
+    paths:
+      - ^reference/
 
 issues:
   # Surface every finding — we want signal, not a sampled view.
