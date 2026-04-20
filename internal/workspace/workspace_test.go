@@ -1,7 +1,9 @@
 package workspace
 
 import (
+	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -52,5 +54,45 @@ func TestConfig_RejectsUnknownVersion(t *testing.T) {
 	_, err := loadConfig(path)
 	if err == nil {
 		t.Fatal("expected error for unknown version, got nil")
+	}
+}
+
+func TestWalk_FindsMarkerInCwd(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, markerDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := walkUp(dir)
+	if err != nil {
+		t.Fatalf("walkUp: %v", err)
+	}
+	if got != dir {
+		t.Fatalf("walkUp: got %q, want %q", got, dir)
+	}
+}
+
+func TestWalk_FindsMarkerInAncestor(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, markerDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	deep := filepath.Join(root, "a", "b", "c")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := walkUp(deep)
+	if err != nil {
+		t.Fatalf("walkUp: %v", err)
+	}
+	if got != root {
+		t.Fatalf("walkUp: got %q, want %q", got, root)
+	}
+}
+
+func TestWalk_NoMarkerReturnsErrNoWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	_, err := walkUp(dir)
+	if !errors.Is(err, ErrNoWorkspace) {
+		t.Fatalf("walkUp: got %v, want ErrNoWorkspace", err)
 	}
 }
