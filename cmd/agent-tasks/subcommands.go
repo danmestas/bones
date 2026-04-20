@@ -489,6 +489,60 @@ func claimCmd(ctx context.Context, info workspace.Info, args []string) error {
 }
 
 func init() {
+	handlers["close"] = closeCmd
+}
+
+func closeCmd(ctx context.Context, info workspace.Info, args []string) error {
+	return runOp(ctx, "close", func(ctx context.Context) error {
+		fs := flag.NewFlagSet("close", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		var (
+			reason string
+			asJSON bool
+		)
+		fs.StringVar(&reason, "reason", "", "close reason (optional)")
+		fs.BoolVar(&asJSON, "json", false, "emit JSON")
+
+		id, flagArgs := splitIDFromFlags(fs, args)
+		if id == "" {
+			return errors.New("task id is required")
+		}
+		if err := fs.Parse(flagArgs); err != nil {
+			return err
+		}
+
+		mgr, err := openManager(ctx, info)
+		if err != nil {
+			return fmt.Errorf("open manager: %w", err)
+		}
+		defer mgr.Close()
+
+		var updated tasks.Task
+		err = mgr.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
+			now := time.Now().UTC()
+			t.Status = tasks.StatusClosed
+			t.ClosedAt = &now
+			t.ClosedBy = info.AgentID
+			t.ClosedReason = reason
+			t.UpdatedAt = now
+			// Invariant 11: claimed_by must be empty when status != claimed.
+			// Closing a claimed task would otherwise violate it.
+			t.ClaimedBy = ""
+			updated = t
+			return t, nil
+		})
+		if err != nil {
+			return err
+		}
+
+		if asJSON {
+			return emitJSON(os.Stdout, updated)
+		}
+		return nil
+	})
+}
+
+func init() {
 	handlers["show"] = showCmd
 }
 

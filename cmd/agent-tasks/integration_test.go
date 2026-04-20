@@ -443,3 +443,72 @@ func TestCLI_Claim(t *testing.T) {
 		}
 	})
 }
+
+func TestCLI_Close(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	dir := newWorkspace(t)
+
+	seed := func(title string) string {
+		out, _, code := runCmd(t, binPath, dir, "create", title)
+		if code != 0 {
+			t.Fatalf("seed create %q failed code=%d", title, code)
+		}
+		return firstLine(out)
+	}
+
+	t.Run("basic", func(t *testing.T) {
+		id := seed("close me")
+		_, stderr, code := runCmd(t, binPath, dir, "close", id)
+		if code != 0 {
+			t.Fatalf("close exit=%d stderr=%s", code, stderr)
+		}
+		stdout, _, _ := runCmd(t, binPath, dir, "show", id)
+		if !strings.Contains(stdout, "status=closed") {
+			t.Errorf("status not closed; show:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "closed_at=") {
+			t.Errorf("closed_at not set; show:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "closed_by=") {
+			t.Errorf("closed_by not set; show:\n%s", stdout)
+		}
+	})
+
+	t.Run("reason", func(t *testing.T) {
+		id := seed("close with reason")
+		_, _, code := runCmd(t, binPath, dir, "close", id, "--reason=canceled by user")
+		if code != 0 {
+			t.Fatalf("close --reason failed code=%d", code)
+		}
+		stdout, _, _ := runCmd(t, binPath, dir, "show", id)
+		if !strings.Contains(stdout, "closed_reason=canceled by user") {
+			t.Errorf("closed_reason not set; show:\n%s", stdout)
+		}
+	})
+
+	t.Run("hidden_from_default_list", func(t *testing.T) {
+		id := seed("will be hidden")
+		runCmd(t, binPath, dir, "close", id)
+		stdout, _, _ := runCmd(t, binPath, dir, "list")
+		if strings.Contains(stdout, id) {
+			t.Errorf("closed task should be excluded from default list; got:\n%s", stdout)
+		}
+		all, _, _ := runCmd(t, binPath, dir, "list", "--all")
+		if !strings.Contains(all, id) {
+			t.Errorf("--all should include closed task; got:\n%s", all)
+		}
+	})
+
+	t.Run("json", func(t *testing.T) {
+		id := seed("json close")
+		stdout, _, code := runCmd(t, binPath, dir, "close", "--json", id)
+		if code != 0 {
+			t.Fatalf("close --json failed code=%d", code)
+		}
+		if !strings.Contains(stdout, `"status":"closed"`) {
+			t.Errorf("json missing closed status: %q", stdout)
+		}
+	})
+}
