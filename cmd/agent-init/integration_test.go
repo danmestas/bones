@@ -11,11 +11,21 @@ import (
 	"testing"
 )
 
+// binPath must be absolute because tests set cmd.Dir to a tmpdir, which
+// moves the working directory away from the test package.
 var binPath = func() string {
 	if p := os.Getenv("AGENT_INIT_BIN"); p != "" {
-		return p
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return p
+		}
+		return abs
 	}
-	return "../../bin/agent-init"
+	abs, err := filepath.Abs("../../bin/agent-init")
+	if err != nil {
+		return "../../bin/agent-init"
+	}
+	return abs
 }()
 
 func requireBinaries(t *testing.T) {
