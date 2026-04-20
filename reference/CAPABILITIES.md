@@ -1,7 +1,12 @@
 # CAPABILITIES — beads → agent-infra side-by-side
 
+*Last updated 2026-04-19 — revised after Phase 4 (presence, reactions,
+AskAdmin, SubscribePattern) landed. Phases 1–4 are shipped; Phase 5
+(fossil code artifacts) is designed but not yet implemented.*
+
 This doc enumerates what **beads** provides and maps each capability to
-**agent-infra**'s planned equivalent (or explicit non-goal). It is:
+**agent-infra**'s shipped or planned equivalent (or explicit non-goal).
+It is:
 
 - The checklist Phase 6 ("beads capability closure") walks through.
 - The honest accounting the README's "honest acknowledgment" paragraph
@@ -15,12 +20,13 @@ This doc enumerates what **beads** provides and maps each capability to
 - Beads agent-facing presentation: `reference/beads/AGENTS.md`,
   `AGENT_INSTRUCTIONS.md`, `CLAUDE.md`, `claude-plugin/`.
 - agent-infra design: `README.md` (architecture, phase plan, open
-  questions).
+  questions); `docs/adr/` for accepted decisions.
 
 ## Legend
 
 Status column uses one of:
 
+- **implemented** — shipped; see the file pointer in Notes.
 - **planned** — design clear, tracked to a phase.
 - **TBD** — in scope, design undecided (tracked as an open question).
 - **non-goal** — deliberately out of scope; consumers build on top.
@@ -30,17 +36,23 @@ Status column uses one of:
 
 ## 1. Task lifecycle
 
-| Beads | agent-infra plan | Status | Notes |
+Per ADR 0005, task records live in a NATS JetStream KV bucket
+(`agent-infra-tasks`), not in YAML files on disk. That changes the
+storage substrate for every row below; task state is CAS-gated and
+conflict resolution is one round trip with a deterministic winner
+(ADR 0006: fossil fork-as-merge is narrowed to code artifacts only).
+
+| Beads | agent-infra equivalent | Status | Notes |
 |---|---|---|---|
-| `bd create` — Issue with title/description/design/acceptance/notes, status, priority, issue_type, metadata | `coord.CreateTask` (Phase 3) + file under `tasks/` with YAML frontmatter (Phase 2) | planned | File-based. Phase 2 decides whether design/acceptance/notes are distinct frontmatter fields or a single freeform body. |
-| `bd update --claim` — atomic assignment | `coord.Claim` via NATS KV hold bucket + file write | planned | Hold-first announce; race resolved by fossil fork (first-class, not a failure mode). |
-| `bd close --reason` / `--suggest-next` | `coord.Close(id, reason)` + timeline commit | planned | "suggest-next" (show newly unblocked) requires a DAG query — Phase 2. |
-| `bd ready --json` | `coord.Ready()` over task files + live holds | planned | Two inputs: file-level deps + NATS holds to filter "someone's already on it". |
-| `bd blocked` | `coord.Blocked()` | planned | Same DAG, filtered inversely. |
+| `bd create` — Issue with title/description/design/acceptance/notes, status, priority, issue_type, metadata | `coord.OpenTask(ctx, title, files)` writing a JSON record to NATS KV per ADR 0005 | implemented | See `coord/open_task.go`. Phase 2 schema: id/title/status/claimed_by/files/parent/context/timestamps/schema_version. Priority, description, and issue-type are not yet on the record — additive extensions. |
+| `bd update --claim` — atomic assignment | `coord.Claim(ctx, taskID, ttl)` — task-CAS then hold acquisition per ADR 0007 | implemented | See `coord/coord.go` (`Claim`, `releaseClosure`). CAS-lose returns `ErrTaskAlreadyClaimed` immediately; no intermediate fork state. |
+| `bd close --reason` / `--suggest-next` | `coord.CloseTask(ctx, taskID, reason)` | implemented | See `coord/close_task.go`. Closer must be the current claimed_by (invariant 12). "suggest-next" (show newly unblocked) is not yet shipped — requires a DAG query layer on top of Ready. |
+| `bd ready --json` | `coord.Ready(ctx)` — KV scan filtered to status=open, claimed_by empty | implemented | See `coord/ready.go`. Sorts oldest-first; capped by `Config.MaxReadyReturn`. |
+| `bd blocked` | `coord.Blocked()` | planned | Same DAG, filtered inversely. Phase 5+ once links land. |
 | `bd list --status=X` | `coord.List(filter struct)` | planned | Struct filter, not a query-string DSL. |
-| `bd defer --until` | `defer_until:` frontmatter field + Ready filter | planned | Phase 2. |
-| `bd stale` / `bd orphans` / `bd preflight` | Helpers under `cmd/agent-tasks/` | TBD | Lint-style checks fit the CLI better than the library. |
-| Priority 0–4 (0=critical) | Same integer scheme | planned | Matched to reduce cognitive tax for users coming from beads. |
+| `bd defer --until` | `defer_until:` field + Ready filter | planned | Not yet on the task record. |
+| `bd stale` / `bd orphans` / `bd preflight` | Helpers under `cmd/agent-tasks/` | TBD | Lint-style checks fit the CLI better than the library. CLI itself still planned. |
+| Priority 0–4 (0=critical) | Same integer scheme | planned | Additive extension to the Phase 2 record. |
 
 ## 2. Dependency graph
 
@@ -53,18 +65,18 @@ Status column uses one of:
 
 ## 3. Persistence and sync
 
-| Beads | agent-infra plan | Status | Notes |
+| Beads | agent-infra equivalent | Status | Notes |
 |---|---|---|---|
-| Dolt SQL server (MySQL-compatible, :3307) | Fossil via go-libfossil; one shared repo DB behind the leaf daemon | planned | Fundamentally different substrate. Not a drop-in. |
-| Cell-level merge (auto-resolve non-conflicting cells) | **Application-layer** merge on JSON/markdown task files | TBD | **Honest gap.** README acknowledges this. We don't get free structured merge; our tooling absorbs that cost. Could narrow by representing task state as line-oriented JSON. |
-| Versioned schema migrations (0001–0015+) | `schema_version:` frontmatter + forward-only file migrator | TBD | Much simpler without tables to rewrite. |
-| Content hash on Issue (SHA256 canonical) | Fossil artifact hash is native | planned | Free from fossil. |
-| `bd dolt push` / pull | Fossil autosync via leaf daemon | planned | Agents don't push/pull — autosync does. Real ergonomic win. |
-| `RemoteStore` interface, push to Dolt remotes | Fossil sync to remote(s) via leaf daemon | planned | |
-| Merge slot (exclusive conflict-resolution slot) | Fossil fork-merge-commit (two leaves, next commit merges) | planned | Fossil handles the collision shape natively; no "slot" primitive required. |
+| Dolt SQL server (MySQL-compatible, :3307) | Two substrates by role: tasks on NATS JetStream KV (ADR 0005), code on Fossil via go-libfossil (ADR 0010, Phase 5 — designed, not yet implemented) | implemented for tasks / planned for code | Fundamentally different from Dolt. Tasks are CAS-shaped, not commit-shaped; code still gets a commit timeline. See `internal/tasks/`. |
+| Cell-level merge (auto-resolve non-conflicting cells) | **Application-layer** merge on code artifacts via fossil fork-as-sibling-leaf + chat notify (ADR 0004 / ADR 0010); task state is CAS-gated and never merges | TBD for code / non-issue for tasks | **Permanent gap on the code side.** Tasks avoid the problem entirely (CAS-lose returns immediately, no fork state). The code-side merge story lands with Phase 5. |
+| Versioned schema migrations (0001–0015+) | `schema_version` field on each task record; forward-only migrator | planned | Schema field exists (starts at 1) but no migrator shipped. |
+| Content hash on Issue (SHA256 canonical) | Fossil artifact hash is native | planned | Free from fossil once Phase 5 lands. |
+| `bd dolt push` / pull | Fossil autosync via leaf daemon | planned | Agents don't push/pull — autosync does. Real ergonomic win. Arrives with Phase 5. |
+| `RemoteStore` interface, push to Dolt remotes | Fossil sync to remote(s) via leaf daemon | planned | Phase 5. |
+| Merge slot (exclusive conflict-resolution slot) | Fossil fork-merge-commit (two leaves, next commit merges) for code per ADR 0010; no analogue needed for tasks | planned for code | ADR 0010 §4 surfaces conflicts as `ErrConflictForked` on a deterministic branch name. |
 | External tracker sync (Linear, Jira, GitLab, Notion, ADO) via `IssueTracker` adapter | Out of scope for v0.1 | non-goal | Consumers can author adapters. |
-| Federation via `external_ref` / `source_system` | Same concept, frontmatter fields | TBD | Phase 6 if needed. |
-| `wisps` ephemeral table (dolt_ignored, no history bloat) | NATS KV TTL state for ephemeral; fossil only receives durable state | planned | Our clean split: ephemeral = NATS, durable = fossil. Equivalent outcome via different mechanism. |
+| Federation via `external_ref` / `source_system` | Same concept, additive fields on the task record | TBD | Phase 6 if needed. |
+| `wisps` ephemeral table (dolt_ignored, no history bloat) | NATS KV TTL state for ephemeral (holds, presence); fossil only receives durable code state | implemented | See `internal/holds/`, `internal/presence/`. Ephemeral = NATS-KV with TTL; durable code = fossil (Phase 5). |
 
 ## 4. Agent-facing workflow
 
@@ -80,13 +92,15 @@ Status column uses one of:
 
 ## 5. Communication and messaging
 
-| Beads | agent-infra plan | Status | Notes |
+| Beads | agent-infra equivalent | Status | Notes |
 |---|---|---|---|
-| `issue` type with threading (`replies-to` edges) | Chat via EdgeSync notify + NATS `<proj>.chat.<thread>` | planned | Real-time, not durable-state. Opposite posture from beads. |
-| Durable message history | Fossil timeline + optional chat message files under `chat/` | TBD | Phase 3. NATS JetStream provides durable subjects; boundary between durable and ephemeral needs a clear split. |
-| Synchronous ask-peer | `coord.Ask(ctx, recipient, question) → answer` over NATS req/rep | planned | Phase 3. |
-| Presence / "who's online" | NATS KV bucket with TTL heartbeats | planned | Beads has no equivalent — a real gain. |
-| Broadcast announce | NATS pub/sub on `<proj>.holds.announce` | planned | Phase 1. |
+| `issue` type with threading (`replies-to` edges) | `coord.Post(ctx, thread, msg)` / `coord.Subscribe(ctx, pattern)` via EdgeSync notify per ADR 0008; `ChatMessage.ReplyTo` carries the threading edge | implemented | See `coord/coord.go` (`Post`), `coord/subscribe.go`, `coord/events.go` (`ChatMessage`). Thread identity is a deterministic SHA-256 hash of (project, name) per ADR 0008's 2026-04-19 update so all Coords converge on one NATS subject per name. |
+| Durable message history | EdgeSync notify persists every message as a JSON artifact in its Fossil-backed notify repo; coord owns no chat-message state of its own (ADR 0008) | implemented | Durability lives in notify, not in coord. A reconnecting subscriber misses publishes in the gap — read-now-or-replay-from-fossil is the documented posture. |
+| Synchronous ask-peer | `coord.Ask(ctx, recipient, question)` / `coord.Answer(ctx, handler)` over NATS request-reply on `<proj>.ask.<recipient>` per ADR 0008 | implemented | See `coord/coord.go` (`Ask`, `Answer`). `coord.AskAdmin` (Phase 4) adds a presence pre-flight so "recipient offline" becomes a distinct `ErrAgentOffline` instead of collapsing to `ErrAskTimeout` — see `coord/ask_admin.go`. |
+| Presence / "who's online" | `coord.Who(ctx)` snapshot + `coord.WatchPresence(ctx)` delta stream, backed by `agent-infra-presence` KV with TTL = 3× `Config.HeartbeatInterval` per ADR 0009 | implemented | See `coord/presence.go`, `internal/presence/`. Heartbeat goroutine started by `coord.Open`, torn down and entry deleted by `coord.Close` (invariant 18). Beads has no equivalent — a real gain. |
+| Broadcast announce | Project-wide chat via `coord.Subscribe(ctx, "")` or `coord.SubscribePattern(ctx, "*")`; hold announcements stay internal to the holds substrate per ADR 0003 | implemented | See `coord/subscribe_pattern.go`. NATS subject layout is deliberately hidden (ADR 0003) — consumers observe via Subscribe channels, not raw subjects. |
+| Reactions | `coord.React(ctx, thread, messageID, reaction)`; peers receive `Reaction` events on the same Subscribe channel per ADR 0009 | implemented | See `coord/react.go`, `coord/events.go` (`Reaction`). Piggybacks on the chat substrate — no new KV bucket, no new NATS subject. |
+| Pattern Subscribe | `coord.SubscribePattern(ctx, pattern)` — raw NATS subject-wildcard against ThreadShort per ADR 0009 option 1 | implemented | See `coord/subscribe_pattern.go`. Name-level patterns (option 3 thread-name registry) deferred; the substrate leak is minimal for `*` and `>` cases. |
 
 ## 6. Scheduling and gates
 
@@ -119,12 +133,12 @@ build one on top of `coord`.
 
 ## 9. Data integrity and audit
 
-| Beads | agent-infra plan | Status | Notes |
+| Beads | agent-infra equivalent | Status | Notes |
 |---|---|---|---|
-| Content hash on Issue (SHA256 of canonical fields) | Fossil artifact hash | planned | Free. |
-| `events` table + `EventKind` namespacing (`patrol.muted`, `agent.started`, ...) | Fossil timeline + commit messages, or a dedicated `events/` dir | TBD | Phase 2 decides whether timeline alone is enough or we want structured event records. |
+| Content hash on Issue (SHA256 of canonical fields) | Fossil artifact hash on code artifacts (Phase 5 per ADR 0010); task records carry a schema_version but no content hash | planned | Free on the code side once Phase 5 lands; not yet shipped for task records. |
+| `events` table + `EventKind` namespacing (`patrol.muted`, `agent.started`, ...) | In-process `coord.Event` interface carrying `ChatMessage`, `Reaction`, `PresenceChange` (ADR 0008 / 0009); no durable event store | TBD | Current events are live-only on Subscribe channels. Durable event records still TBD. |
 | Append-only `interactions.jsonl` (LLM calls, tool calls, labeling) | Out of scope — consumers track their own LLM audit | non-goal | Not a substrate concern. |
-| Lint / orphan / stale checks | Helpers in `cmd/agent-tasks/` | TBD | Phase 4 or deferred. |
+| Lint / orphan / stale checks | Helpers in `cmd/agent-tasks/` | TBD | CLI not yet shipped. |
 
 ## 10. CLI and plugin surface
 
@@ -153,29 +167,76 @@ build one on top of `coord`.
 
 ## 12. Things we ship that beads does not
 
-- **Live presence** — NATS KV with TTL heartbeats.
-- **Synchronous peer request/reply** — NATS req/rep; beads has no
-  synchronous peer communication.
-- **Code artifacts in the same substrate** — fossil holds both code
-  commits and task files; beads users keep code in git.
-- **Autosync via leaf daemon** — agents don't explicitly push/pull;
-  convergence happens lazily.
-- **Fossil fork as a first-class merge primitive** — two concurrent
-  leaves plus a next commit *is* the merge. No special "merge slot"
-  primitive needed.
-- **File-level holds with TTL** — NATS KV bucket `<proj>.holds.current`;
-  beads has no file-level concurrency protocol (it operates at issue
+- **Live presence** — `coord.Who` / `coord.WatchPresence` backed by
+  NATS KV with TTL heartbeats per ADR 0009. **Implemented** — see
+  `coord/presence.go`, `internal/presence/`.
+- **Synchronous peer request/reply** — `coord.Ask` / `coord.Answer`
+  over NATS req/rep per ADR 0008, plus the presence-aware
+  `coord.AskAdmin`. **Implemented** — see `coord/coord.go`,
+  `coord/ask_admin.go`. Beads has no synchronous peer communication.
+- **Reactions on chat messages** — `coord.React` piggybacked on the
+  chat substrate per ADR 0009. **Implemented** — see `coord/react.go`.
+- **File-level holds with TTL** — `agent-infra-holds` KV bucket per
+  ADR 0002, acquired as part of `coord.Claim` per ADR 0007.
+  **Implemented** — see `internal/holds/`, `coord/coord.go` (`Claim`).
+  Beads has no file-level concurrency protocol (it operates at issue
   granularity only).
+- **Code artifacts in the same substrate** — fossil holds code commits
+  alongside the agent substrate per ADR 0010. Planned, not yet
+  implemented (Phase 5).
+- **Autosync via leaf daemon** — agents don't explicitly push/pull;
+  convergence happens lazily. Planned (Phase 5).
+- **Fossil fork as a first-class merge primitive** — two concurrent
+  leaves plus a next commit *is* the merge, surfaced as
+  `ErrConflictForked` per ADR 0010. Designed (Phase 5 scope); not
+  yet implemented.
 
 ## 13. Open questions parked for implementation phases
 
-- **§2** — Threads as edges (`replies-to`) vs timeline subtrees.
-- **§4** — Memory as a task-type vs a dedicated primitive.
-- **§5** — Boundary between durable (JetStream) and ephemeral (core
-  NATS) message subjects.
+Resolved and removed from this list: threads-as-edges-vs-subtrees (§2
+— chat threads are `replies-to` edges on `ChatMessage`, closed by
+ADR 0008); durable/ephemeral message split (§5 — chat rides notify
+with Fossil persistence per ADR 0008, ephemeral state stays on raw
+NATS / JetStream KV).
+
+- **§4** — Memory as a task-type vs a dedicated primitive. No memory
+  primitive is shipped yet; decision deferred to the phase that ships
+  it.
 - **§7** — Compaction as a batch pass vs a streaming operation.
-- **§9** — Events as timeline-only vs a dedicated records store.
-- **§10** — Whether an MCP server is a required v0.1 deliverable.
+- **§9** — Events as in-process-only vs a dedicated durable records
+  store. Phases 3–4 ship the in-process `coord.Event` interface only.
+- **§10** — Whether an MCP server is a required v0.1 deliverable
+  (tracked against ADR 0011).
+
+## 14. Migrating from beads (short)
+
+For users coming from `bd`, the mental mapping is approximately:
+
+| Beads command | agent-infra equivalent |
+|---|---|
+| `bd create` | `coord.OpenTask(ctx, title, files)` — `coord/open_task.go` |
+| `bd update --claim <id>` | `coord.Claim(ctx, taskID, ttl)` — returns a release closure the caller defers; see `coord/coord.go` |
+| `bd close <id> --reason` | `coord.CloseTask(ctx, taskID, reason)` — `coord/close_task.go` |
+| `bd ready --json` | `coord.Ready(ctx)` — `coord/ready.go` |
+| `bd remember` / `bd memories` | No equivalent yet — memory primitive is still TBD (§4). |
+| `bd prime` | Not yet — `agent-infra prime` is planned. |
+
+The substrate differences that matter most:
+
+- **Live presence is a gain.** `coord.Who` and `coord.WatchPresence`
+  tell you which peers are online right now. Beads offers no analogue.
+- **Synchronous peer Q&A is a gain.** `coord.Ask` / `coord.Answer`
+  give one-shot request/reply semantics that beads does not expose.
+- **Memory primitive is a gap** until it ships. Users who rely on
+  `bd remember` will need to carry their own storage for now.
+- **Dolt cell-level merge is a permanent gap.** Task state avoids the
+  problem by moving to NATS KV (CAS-gated, no forks). Code state
+  under Phase 5 absorbs the merge cost at the application layer via
+  fossil fork + chat notify (ADR 0010). There is no auto-merge of
+  overlapping structured fields the way Dolt provides.
+- **The CLI surface is narrower on purpose.** Beads exposes ~29 `bd`
+  subcommands; agent-infra lands with a much smaller set driven off
+  the `coord` library.
 
 ---
 
