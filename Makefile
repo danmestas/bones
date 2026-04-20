@@ -11,7 +11,7 @@ SHELL := /usr/bin/env bash
 # bare tree (Phase 1 currently has no .go files); callers must tolerate that.
 GO_PACKAGES := $(shell go list ./... 2>/dev/null)
 
-.PHONY: check fmt fmt-check vet lint test race todo-check install-tools help agent-init bin
+.PHONY: check fmt fmt-check vet lint test race todo-check install-tools help agent-init agent-tasks bin
 
 help:
 	@echo "Targets:"
@@ -95,3 +95,6 @@ bin:
 
 agent-init: bin
 	go build -o bin/agent-init ./cmd/agent-init
+
+agent-tasks: bin
+	go build -o bin/agent-tasks ./cmd/agent-tasks
