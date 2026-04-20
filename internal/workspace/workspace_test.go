@@ -3,9 +3,15 @@ package workspace
 import (
 	"context"
 	"errors"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestPackageBuilds(t *testing.T) {
@@ -98,41 +104,66 @@ func TestWalk_NoMarkerReturnsErrNoWorkspace(t *testing.T) {
 	}
 }
 
-func TestInit_WritesConfigAndRepo(t *testing.T) {
+func TestInit_FreshDir(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skip in -short: creates fossil repo")
+		t.Skip("skip in -short: spawns leaf daemon")
 	}
-	dir := t.TempDir()
-	ctx := context.Background()
+	requireLeafBinary(t)
 
-	// Temporarily redirect spawnLeaf to a no-op so this test focuses on
-	// config + repo creation. Replace in Task 5 when full Init lands.
-	savedSpawn := spawnLeafFunc
-	spawnLeafFunc = func(ctx context.Context, _ spawnParams) (int, error) { return 0, nil }
-	t.Cleanup(func() { spawnLeafFunc = savedSpawn })
+	dir := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	info, err := Init(ctx, dir)
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
+	t.Cleanup(func() { killLeafPID(t, filepath.Join(dir, markerDirName, "leaf.pid")) })
 
-	// Marker dir present
-	if _, err := os.Stat(filepath.Join(dir, markerDirName)); err != nil {
-		t.Fatalf("marker dir missing: %v", err)
-	}
-	// Config round-trips
-	cfg, err := loadConfig(filepath.Join(dir, markerDirName, "config.json"))
+	// Healthz reachable
+	resp, err := http.Get(info.LeafHTTPURL + "/healthz")
 	if err != nil {
-		t.Fatalf("loadConfig: %v", err)
+		t.Fatalf("healthz GET: %v", err)
 	}
-	if cfg.AgentID == "" {
-		t.Error("config.AgentID empty")
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("healthz status: got %d, want 200", resp.StatusCode)
 	}
-	if info.AgentID != cfg.AgentID {
-		t.Errorf("Info.AgentID %q != config %q", info.AgentID, cfg.AgentID)
+
+	// PID file written and process alive
+	pidData, err := os.ReadFile(filepath.Join(dir, markerDirName, "leaf.pid"))
+	if err != nil {
+		t.Fatalf("read pid file: %v", err)
 	}
-	// Fossil repo file exists
-	if _, err := os.Stat(filepath.Join(dir, markerDirName, "repo.fossil")); err != nil {
-		t.Fatalf("repo.fossil missing: %v", err)
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
+	if err != nil {
+		t.Fatalf("parse pid: %v", err)
 	}
+	if !pidAlive(pid) {
+		t.Fatalf("leaf pid %d not alive", pid)
+	}
+}
+
+func requireLeafBinary(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath(leafBinaryPath()); err != nil {
+		t.Skipf("leaf binary not available (%v); set LEAF_BIN or build it", err)
+	}
+}
+
+func killLeafPID(t *testing.T, pidPath string) {
+	t.Helper()
+	data, err := os.ReadFile(pidPath)
+	if err != nil {
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return
+	}
+	_ = proc.Signal(syscall.SIGKILL)
 }
