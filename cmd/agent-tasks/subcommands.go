@@ -2,13 +2,16 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/danmestas/agent-infra/internal/tasks"
 	"github.com/danmestas/agent-infra/internal/workspace"
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -131,4 +134,60 @@ func splitFiles(s string) []string {
 		return nil
 	}
 	return strings.Split(s, ",")
+}
+
+func init() {
+	handlers["create"] = createCmd
+}
+
+func createCmd(ctx context.Context, info workspace.Info, args []string) error {
+	return runOp(ctx, "create", func(ctx context.Context) error {
+		fs := flag.NewFlagSet("create", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		var (
+			files    string
+			parent   string
+			ctxPairs contextFlag
+			asJSON   bool
+		)
+		fs.StringVar(&files, "files", "", "comma-separated file list")
+		fs.StringVar(&parent, "parent", "", "parent task id")
+		fs.Var(&ctxPairs, "context", "key=value (repeatable)")
+		fs.BoolVar(&asJSON, "json", false, "emit JSON")
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		if fs.NArg() < 1 {
+			return fmt.Errorf("create: title is required")
+		}
+		title := fs.Arg(0)
+
+		mgr, err := openManager(ctx, info)
+		if err != nil {
+			return fmt.Errorf("open manager: %w", err)
+		}
+		defer mgr.Close()
+
+		now := time.Now().UTC()
+		t := tasks.Task{
+			ID:            uuid.NewString(),
+			Title:         title,
+			Status:        tasks.StatusOpen,
+			Files:         splitFiles(files),
+			Parent:        parent,
+			Context:       applyContext(nil, []string(ctxPairs)),
+			CreatedAt:     now,
+			UpdatedAt:     now,
+			SchemaVersion: 1,
+		}
+		if err := mgr.Create(ctx, t); err != nil {
+			return err
+		}
+
+		if asJSON {
+			return emitJSON(os.Stdout, t)
+		}
+		fmt.Println(t.ID)
+		return nil
+	})
 }
