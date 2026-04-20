@@ -44,6 +44,18 @@ jobs:
       - name: Install golangci-lint v2
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4
 
+      - name: Build leaf binary (for integration tests)
+        working-directory: EdgeSync
+        run: |
+          make leaf
+          echo "LEAF_BIN=$GITHUB_WORKSPACE/EdgeSync/bin/leaf" >> $GITHUB_ENV
+
+      - name: Build agent-init binary
+        working-directory: agent-infra
+        run: |
+          make agent-init
+          echo "AGENT_INIT_BIN=$GITHUB_WORKSPACE/agent-infra/bin/agent-init" >> $GITHUB_ENV
+
       - name: make check
         working-directory: agent-infra
         run: make check
