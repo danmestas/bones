@@ -11,7 +11,7 @@ SHELL := /usr/bin/env bash
 # bare tree (Phase 1 currently has no .go files); callers must tolerate that.
 GO_PACKAGES := $(shell go list ./... 2>/dev/null)
 
-.PHONY: check fmt fmt-check vet lint test race todo-check install-tools help
+.PHONY: check fmt fmt-check vet lint test race todo-check install-tools help agent-init bin
 
 help:
 	@echo "Targets:"
@@ -89,3 +89,9 @@ todo-check:
 install-tools:
 	go install honnef.co/go/tools/cmd/staticcheck@latest
 	go install github.com/kisielk/errcheck@latest
+
+bin:
+	mkdir -p bin
+
+agent-init: bin
+	go build -o bin/agent-init ./cmd/agent-init
