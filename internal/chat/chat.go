@@ -10,12 +10,12 @@ import (
 	"sync"
 	"sync/atomic"
 
-	libfossil "github.com/danmestas/go-libfossil"
-	// Register the modernc SQLite driver with go-libfossil so
+	libfossil "github.com/danmestas/libfossil"
+	// Register the modernc SQLite driver with libfossil so
 	// libfossil.Create / libfossil.Open can open the repo's SQLite
-	// backing store. Blank imports for side effects are the go-libfossil
+	// backing store. Blank imports for side effects are the libfossil
 	// convention; without it, Create panics with "no driver registered".
-	_ "github.com/danmestas/go-libfossil/db/driver/modernc"
+	_ "github.com/danmestas/libfossil/db/driver/modernc"
 	"github.com/dmestas/edgesync/leaf/agent/notify"
 	"github.com/nats-io/nats.go"
 

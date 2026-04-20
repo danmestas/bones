@@ -34,7 +34,7 @@ and stdlib errors. Sentinel errors — `ErrHeldByAnother`,
 operating-error vocabulary.
 
 Internal packages (`internal/holds`, `internal/tasks`, `internal/chat`)
-hold the substrate adapters. They import `nats.go` and `go-libfossil`.
+hold the substrate adapters. They import `nats.go` and `libfossil`.
 `coord` imports them. Consumers import only `coord`.
 
 ## Consequences
@@ -49,7 +49,7 @@ carried a task update. This is an accepted cost. Diagnostics route
 through structured logs, not return types.
 
 Per the zero-deps posture (from the 2026-04-18 TigerStyle commitments),
-the allowed dependency set is stdlib + `nats.go` + `go-libfossil` +
+the allowed dependency set is stdlib + `nats.go` + `libfossil` +
 `EdgeSync`. Any addition requires a new ADR. This ADR is the reason that
 rule exists: every new dep is a new substrate we are promising to hide
 from consumers, and the cost of that promise should be deliberate.
