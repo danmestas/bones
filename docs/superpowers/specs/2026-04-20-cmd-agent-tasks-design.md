@@ -77,7 +77,9 @@ Default: excludes closed tasks. One line per task in the format:
 Glyphs mirror `bd`: `○` open, `◐` claimed, `✓` closed. Filters narrow the
 set: `--all` includes closed, `--status=X` restricts to one status,
 `--claimed-by=X` restricts to tasks owned by one agent (use the literal
-string `-` to match unclaimed).
+string `-` to match unclaimed). `--status` is validated against the fixed
+set `{open, claimed, closed}` before dialing the Manager; anything else
+exits 1 with a usage error.
 
 With `--json`: emits `[]Task`.
 
@@ -127,15 +129,16 @@ On success, quiet stdout. With `--json`, emits the updated `Task`.
 ```
 agent-tasks update <id> [--status=X] [--title=...] [--files=a,b,c]
                         [--parent=<id>] [--context k=v]... [--claimed-by=X]
-                        [--clear-context]
 ```
 
 Raw mutation. Every flag is optional; flags specified are applied. Multiple
 can be combined in one call. `--context k=v` is repeatable; each occurrence
-sets/overwrites one key and leaves the rest of the map untouched.
-`--clear-context` wipes the map before applying any `--context` pairs (use
-it when you want to fully replace rather than merge). Status transitions
-are validated by the Manager (ErrInvalidTransition → exit 7).
+sets/overwrites one key and leaves the rest of the map untouched (merge
+semantics — no bulk-clear flag; callers who want a full replacement issue
+individual updates for the keys they want to remove). `--status` is
+validated against the fixed set `{open, claimed, closed}` before dialing
+the Manager; anything else exits 1 with a usage error. Status transitions
+past that are validated by the Manager (ErrInvalidTransition → exit 7).
 
 On success, quiet stdout. With `--json`, emits the updated `Task`.
 
