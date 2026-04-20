@@ -294,6 +294,7 @@ func updateCmd(ctx context.Context, info workspace.Info, args []string) error {
 		fs.StringVar(&files, "files", "", "comma-separated file list (replaces existing)")
 		fs.StringVar(&parent, "parent", "", "parent task id")
 		fs.Var(&ctxPairs, "context", "key=value (repeatable; merges with existing)")
+		// --claimed-by and --status are coupled (invariant 11); setting one alone infers the other.
 		fs.StringVar(&claimedBy, "claimed-by", "", "agent id to claim as")
 		fs.BoolVar(&asJSON, "json", false, "emit JSON")
 		id, flagArgs := splitIDFromFlags(fs, args)
@@ -400,7 +401,7 @@ func splitIDFromFlags(fs *flag.FlagSet, args []string) (string, []string) {
 				if f := fs.Lookup(name); f != nil && !isBoolFlag(f) {
 					if i+1 < len(args) {
 						rest = append(rest, args[i+1])
-						i++
+						i++ // skip the consumed value
 					}
 				}
 			}
