@@ -167,3 +167,61 @@ func killLeafPID(t *testing.T, pidPath string) {
 	}
 	_ = proc.Signal(syscall.SIGKILL)
 }
+
+func TestInit_AlreadyInitialized(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: spawns leaf")
+	}
+	requireLeafBinary(t)
+
+	dir := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	info, err := Init(ctx, dir)
+	if err != nil {
+		t.Fatalf("first Init: %v", err)
+	}
+	t.Cleanup(func() { killLeafPID(t, filepath.Join(dir, markerDirName, "leaf.pid")) })
+
+	_, err = Init(ctx, dir)
+	if !errors.Is(err, ErrAlreadyInitialized) {
+		t.Fatalf("second Init: got %v, want ErrAlreadyInitialized", err)
+	}
+
+	// First workspace untouched: config still loads and matches info.
+	cfg, err := loadConfig(filepath.Join(dir, markerDirName, "config.json"))
+	if err != nil {
+		t.Fatalf("loadConfig after second Init: %v", err)
+	}
+	if cfg.AgentID != info.AgentID {
+		t.Errorf("agent id drifted: got %q, want %q", cfg.AgentID, info.AgentID)
+	}
+}
+
+func TestInit_RollbackOnLeafFailure(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: spawns leaf")
+	}
+	requireLeafBinary(t)
+
+	dir := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Force leaf to fail by making the binary path invalid via override.
+	savedSpawn := spawnLeafFunc
+	spawnLeafFunc = func(ctx context.Context, p spawnParams) (int, error) {
+		return 0, ErrLeafStartTimeout
+	}
+	t.Cleanup(func() { spawnLeafFunc = savedSpawn })
+
+	_, err := Init(ctx, dir)
+	if !errors.Is(err, ErrLeafStartTimeout) {
+		t.Fatalf("Init: got %v, want ErrLeafStartTimeout", err)
+	}
+	// Marker must be removed — no half-initialized state.
+	if _, err := os.Stat(filepath.Join(dir, markerDirName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf(".agent-infra/ still exists after rollback: stat=%v", err)
+	}
+}
