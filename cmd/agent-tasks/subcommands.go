@@ -296,13 +296,13 @@ func updateCmd(ctx context.Context, info workspace.Info, args []string) error {
 		fs.Var(&ctxPairs, "context", "key=value (repeatable; merges with existing)")
 		fs.StringVar(&claimedBy, "claimed-by", "", "agent id to claim as")
 		fs.BoolVar(&asJSON, "json", false, "emit JSON")
-		if err := fs.Parse(args); err != nil {
-			return err
-		}
-		if fs.NArg() < 1 {
+		id, flagArgs := splitIDFromFlags(fs, args)
+		if id == "" {
 			return errors.New("task id is required")
 		}
-		id := fs.Arg(0)
+		if err := fs.Parse(flagArgs); err != nil {
+			return err
+		}
 
 		var statusUpdate tasks.Status
 		if statusStr != "" {
@@ -339,6 +339,16 @@ func updateCmd(ctx context.Context, info workspace.Info, args []string) error {
 			}
 			if claimedBySet {
 				t.ClaimedBy = claimedBy
+				// Invariant 11 couples claimed_by to status: non-empty iff
+				// status == claimed. If the user set --claimed-by without
+				// also setting --status, infer the status from the value.
+				if statusUpdate == "" {
+					if claimedBy != "" {
+						t.Status = tasks.StatusClaimed
+					} else if t.Status == tasks.StatusClaimed {
+						t.Status = tasks.StatusOpen
+					}
+				}
 			}
 			t.Context = applyContext(t.Context, []string(ctxPairs))
 			t.UpdatedAt = time.Now().UTC()
@@ -366,6 +376,52 @@ func flagSet(fs *flag.FlagSet, name string) bool {
 		}
 	})
 	return seen
+}
+
+// splitIDFromFlags scans args, extracting the first bare positional as id,
+// while keeping flag/value pairs intact. Handles both `--flag=value` and
+// `--flag value` forms. Uses fs to know which flags take arguments so that
+// a space-separated flag value is not mistaken for a positional id.
+func splitIDFromFlags(fs *flag.FlagSet, args []string) (string, []string) {
+	id := ""
+	rest := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			rest = append(rest, args[i:]...)
+			break
+		}
+		if strings.HasPrefix(a, "-") && a != "-" {
+			rest = append(rest, a)
+			// If this flag expects a value and doesn't embed it with =,
+			// keep the next arg paired with it so it isn't taken as the id.
+			if !strings.Contains(a, "=") {
+				name := strings.TrimLeft(a, "-")
+				if f := fs.Lookup(name); f != nil && !isBoolFlag(f) {
+					if i+1 < len(args) {
+						rest = append(rest, args[i+1])
+						i++
+					}
+				}
+			}
+			continue
+		}
+		if id == "" {
+			id = a
+			continue
+		}
+		rest = append(rest, a)
+	}
+	return id, rest
+}
+
+// isBoolFlag reports whether f is a bool flag (which does not consume the
+// next argument as a value).
+func isBoolFlag(f *flag.Flag) bool {
+	if bf, ok := f.Value.(interface{ IsBoolFlag() bool }); ok {
+		return bf.IsBoolFlag()
+	}
+	return false
 }
 
 func init() {
