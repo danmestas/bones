@@ -167,7 +167,7 @@ func createCmd(ctx context.Context, info workspace.Info, args []string) error {
 		if err != nil {
 			return fmt.Errorf("open manager: %w", err)
 		}
-		defer mgr.Close()
+		defer func() { _ = mgr.Close() }()
 
 		now := time.Now().UTC()
 		t := tasks.Task{
@@ -228,7 +228,7 @@ func listCmd(ctx context.Context, info workspace.Info, args []string) error {
 		if err != nil {
 			return fmt.Errorf("open manager: %w", err)
 		}
-		defer mgr.Close()
+		defer func() { _ = mgr.Close() }()
 
 		allTasks, err := mgr.List(ctx)
 		if err != nil {
@@ -313,49 +313,17 @@ func updateCmd(ctx context.Context, info workspace.Info, args []string) error {
 			}
 			statusUpdate = s
 		}
-		titleSet := flagSet(fs, "title")
-		filesSet := flagSet(fs, "files")
-		parentSet := flagSet(fs, "parent")
-		claimedBySet := flagSet(fs, "claimed-by")
 
 		mgr, err := openManager(ctx, info)
 		if err != nil {
 			return fmt.Errorf("open manager: %w", err)
 		}
-		defer mgr.Close()
+		defer func() { _ = mgr.Close() }()
 
 		var updated tasks.Task
-		err = mgr.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
-			if statusUpdate != "" {
-				t.Status = statusUpdate
-			}
-			if titleSet {
-				t.Title = title
-			}
-			if filesSet {
-				t.Files = splitFiles(files)
-			}
-			if parentSet {
-				t.Parent = parent
-			}
-			if claimedBySet {
-				t.ClaimedBy = claimedBy
-				// Invariant 11 couples claimed_by to status: non-empty iff
-				// status == claimed. If the user set --claimed-by without
-				// also setting --status, infer the status from the value.
-				if statusUpdate == "" {
-					if claimedBy != "" {
-						t.Status = tasks.StatusClaimed
-					} else if t.Status == tasks.StatusClaimed {
-						t.Status = tasks.StatusOpen
-					}
-				}
-			}
-			t.Context = applyContext(t.Context, []string(ctxPairs))
-			t.UpdatedAt = time.Now().UTC()
-			updated = t
-			return t, nil
-		})
+		mutate := buildUpdateMutator(fs, title, statusUpdate,
+			files, parent, ctxPairs, claimedBy, &updated)
+		err = mgr.Update(ctx, id, mutate)
 		if err != nil {
 			return err
 		}
@@ -365,6 +333,49 @@ func updateCmd(ctx context.Context, info workspace.Info, args []string) error {
 		}
 		return nil
 	})
+}
+
+// buildUpdateMutator returns the closure passed to Manager.Update, applying
+// only the flags explicitly set. Includes invariant-11 status coupling when
+// --claimed-by is set without --status.
+func buildUpdateMutator(fs *flag.FlagSet, title string, statusUpdate tasks.Status,
+	files, parent string, ctxPairs contextFlag, claimedBy string,
+	out *tasks.Task) func(tasks.Task) (tasks.Task, error) {
+	titleSet := flagSet(fs, "title")
+	filesSet := flagSet(fs, "files")
+	parentSet := flagSet(fs, "parent")
+	claimedBySet := flagSet(fs, "claimed-by")
+	return func(t tasks.Task) (tasks.Task, error) {
+		if statusUpdate != "" {
+			t.Status = statusUpdate
+		}
+		if titleSet {
+			t.Title = title
+		}
+		if filesSet {
+			t.Files = splitFiles(files)
+		}
+		if parentSet {
+			t.Parent = parent
+		}
+		if claimedBySet {
+			t.ClaimedBy = claimedBy
+			// Invariant 11 couples claimed_by to status: non-empty iff
+			// status == claimed. If the user set --claimed-by without
+			// also setting --status, infer the status from the value.
+			if statusUpdate == "" {
+				if claimedBy != "" {
+					t.Status = tasks.StatusClaimed
+				} else if t.Status == tasks.StatusClaimed {
+					t.Status = tasks.StatusOpen
+				}
+			}
+		}
+		t.Context = applyContext(t.Context, []string(ctxPairs))
+		t.UpdatedAt = time.Now().UTC()
+		*out = t
+		return t, nil
+	}
 }
 
 // flagSet reports whether the named flag was explicitly set on fs.
@@ -457,7 +468,7 @@ func claimCmd(ctx context.Context, info workspace.Info, args []string) error {
 		if err != nil {
 			return fmt.Errorf("open manager: %w", err)
 		}
-		defer mgr.Close()
+		defer func() { _ = mgr.Close() }()
 
 		var updated tasks.Task
 		err = mgr.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
@@ -515,7 +526,7 @@ func closeCmd(ctx context.Context, info workspace.Info, args []string) error {
 		if err != nil {
 			return fmt.Errorf("open manager: %w", err)
 		}
-		defer mgr.Close()
+		defer func() { _ = mgr.Close() }()
 
 		var updated tasks.Task
 		err = mgr.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
@@ -564,7 +575,7 @@ func showCmd(ctx context.Context, info workspace.Info, args []string) error {
 		if err != nil {
 			return fmt.Errorf("open manager: %w", err)
 		}
-		defer mgr.Close()
+		defer func() { _ = mgr.Close() }()
 
 		t, _, err := mgr.Get(ctx, id)
 		if err != nil {

@@ -320,7 +320,8 @@ func TestCLI_Update(t *testing.T) {
 		runCmd(t, binPath, dir, "update", id, "--context", "k1=v1")
 		runCmd(t, binPath, dir, "update", id, "--context", "k2=v2")
 		stdout, _, _ := runCmd(t, binPath, dir, "show", id)
-		if !strings.Contains(stdout, "context.k1=v1") || !strings.Contains(stdout, "context.k2=v2") {
+		if !strings.Contains(stdout, "context.k1=v1") ||
+			!strings.Contains(stdout, "context.k2=v2") {
 			t.Errorf("merge failed; show:\n%s", stdout)
 		}
 	})
