@@ -377,3 +377,69 @@ func TestCLI_Update(t *testing.T) {
 		}
 	})
 }
+
+func TestCLI_Claim(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	dir := newWorkspace(t)
+
+	seed := func(title string) string {
+		out, _, code := runCmd(t, binPath, dir, "create", title)
+		if code != 0 {
+			t.Fatalf("seed create %q failed code=%d", title, code)
+		}
+		return firstLine(out)
+	}
+
+	t.Run("happy_path", func(t *testing.T) {
+		id := seed("claim me")
+		_, stderr, code := runCmd(t, binPath, dir, "claim", id)
+		if code != 0 {
+			t.Fatalf("claim exit=%d stderr=%s", code, stderr)
+		}
+		stdout, _, _ := runCmd(t, binPath, dir, "show", id)
+		if !strings.Contains(stdout, "status=claimed") {
+			t.Errorf("status not claimed; show:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "claimed_by=") {
+			t.Errorf("claimed_by not set; show:\n%s", stdout)
+		}
+	})
+
+	t.Run("idempotent_same_agent", func(t *testing.T) {
+		id := seed("claim twice")
+		runCmd(t, binPath, dir, "claim", id)
+		_, stderr, code := runCmd(t, binPath, dir, "claim", id)
+		if code != 0 {
+			t.Fatalf("re-claim should be no-op, got exit=%d stderr=%s", code, stderr)
+		}
+	})
+
+	t.Run("conflict_other_agent_exits_7", func(t *testing.T) {
+		id := seed("foreign")
+		// Steal via update as a different agent id.
+		if _, stderr, code := runCmd(t, binPath, dir, "update", id,
+			"--status=claimed", "--claimed-by=foreign-agent"); code != 0 {
+			t.Fatalf("seed foreign claim failed code=%d stderr=%s", code, stderr)
+		}
+		_, stderr, code := runCmd(t, binPath, dir, "claim", id)
+		if code != 7 {
+			t.Errorf("exit=%d, want 7 (claim conflict)", code)
+		}
+		if !strings.Contains(stderr, "already claimed") {
+			t.Errorf("stderr should mention already claimed: %q", stderr)
+		}
+	})
+
+	t.Run("json", func(t *testing.T) {
+		id := seed("json claim")
+		stdout, _, code := runCmd(t, binPath, dir, "claim", "--json", id)
+		if code != 0 {
+			t.Fatalf("claim --json failed code=%d", code)
+		}
+		if !strings.Contains(stdout, `"status":"claimed"`) {
+			t.Errorf("json missing claimed status: %q", stdout)
+		}
+	})
+}
