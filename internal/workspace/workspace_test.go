@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go"
 )
 
 func TestPackageBuilds(t *testing.T) {
@@ -132,6 +134,12 @@ func TestInit_FreshDir(t *testing.T) {
 		t.Fatalf("healthz status: got %d, want 200", resp.StatusCode)
 	}
 
+	nc, err := nats.Connect(info.NATSURL, nats.NoReconnect(), nats.Timeout(time.Second))
+	if err != nil {
+		t.Fatalf("connect to returned NATSURL %q: %v", info.NATSURL, err)
+	}
+	nc.Close()
+
 	// PID file written and process alive
 	pidData, err := os.ReadFile(filepath.Join(dir, markerDirName, "leaf.pid"))
 	if err != nil {
@@ -143,6 +151,37 @@ func TestInit_FreshDir(t *testing.T) {
 	}
 	if !pidAlive(pid) {
 		t.Fatalf("leaf pid %d not alive", pid)
+	}
+}
+
+func TestInit_PersistsSpawnedLeafNATSURL(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var gotNATSPort int
+	savedSpawn := spawnLeafFunc
+	spawnLeafFunc = func(ctx context.Context, p spawnParams) (int, error) {
+		gotNATSPort = p.NATSClientPort
+		return os.Getpid(), nil
+	}
+	t.Cleanup(func() { spawnLeafFunc = savedSpawn })
+
+	info, err := Init(ctx, dir)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	wantNATSURL := "nats://127.0.0.1:" + strconv.Itoa(gotNATSPort)
+	if info.NATSURL != wantNATSURL {
+		t.Fatalf("Info.NATSURL = %q, want %q", info.NATSURL, wantNATSURL)
+	}
+
+	cfg, err := loadConfig(filepath.Join(dir, markerDirName, "config.json"))
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if cfg.NATSURL != info.NATSURL {
+		t.Fatalf("config NATSURL = %q, want %q", cfg.NATSURL, info.NATSURL)
 	}
 }
 

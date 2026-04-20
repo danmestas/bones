@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -28,6 +29,7 @@ func spawnLeaf(ctx context.Context, p spawnParams) (int, error) {
 	cmd := exec.Command(p.LeafBinary,
 		"--repo", p.RepoPath,
 		"--serve-http", p.HTTPAddr,
+		"--nats-client-port", strconv.Itoa(p.NATSClientPort),
 	)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -49,9 +51,23 @@ func spawnLeaf(ctx context.Context, p spawnParams) (int, error) {
 	if err := waitHealthz(ctx, healthzURL); err != nil {
 		_ = cmd.Process.Kill()
 		_ = os.Remove(pidPath)
+		if tail := logTail(p.LogPath, 4096); tail != "" {
+			return 0, fmt.Errorf("%w; leaf log:\n%s", err, tail)
+		}
 		return 0, err
 	}
 	return pid, nil
+}
+
+func logTail(path string, maxBytes int) string {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	if len(data) > maxBytes {
+		data = data[len(data)-maxBytes:]
+	}
+	return strings.TrimSpace(string(data))
 }
 
 // waitHealthz polls the given URL until it returns 200 or the timeout elapses.
