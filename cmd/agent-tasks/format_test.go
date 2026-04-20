@@ -141,3 +141,43 @@ func TestEmitJSON(t *testing.T) {
 		t.Errorf("emitJSON output must end with newline; got %q", got)
 	}
 }
+
+func TestContextFlagSet(t *testing.T) {
+	cases := []struct {
+		name    string
+		inputs  []string
+		wantErr string // substring of expected error message, "" = expect success
+		wantLen int    // expected length of contextFlag after successful Set calls
+	}{
+		{"good_single", []string{"k=v"}, "", 1},
+		{"good_value_contains_equals", []string{"k=a=b"}, "", 1},
+		{"good_empty_value", []string{"k="}, "", 1},
+		{"bad_no_equals", []string{"kv"}, "expected key=value", 0},
+		{"bad_empty_key", []string{"=v"}, "non-empty key", 0},
+		{"bad_empty_input", []string{""}, "expected key=value", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var cf contextFlag
+			var lastErr error
+			for _, in := range tc.inputs {
+				lastErr = cf.Set(in)
+			}
+			if tc.wantErr == "" {
+				if lastErr != nil {
+					t.Fatalf("unexpected error: %v", lastErr)
+				}
+				if len(cf) != tc.wantLen {
+					t.Errorf("len=%d, want %d", len(cf), tc.wantLen)
+				}
+				return
+			}
+			if lastErr == nil {
+				t.Fatalf("want error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(lastErr.Error(), tc.wantErr) {
+				t.Errorf("err=%q, want substring %q", lastErr.Error(), tc.wantErr)
+			}
+		})
+	}
+}
