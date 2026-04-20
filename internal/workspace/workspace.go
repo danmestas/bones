@@ -137,8 +137,3 @@ func leafBinaryPath() string {
 	}
 	return "leaf"
 }
-
-// spawnLeaf is a placeholder replaced in Task 5.
-func spawnLeaf(ctx context.Context, p spawnParams) (int, error) {
-	return 0, errors.New("spawnLeaf: not implemented")
-}
