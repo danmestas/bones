@@ -101,8 +101,9 @@ type contextFlag []string
 func (c *contextFlag) String() string { return "" }
 
 func (c *contextFlag) Set(v string) error {
-	if !strings.ContainsRune(v, '=') {
-		return fmt.Errorf("expected key=value, got %q", v)
+	idx := strings.IndexRune(v, '=')
+	if idx <= 0 {
+		return fmt.Errorf("expected key=value with non-empty key, got %q", v)
 	}
 	*c = append(*c, v)
 	return nil
