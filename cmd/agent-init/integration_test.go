@@ -56,7 +56,7 @@ func runCmd(t *testing.T, dir string, args ...string) (stdout, stderr string, ex
 	err := cmd.Run()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
-			exitCode = ee.ProcessState.ExitCode()
+			exitCode = ee.ExitCode()
 		} else {
 			t.Fatalf("run: %v", err)
 		}
