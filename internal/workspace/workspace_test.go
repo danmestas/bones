@@ -225,3 +225,75 @@ func TestInit_RollbackOnLeafFailure(t *testing.T) {
 		t.Fatalf(".agent-infra/ still exists after rollback: stat=%v", err)
 	}
 }
+
+func TestJoin_FromSubdir(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: spawns leaf")
+	}
+	requireLeafBinary(t)
+
+	root := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	initInfo, err := Init(ctx, root)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	t.Cleanup(func() { killLeafPID(t, filepath.Join(root, markerDirName, "leaf.pid")) })
+
+	subdir := filepath.Join(root, "deep", "nested", "subdir")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	joinInfo, err := Join(ctx, subdir)
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	if joinInfo.AgentID != initInfo.AgentID {
+		t.Errorf("AgentID drift: init=%q join=%q", initInfo.AgentID, joinInfo.AgentID)
+	}
+	if joinInfo.LeafHTTPURL != initInfo.LeafHTTPURL {
+		t.Errorf("LeafHTTPURL drift: init=%q join=%q", initInfo.LeafHTTPURL, joinInfo.LeafHTTPURL)
+	}
+	// On macOS t.TempDir returns /var/folders/... which is a symlink to /private/var/...
+	// walkUp calls filepath.Abs (which does not resolve symlinks), so we compare the
+	// raw root here. If this flakes, use filepath.EvalSymlinks on both sides.
+	if joinInfo.WorkspaceDir != root {
+		t.Errorf("WorkspaceDir: got %q, want %q", joinInfo.WorkspaceDir, root)
+	}
+}
+
+func TestJoin_NoMarker(t *testing.T) {
+	dir := t.TempDir()
+	_, err := Join(context.Background(), dir)
+	if !errors.Is(err, ErrNoWorkspace) {
+		t.Fatalf("Join: got %v, want ErrNoWorkspace", err)
+	}
+}
+
+func TestJoin_StaleLeaf(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: spawns leaf")
+	}
+	requireLeafBinary(t)
+
+	dir := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if _, err := Init(ctx, dir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	// Kill the leaf, then try Join.
+	killLeafPID(t, filepath.Join(dir, markerDirName, "leaf.pid"))
+
+	// Give the OS a moment to reap.
+	time.Sleep(100 * time.Millisecond)
+
+	_, err := Join(ctx, dir)
+	if !errors.Is(err, ErrLeafUnreachable) {
+		t.Fatalf("Join: got %v, want ErrLeafUnreachable", err)
+	}
+}
