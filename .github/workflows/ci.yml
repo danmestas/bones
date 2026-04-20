@@ -6,18 +6,55 @@ on:
   pull_request:
     branches: [main]
 
+# Both go-libfossil and EdgeSync are private repos; the default GITHUB_TOKEN
+# cannot read them. A repository secret named GH_PRIVATE_DEPS_PAT must be
+# configured with a PAT that has `repo` read access to:
+#   - github.com/danmestas/go-libfossil
+#   - github.com/danmestas/EdgeSync
+# Without that secret, the checkout and `go mod download` steps will fail
+# with "could not read Username for 'https://github.com'".
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Check out agent-infra into ./agent-infra so we can place the sibling
+      # EdgeSync clone at ../EdgeSync (matches the replace directive in
+      # go.mod: "replace github.com/dmestas/edgesync/leaf => ../EdgeSync/leaf").
+      - name: Checkout agent-infra
+        uses: actions/checkout@v4
+        with:
+          path: agent-infra
+
+      # Clone EdgeSync alongside so the local replace directive resolves.
+      # The PAT must have read access to the private EdgeSync repo.
+      - name: Checkout EdgeSync (sibling dir)
+        uses: actions/checkout@v4
+        with:
+          repository: danmestas/EdgeSync
+          token: ${{ secrets.GH_PRIVATE_DEPS_PAT }}
+          path: EdgeSync
+
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.0'
           cache: true
+          cache-dependency-path: agent-infra/go.sum
+
+      # Configure GOPRIVATE + git auth so `go mod download` can pull the
+      # private go-libfossil module via HTTPS with the PAT.
+      - name: Configure private module access
+        env:
+          PAT: ${{ secrets.GH_PRIVATE_DEPS_PAT }}
+        run: |
+          echo "GOPRIVATE=github.com/danmestas/*,github.com/dmestas/*" >> "$GITHUB_ENV"
+          git config --global url."https://x-access-token:${PAT}@github.com/".insteadOf "https://github.com/"
+
       # The golangci-lint-action binary is built with an older Go and ships a
       # v1 binary by default; we pin v2 (matches .golangci.yml schema) and let
       # setup-go's toolchain build it so the Go version matches go.mod.
       - name: Install golangci-lint v2
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4
-      - run: make check
+
+      - name: make check
+        working-directory: agent-infra
+        run: make check
