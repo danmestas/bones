@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/danmestas/agent-infra/internal/workspace"
 	"github.com/dmestas/edgesync/leaf/telemetry"
@@ -58,7 +59,14 @@ func run(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-init: telemetry setup: %v\n", err)
 	} else {
-		defer func() { _ = shutdown(context.Background()) }()
+		// Bound the flush so Ctrl-C doesn't hang when the collector is
+		// unreachable. Use a fresh context (not the canceled ctx) so the
+		// exporter still gets a chance to drain on signal.
+		defer func() {
+			sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_ = shutdown(sctx)
+		}()
 	}
 
 	switch args[0] {
