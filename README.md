@@ -41,7 +41,7 @@ implies at many-agent scale), and beads' messaging is durable-state-only
 — it's a memory, not a message bus. No live presence, no
 subscribe-on-change push, no ephemeral coordination layer.
 
-**Fossil** — specifically the embeddable `go-libfossil` API we already use in
+**Fossil** — specifically the embeddable `libfossil` API we already use in
 EdgeSync — offers a fundamentally different posture:
 
 - Content-addressed DAG, not branches-with-refs. Divergence is a first-class
@@ -94,7 +94,7 @@ what we're deferring.
 
 - **Orchestrator intelligence.** No built-in "how should the work split"
   logic. That belongs upstream to consumers.
-- **Replacing EdgeSync or go-libfossil.** We import them; we don't fork their
+- **Replacing EdgeSync or libfossil.** We import them; we don't fork their
   responsibilities.
 - **NATS extensions.** We consume NATS as-is. No upstream PRs to nats-server
   or nats.go.
@@ -109,12 +109,12 @@ what we're deferring.
 
 | Project | Role | PR policy |
 |---|---|---|
-| `go-libfossil` (danmestas) | Fossil primitives: `Repo`, `Checkout`, sync, timeline | PR upstream when new primitives are needed (e.g., observer hooks, task artifact support) |
+| `libfossil` (danmestas) | Fossil primitives: `Repo`, `Checkout`, sync, timeline | PR upstream when new primitives are needed (e.g., observer hooks, task artifact support) |
 | `EdgeSync` (danmestas) | Leaf daemon, embedded NATS, notify system | PR when the substrate needs a change agent-infra can't make locally |
 | `nats-server`, `nats.go` | Real-time transport | Consume only — no upstream PRs from this project |
 | `beads` (gastownhall) | Reference design & audit target | Cloned at `reference/beads/`; no runtime dependency |
 
-Dependency arrow: `agent-infra → EdgeSync → go-libfossil`. Linear. No
+Dependency arrow: `agent-infra → EdgeSync → libfossil`. Linear. No
 back-edges. If we notice `EdgeSync` reaching *up* into `agent-infra`, that's
 a smell — push the primitive the other direction.
 
@@ -185,7 +185,7 @@ NATS carries:
 - [ ] Read beads' `internal/` packages and Dolt-backed data schema to
       understand its storage model; draft `reference/CAPABILITIES.md`
       (beads feature → our equivalent, with gaps flagged)
-- [ ] `go.work.example` pointing at `../EdgeSync` and `../go-libfossil`
+- [ ] `go.work.example` pointing at `../EdgeSync` and `../libfossil`
 
 ### Phase 1 — hold protocol
 
@@ -250,13 +250,13 @@ agent-infra/
   reference/          # Read-only study snapshots — not where code is written
     beads/            # Audit target (gastownhall/beads, Dolt-backed)
     EdgeSync/         # Local clone of ../EdgeSync for source reading
-    go-libfossil/     # Local clone of ../go-libfossil for source reading
+    go-libfossil/     # Local clone of ../libfossil for source reading (historical path name preserved)
     nats-server/      # Shallow clone (nats-io/nats-server)
     nats.go/          # Shallow clone (nats-io/nats.go)
     CAPABILITIES.md   # Side-by-side: beads feature → our equivalent (TBD)
   examples/
     two-agents/       # Smoke-test harness
-  go.work.example     # Points at ../EdgeSync and ../go-libfossil (NOT reference/)
+  go.work.example     # Points at ../EdgeSync and ../libfossil (NOT reference/)
   GETTING_STARTED.md  # Fresh-session handoff doc
   README.md           # This file
 ```
@@ -269,11 +269,11 @@ This repo carries reference clones of every project we study or depend on
 under `reference/` (see §Repository layout). Those are **read-only study
 snapshots** — use them for `mgrep` and source reading, not development.
 
-Active development of EdgeSync or go-libfossil happens at the canonical
+Active development of EdgeSync or libfossil happens at the canonical
 sibling paths:
 
 - `/Users/dmestas/projects/EdgeSync`
-- `/Users/dmestas/projects/go-libfossil`
+- `/Users/dmestas/projects/libfossil`
 
 Local workspace — copy `go.work.example` to `go.work` so edits to
 canonical siblings propagate without a publish cycle:
@@ -290,12 +290,12 @@ you find yourself editing inside `reference/` that's a sign something's
 miswired.
 
 Release-time: each of the three repos (`agent-infra`, `EdgeSync`,
-`go-libfossil`) is tagged and published independently. `agent-infra`
+`libfossil`) is tagged and published independently. `agent-infra`
 consumes tagged versions of the other two. No monorepo pressure.
 
 **Guardrail**: a pre-commit or lint check (to be added in Phase 1) that
 fails if this repo imports from `internal/` paths of `EdgeSync` or
-`go-libfossil`. Keeps the boundary honest when we're moving fast and
+`libfossil`. Keeps the boundary honest when we're moving fast and
 tempted to "just reach in."
 
 **Future git init note**: when this project is eventually `git init`'d,
@@ -309,7 +309,7 @@ nested git repos tracked as ghost submodules.
 1. **Naming.** See working-title note at the top.
 2. **Task storage.** Starting with files-in-repo. Graduate to custom xfer
    cards if commit noise becomes a problem. Third option: port fossil's
-   ticketing system to go-libfossil — biggest lift, most native.
+   ticketing system to libfossil — biggest lift, most native.
 3. **Public API surface.** Is `coord/` the only exported package, or do we
    expose `holds/` and `tasks/` directly? Lean toward one narrow public
    entry point.

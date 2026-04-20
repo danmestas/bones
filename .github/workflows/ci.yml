@@ -6,27 +6,25 @@ on:
   pull_request:
     branches: [main]
 
-# Both go-libfossil and EdgeSync are private repos; the default GITHUB_TOKEN
-# cannot read them. A repository secret named GH_PRIVATE_DEPS_PAT must be
-# configured with a PAT that has `repo` read access to:
-#   - github.com/danmestas/go-libfossil
-#   - github.com/danmestas/EdgeSync
-# Without that secret, the checkout and `go mod download` steps will fail
-# with "could not read Username for 'https://github.com'".
+# EdgeSync is still private and is consumed via a local replace directive
+# in go.mod (`replace github.com/dmestas/edgesync/leaf => ../EdgeSync/leaf`),
+# so CI has to check it out alongside agent-infra. libfossil is now
+# open-source, so no PAT rewrite for public modules is needed.
+#
+# Requires a repository secret GH_PRIVATE_DEPS_PAT with `repo` read access
+# to github.com/danmestas/EdgeSync. Without it the EdgeSync checkout step
+# fails.
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      # Check out agent-infra into ./agent-infra so we can place the sibling
-      # EdgeSync clone at ../EdgeSync (matches the replace directive in
-      # go.mod: "replace github.com/dmestas/edgesync/leaf => ../EdgeSync/leaf").
+      # Check out agent-infra into ./agent-infra so the sibling EdgeSync
+      # clone can sit at ../EdgeSync, matching the go.mod replace path.
       - name: Checkout agent-infra
         uses: actions/checkout@v4
         with:
           path: agent-infra
 
-      # Clone EdgeSync alongside so the local replace directive resolves.
-      # The PAT must have read access to the private EdgeSync repo.
       - name: Checkout EdgeSync (sibling dir)
         uses: actions/checkout@v4
         with:
@@ -39,15 +37,6 @@ jobs:
           go-version: '1.26.0'
           cache: true
           cache-dependency-path: agent-infra/go.sum
-
-      # Configure GOPRIVATE + git auth so `go mod download` can pull the
-      # private go-libfossil module via HTTPS with the PAT.
-      - name: Configure private module access
-        env:
-          PAT: ${{ secrets.GH_PRIVATE_DEPS_PAT }}
-        run: |
-          echo "GOPRIVATE=github.com/danmestas/*,github.com/dmestas/*" >> "$GITHUB_ENV"
-          git config --global url."https://x-access-token:${PAT}@github.com/".insteadOf "https://github.com/"
 
       # The golangci-lint-action binary is built with an older Go and ships a
       # v1 binary by default; we pin v2 (matches .golangci.yml schema) and let

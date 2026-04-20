@@ -38,7 +38,7 @@ known path derived from `.agent-infra/checkouts/<agent-id>/`. Coord
 discovers or creates the checkout during `Open` from a
 `Config.FossilRepoPath` (the shared repo DB) and a
 `Config.CheckoutRoot` (where per-leaf checkouts live). The
-repo-to-checkout relationship matches go-libfossil's
+repo-to-checkout relationship matches libfossil's
 `r.CreateCheckout(dir, opts)` pattern seen in `checkout_test.go`.
 
 Sibling-leaf replication is Fossil's own autosync through the shared
@@ -66,7 +66,7 @@ the checkout to a named rev for navigation or rollback.
 rev; `coord.Diff(ctx, revA, revB)` surfaces a diff between two revs.
 
 The API mirrors the minimal-surface philosophy of ADR 0001.
-`go-libfossil` exposes more than this (`Add`, `Status`, `HasChanges`,
+`libfossil` exposes more than this (`Add`, `Status`, `HasChanges`,
 `ListFiles`, raw UUID round-trips); coord exposes the five methods
 above and hides the rest behind the `internal/fossil` manager. If
 Phase 6+ surfaces a need for a narrower primitive, that primitive is

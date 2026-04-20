@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Pre-commit hook: block imports from EdgeSync/ or go-libfossil/ internal/ subtrees.
+# Pre-commit hook: block imports from EdgeSync/ or libfossil/ internal/ subtrees.
 # Activate: run `git config core.hooksPath .githooks` from the repo root.
 # This keeps agent-infra honest about the public API boundary documented in README §Development setup.
 
 set -euo pipefail
 
-# Module paths — mirrored from reference/EdgeSync/go.mod and reference/go-libfossil/go.mod.
+# Module paths — mirrored from reference/EdgeSync/go.mod and reference/libfossil/go.mod.
 # If either upstream renames its module, update these constants.
 EDGESYNC_MODULE="github.com/dmestas/edgesync"
-LIBFOSSIL_MODULE="github.com/danmestas/go-libfossil"
+LIBFOSSIL_MODULE="github.com/danmestas/libfossil"
 
 # Collect staged .go files (Added, Copied, Modified, Renamed). Null-delimited for safety.
 mapfile -d '' staged < <(git diff --cached --name-only --diff-filter=ACMR -z -- '*.go' || true)
@@ -39,7 +39,7 @@ done
 if [ "$violations" -gt 0 ]; then
   echo "" >&2
   echo "agent-infra pre-commit: $violations forbidden import(s) detected." >&2
-  echo "agent-infra must consume only the public API of EdgeSync and go-libfossil." >&2
+  echo "agent-infra must consume only the public API of EdgeSync and libfossil." >&2
   echo "See README §Development setup." >&2
   exit 1
 fi

@@ -66,7 +66,7 @@ under `reference/`:
 |---|---|---|
 | `reference/beads/` | github.com/gastownhall/beads | Audit target — study how beads presents itself to agents and structures its data model |
 | `reference/EdgeSync/` | local clone of `/Users/dmestas/projects/EdgeSync` | Read source of the sync daemon, notify system, NATS mesh |
-| `reference/go-libfossil/` | local clone of `/Users/dmestas/projects/go-libfossil` | Read source of fossil primitives |
+| `reference/go-libfossil/` | local clone of `/Users/dmestas/projects/libfossil` (historical dir name) | Read source of fossil primitives |
 | `reference/nats-server/` | github.com/nats-io/nats-server (shallow) | Server source — embedded NATS + leaf node patterns |
 | `reference/nats.go/` | github.com/nats-io/nats.go (shallow) | Client API — KV buckets, JetStream, subscriptions |
 
@@ -74,11 +74,11 @@ under `reference/`:
 develop in them, do not commit, do not push. They exist so `mgrep` and
 source reading work self-contained inside this repo.
 
-**Active development** of EdgeSync or go-libfossil happens at the
+**Active development** of EdgeSync or libfossil happens at the
 canonical sibling paths (not under `reference/`):
 
 - `/Users/dmestas/projects/EdgeSync`
-- `/Users/dmestas/projects/go-libfossil`
+- `/Users/dmestas/projects/libfossil`
 
 When you eventually set up `go.work` for local builds, point it at the
 canonical sibling paths — edits there propagate into live work. See
@@ -117,9 +117,9 @@ user's time and mine.
 
 - **Never rebase to main** — always merge main into feature/spike branches
   to preserve history.
-- **Always PR go-libfossil** — never push directly to `main` on that repo.
-- **No Claude co-author in go-libfossil commits** — other repos are fine,
-  but go-libfossil commits must not include the `Co-Authored-By: Claude`
+- **Always PR libfossil** — never push directly to `main` on that repo.
+- **No Claude co-author in libfossil commits** — other repos are fine,
+  but libfossil commits must not include the `Co-Authored-By: Claude`
   trailer.
 - **Test the actual behavior before claiming done** — type checking and
   compile success aren't proof a feature works. For cross-layer work,
@@ -141,7 +141,7 @@ guard against:
   separate consumer codebase the user will build later. If you find
   yourself designing workflow DSLs, YAML task graphs, or "smart"
   scheduling, stop — that's out of scope.
-- **Dependency arrow is one-way.** `agent-infra → EdgeSync → go-libfossil`.
+- **Dependency arrow is one-way.** `agent-infra → EdgeSync → libfossil`.
   If you see EdgeSync reaching *up* into agent-infra, it's wrong — push
   the primitive the other direction.
 - **NATS is consumed, not extended.** No upstream PRs to `nats-server` or
@@ -163,7 +163,7 @@ guard against:
 - Tasks stored as files under `tasks/` in the fossil repo (Phase 2
   decision — subject to revisit)
 - Pre-commit hook that blocks imports from `EdgeSync/internal/` or
-  `go-libfossil/internal/` paths (Phase 1 setup)
+  `libfossil/internal/` paths (Phase 1 setup)
 
 ## 10. If you get stuck or confused
 
