@@ -87,10 +87,11 @@ func init() {
 
 // spawnParams is the input to spawnLeafFunc. Split out for test seams.
 type spawnParams struct {
-	LeafBinary string
-	RepoPath   string
-	HTTPAddr   string
-	LogPath    string
+	LeafBinary     string
+	RepoPath       string
+	HTTPAddr       string
+	NATSClientPort int
+	LogPath        string
 }
 
 // spawnLeafFunc is the production spawner. Tests replace it via a saved/restored
@@ -156,19 +157,21 @@ func initLogic(ctx context.Context, cwd string) (Info, error) {
 		_ = os.RemoveAll(markerDir)
 		return Info{}, fmt.Errorf("pick http port: %w", err)
 	}
+	natsPort, err := pickFreePort()
+	if err != nil {
+		_ = os.RemoveAll(markerDir)
+		return Info{}, fmt.Errorf("pick nats port: %w", err)
+	}
 
 	repoPath := filepath.Join(markerDir, "repo.fossil")
+	logPath := filepath.Join(markerDir, "leaf.log")
 	cfg := config{
 		Version:     configVersion,
 		AgentID:     uuid.NewString(),
-		NATSURL:     "nats://127.0.0.1:4222",
+		NATSURL:     fmt.Sprintf("nats://127.0.0.1:%d", natsPort),
 		LeafHTTPURL: fmt.Sprintf("http://127.0.0.1:%d", httpPort),
 		RepoPath:    repoPath,
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
-	}
-	if err := saveConfig(filepath.Join(markerDir, "config.json"), cfg); err != nil {
-		_ = os.RemoveAll(markerDir)
-		return Info{}, err
 	}
 
 	slog.InfoContext(ctx, "agent_id generated", "agent_id", cfg.AgentID)
@@ -183,13 +186,19 @@ func initLogic(ctx context.Context, cwd string) (Info, error) {
 
 	// Bind to 127.0.0.1 only — we never want this daemon reachable from
 	// outside localhost by default.
-	_, err = spawnLeafFunc(ctx, spawnParams{
-		LeafBinary: leafBinaryPath(),
-		RepoPath:   repoPath,
-		HTTPAddr:   fmt.Sprintf("127.0.0.1:%d", httpPort),
-		LogPath:    filepath.Join(markerDir, "leaf.log"),
+	pid, err := spawnLeafFunc(ctx, spawnParams{
+		LeafBinary:     leafBinaryPath(),
+		RepoPath:       repoPath,
+		HTTPAddr:       fmt.Sprintf("127.0.0.1:%d", httpPort),
+		NATSClientPort: natsPort,
+		LogPath:        logPath,
 	})
 	if err != nil {
+		_ = os.RemoveAll(markerDir)
+		return Info{}, err
+	}
+	if err := saveConfig(filepath.Join(markerDir, "config.json"), cfg); err != nil {
+		killPID(pid)
 		_ = os.RemoveAll(markerDir)
 		return Info{}, err
 	}
@@ -201,6 +210,16 @@ func initLogic(ctx context.Context, cwd string) (Info, error) {
 		RepoPath:     cfg.RepoPath,
 		WorkspaceDir: cwd,
 	}, nil
+}
+
+func killPID(pid int) {
+	if pid <= 0 {
+		return
+	}
+	proc, err := os.FindProcess(pid)
+	if err == nil {
+		_ = proc.Kill()
+	}
 }
 
 // Join locates the nearest .agent-infra/ walking up from cwd and verifies
