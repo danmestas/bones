@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -158,7 +159,7 @@ func createCmd(ctx context.Context, info workspace.Info, args []string) error {
 			return err
 		}
 		if fs.NArg() < 1 {
-			return fmt.Errorf("create: title is required")
+			return errors.New("title is required")
 		}
 		title := fs.Arg(0)
 
@@ -178,7 +179,7 @@ func createCmd(ctx context.Context, info workspace.Info, args []string) error {
 			Context:       applyContext(nil, []string(ctxPairs)),
 			CreatedAt:     now,
 			UpdatedAt:     now,
-			SchemaVersion: 1,
+			SchemaVersion: tasks.SchemaVersion,
 		}
 		if err := mgr.Create(ctx, t); err != nil {
 			return err
