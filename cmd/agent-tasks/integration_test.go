@@ -335,6 +335,35 @@ func TestCLI_Update(t *testing.T) {
 		if !strings.Contains(stdout, "claimed_by=other-agent") {
 			t.Errorf("claimed_by not set; show:\n%s", stdout)
 		}
+		// Invariant 11: setting claimed_by must auto-transition status to claimed.
+		if !strings.Contains(stdout, "status=claimed") {
+			t.Errorf("status did not auto-transition to claimed; show:\n%s", stdout)
+		}
+	})
+
+	t.Run("claimed_by_clear", func(t *testing.T) {
+		id := seed("claim then release")
+		// First claim it.
+		_, stderr, code := runCmd(t, binPath, dir, "update", id, "--claimed-by=someone")
+		if code != 0 {
+			t.Fatalf("update --claimed-by=someone failed code=%d stderr=%s", code, stderr)
+		}
+		stdout, _, _ := runCmd(t, binPath, dir, "show", id)
+		if !strings.Contains(stdout, "status=claimed") {
+			t.Fatalf("setup: status did not auto-transition to claimed; show:\n%s", stdout)
+		}
+		// Then clear the claim — status should revert to open.
+		_, stderr, code = runCmd(t, binPath, dir, "update", id, "--claimed-by=")
+		if code != 0 {
+			t.Fatalf("update --claimed-by= failed code=%d stderr=%s", code, stderr)
+		}
+		stdout, _, _ = runCmd(t, binPath, dir, "show", id)
+		if !strings.Contains(stdout, "status=open") {
+			t.Errorf("status did not revert to open after clearing claimed_by; show:\n%s", stdout)
+		}
+		if strings.Contains(stdout, "claimed_by=someone") {
+			t.Errorf("claimed_by still present after clear; show:\n%s", stdout)
+		}
 	})
 
 	t.Run("invalid_status_exits_1", func(t *testing.T) {
