@@ -26,6 +26,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Info describes a live workspace. Returned by both Init and Join.
@@ -76,46 +77,63 @@ type spawnParams struct {
 // pointer to isolate subprocess behavior.
 var spawnLeafFunc = spawnLeaf
 
+// instrumented wraps op with a span, slog start/complete events, and op metrics.
+// fn receives a ctx that carries the span so nested emissions link correctly.
+func instrumented(
+	ctx context.Context,
+	op, cwd string,
+	fn func(context.Context, trace.Span) (Info, error),
+) (Info, error) {
+	ctx, span := tracer.Start(ctx, "agent_init."+op)
+	defer span.End()
+	start := time.Now()
+	slog.InfoContext(ctx, op+" start", "cwd", cwd)
+
+	info, err := fn(ctx, span)
+
+	result := "success"
+	if err != nil {
+		result = "error"
+	}
+	opAttrs := []attribute.KeyValue{
+		attribute.String("op", op),
+		attribute.String("result", result),
+	}
+	opCounter.Add(ctx, 1, metric.WithAttributes(opAttrs...))
+	opDuration.Record(ctx, time.Since(start).Seconds(),
+		metric.WithAttributes(attribute.String("op", op)))
+	slog.InfoContext(ctx, op+" complete",
+		"cwd", cwd,
+		"duration_ms", time.Since(start).Milliseconds(),
+		"result", result)
+	return info, err
+}
+
 // Init creates a fresh workspace rooted at cwd, starts a leaf daemon, and
 // returns its connection info. Returns ErrAlreadyInitialized if .agent-infra/
 // already exists in cwd.
-func Init(ctx context.Context, cwd string) (info Info, err error) {
-	ctx, span := tracer.Start(ctx, "agent_init.init")
-	defer span.End()
-	start := time.Now()
-	slog.InfoContext(ctx, "init start", "cwd", cwd)
-	defer func() {
-		result := "success"
-		if err != nil {
-			result = "error"
-		}
-		opCounter.Add(ctx, 1,
-			metric.WithAttributes(attribute.String("op", "init"), attribute.String("result", result)))
-		opDuration.Record(ctx, time.Since(start).Seconds(),
-			metric.WithAttributes(attribute.String("op", "init")))
-		slog.InfoContext(ctx, "init complete",
-			"cwd", cwd, "duration_ms", time.Since(start).Milliseconds(), "result", result)
-	}()
+func Init(ctx context.Context, cwd string) (Info, error) {
+	return instrumented(ctx, "init", cwd, func(ctx context.Context, span trace.Span) (Info, error) {
+		return initLogic(ctx, span, cwd)
+	})
+}
 
+func initLogic(ctx context.Context, span trace.Span, cwd string) (Info, error) {
 	markerDir := filepath.Join(cwd, markerDirName)
-	if _, statErr := os.Stat(markerDir); statErr == nil {
-		err = ErrAlreadyInitialized
-		return info, err
-	} else if !errors.Is(statErr, os.ErrNotExist) {
-		err = fmt.Errorf("stat marker: %w", statErr)
-		return info, err
+	if _, err := os.Stat(markerDir); err == nil {
+		return Info{}, ErrAlreadyInitialized
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return Info{}, fmt.Errorf("stat marker: %w", err)
 	}
 
-	if mkErr := os.MkdirAll(markerDir, 0o755); mkErr != nil {
-		err = fmt.Errorf("mkdir marker: %w", mkErr)
-		return info, err
+	if err := os.MkdirAll(markerDir, 0o755); err != nil {
+		return Info{}, fmt.Errorf("mkdir marker: %w", err)
 	}
 
-	httpPort, portErr := pickFreePort()
-	if portErr != nil {
+	httpPort, err := pickFreePort()
+	if err != nil {
 		_ = os.RemoveAll(markerDir)
-		err = fmt.Errorf("pick http port: %w", portErr)
-		return info, err
+		return Info{}, fmt.Errorf("pick http port: %w", err)
 	}
 
 	repoPath := filepath.Join(markerDir, "repo.fossil")
@@ -127,107 +145,85 @@ func Init(ctx context.Context, cwd string) (info Info, err error) {
 		RepoPath:    repoPath,
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}
-	if saveErr := saveConfig(filepath.Join(markerDir, "config.json"), cfg); saveErr != nil {
+	if err := saveConfig(filepath.Join(markerDir, "config.json"), cfg); err != nil {
 		_ = os.RemoveAll(markerDir)
-		err = saveErr
-		return info, err
+		return Info{}, err
 	}
 
 	slog.InfoContext(ctx, "agent_id generated", "agent_id", cfg.AgentID)
 	span.SetAttributes(attribute.String("agent_id", cfg.AgentID))
 
-	repo, repoErr := libfossil.Create(repoPath, libfossil.CreateOpts{User: cfg.AgentID})
-	if repoErr != nil {
+	repo, err := libfossil.Create(repoPath, libfossil.CreateOpts{User: cfg.AgentID})
+	if err != nil {
 		_ = os.RemoveAll(markerDir)
-		err = fmt.Errorf("create fossil repo: %w", repoErr)
-		return info, err
+		return Info{}, fmt.Errorf("create fossil repo: %w", err)
 	}
 	_ = repo.Close()
 
 	// Bind to 127.0.0.1 only — we never want this daemon reachable from
 	// outside localhost by default.
-	_, spawnErr := spawnLeafFunc(ctx, spawnParams{
+	_, err = spawnLeafFunc(ctx, spawnParams{
 		LeafBinary: leafBinaryPath(),
 		RepoPath:   repoPath,
 		HTTPAddr:   fmt.Sprintf("127.0.0.1:%d", httpPort),
 		LogPath:    filepath.Join(markerDir, "leaf.log"),
 	})
-	if spawnErr != nil {
+	if err != nil {
 		_ = os.RemoveAll(markerDir)
-		err = spawnErr
-		return info, err
+		return Info{}, err
 	}
 
-	info = Info{
+	return Info{
 		AgentID:      cfg.AgentID,
 		NATSURL:      cfg.NATSURL,
 		LeafHTTPURL:  cfg.LeafHTTPURL,
 		RepoPath:     cfg.RepoPath,
 		WorkspaceDir: cwd,
-	}
-	return info, nil
+	}, nil
 }
 
 // Join locates the nearest .agent-infra/ walking up from cwd and verifies
 // the recorded leaf is still reachable.
-func Join(ctx context.Context, cwd string) (info Info, err error) {
-	ctx, span := tracer.Start(ctx, "agent_init.join")
-	defer span.End()
-	start := time.Now()
-	slog.InfoContext(ctx, "join start", "cwd", cwd)
-	defer func() {
-		result := "success"
-		if err != nil {
-			result = "error"
-		}
-		opCounter.Add(ctx, 1,
-			metric.WithAttributes(attribute.String("op", "join"), attribute.String("result", result)))
-		opDuration.Record(ctx, time.Since(start).Seconds(),
-			metric.WithAttributes(attribute.String("op", "join")))
-		slog.InfoContext(ctx, "join complete",
-			"cwd", cwd, "duration_ms", time.Since(start).Milliseconds(), "result", result)
-	}()
+func Join(ctx context.Context, cwd string) (Info, error) {
+	return instrumented(ctx, "join", cwd, func(ctx context.Context, span trace.Span) (Info, error) {
+		return joinLogic(ctx, span, cwd)
+	})
+}
 
-	workspaceDir, walkErr := walkUp(cwd)
-	if walkErr != nil {
-		err = walkErr
-		return info, err
+func joinLogic(ctx context.Context, span trace.Span, cwd string) (Info, error) {
+	workspaceDir, err := walkUp(cwd)
+	if err != nil {
+		return Info{}, err
 	}
-	cfg, loadErr := loadConfig(filepath.Join(workspaceDir, markerDirName, "config.json"))
-	if loadErr != nil {
-		err = fmt.Errorf("load config: %w", loadErr)
-		return info, err
+	cfg, err := loadConfig(filepath.Join(workspaceDir, markerDirName, "config.json"))
+	if err != nil {
+		return Info{}, fmt.Errorf("load config: %w", err)
 	}
 
 	slog.InfoContext(ctx, "config loaded", "agent_id", cfg.AgentID)
 	span.SetAttributes(attribute.String("agent_id", cfg.AgentID))
 
-	pidData, pidErr := os.ReadFile(filepath.Join(workspaceDir, markerDirName, "leaf.pid"))
-	if pidErr != nil {
-		err = fmt.Errorf("read pid file: %w", pidErr)
-		return info, err
+	pidData, err := os.ReadFile(filepath.Join(workspaceDir, markerDirName, "leaf.pid"))
+	if err != nil {
+		return Info{}, fmt.Errorf("read pid file: %w", err)
 	}
-	pid, parseErr := strconv.Atoi(strings.TrimSpace(string(pidData)))
-	if parseErr != nil {
-		err = fmt.Errorf("parse pid %q: %w", pidData, parseErr)
-		return info, err
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
+	if err != nil {
+		return Info{}, fmt.Errorf("parse pid %q: %w", pidData, err)
 	}
 	if !pidAlive(pid) {
-		err = ErrLeafUnreachable
-		return info, err
+		return Info{}, ErrLeafUnreachable
 	}
 	if !healthzOK(cfg.LeafHTTPURL+"/healthz", 500*time.Millisecond) {
-		err = ErrLeafUnreachable
-		return info, err
+		return Info{}, ErrLeafUnreachable
 	}
-	info = Info{
+	return Info{
 		AgentID:      cfg.AgentID,
 		NATSURL:      cfg.NATSURL,
 		LeafHTTPURL:  cfg.LeafHTTPURL,
 		RepoPath:     cfg.RepoPath,
 		WorkspaceDir: workspaceDir,
-	}
-	return info, nil
+	}, nil
 }
 
 func pickFreePort() (int, error) {

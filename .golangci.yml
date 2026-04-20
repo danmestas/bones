@@ -52,21 +52,6 @@ linters:
           - lll
           - funlen
           - misspell
-      # lll: long lines in Task 9 instrumentation code — tracked in beads for cleanup.
-      - path: cmd/agent-init/main\.go
-        linters: [lll]
-      - path: internal/workspace/config\.go
-        linters: [lll]
-      - path: internal/workspace/workspace\.go
-        linters: [lll, funlen]
-      # lll: integration and unit test rows are long but readable.
-      - path: cmd/agent-init/integration_test\.go
-        linters: [lll, staticcheck]
-      - path: internal/workspace/workspace_test\.go
-        linters: [lll]
-      # errcheck: Body.Close in HTTP verifier — tracked in beads for cleanup.
-      - path: internal/workspace/verify\.go
-        linters: [errcheck]
 
 # golangci-lint v2 splits formatters from linters. gofmt lives here so it can
 # be run via `golangci-lint fmt` and still reported as drift by `run`. The

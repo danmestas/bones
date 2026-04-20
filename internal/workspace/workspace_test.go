@@ -323,7 +323,12 @@ func TestInit_EmitsSlogEvents(t *testing.T) {
 	t.Cleanup(func() { killLeafPID(t, filepath.Join(dir, markerDirName, "leaf.pid")) })
 
 	logs := buf.String()
-	for _, want := range []string{`"msg":"init start"`, `"msg":"init complete"`, `"agent_id":"` + info.AgentID + `"`} {
+	wants := []string{
+		`"msg":"init start"`,
+		`"msg":"init complete"`,
+		`"agent_id":"` + info.AgentID + `"`,
+	}
+	for _, want := range wants {
 		if !strings.Contains(logs, want) {
 			t.Errorf("slog output missing %q.\nFull logs:\n%s", want, logs)
 		}

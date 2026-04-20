@@ -93,10 +93,12 @@ func report(op string, info workspace.Info, err error) int {
 	}
 	switch {
 	case errors.Is(err, workspace.ErrAlreadyInitialized):
-		fmt.Fprintf(os.Stderr, "agent-init: workspace already initialized; run `agent-init join` instead\n")
+		fmt.Fprintln(os.Stderr,
+			"agent-init: workspace already initialized; run `agent-init join` instead")
 		return 2
 	case errors.Is(err, workspace.ErrNoWorkspace):
-		fmt.Fprintf(os.Stderr, "agent-init: no agent-infra workspace found; run `agent-init init` first\n")
+		fmt.Fprintln(os.Stderr,
+			"agent-init: no agent-infra workspace found; run `agent-init init` first")
 		return 3
 	case errors.Is(err, workspace.ErrLeafUnreachable):
 		fmt.Fprintf(os.Stderr, "agent-init: leaf daemon not reachable; its PID file may be stale\n")

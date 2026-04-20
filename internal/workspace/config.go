@@ -40,7 +40,8 @@ func loadConfig(path string) (config, error) {
 		return config{}, fmt.Errorf("parse config: %w", err)
 	}
 	if c.Version != configVersion {
-		return config{}, fmt.Errorf("unsupported config version %d (expected %d)", c.Version, configVersion)
+		return config{}, fmt.Errorf(
+			"unsupported config version %d (expected %d)", c.Version, configVersion)
 	}
 	return c, nil
 }
