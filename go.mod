@@ -6,6 +6,7 @@ require (
 	github.com/danmestas/libfossil v0.1.0
 	github.com/danmestas/libfossil/db/driver/modernc v0.1.0
 	github.com/dmestas/edgesync/leaf v0.0.0-00010101000000-000000000000
+	github.com/google/uuid v1.6.0
 	github.com/nats-io/nats-server/v2 v2.12.6
 	github.com/nats-io/nats.go v1.49.0
 )
@@ -16,7 +17,6 @@ require (
 	github.com/antithesishq/antithesis-sdk-go v0.6.0-default-no-op // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/compress v1.18.4 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/minio/highwayhash v1.0.4-0.20251030100505-070ab1a87a76 // indirect

@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -94,5 +95,44 @@ func TestWalk_NoMarkerReturnsErrNoWorkspace(t *testing.T) {
 	_, err := walkUp(dir)
 	if !errors.Is(err, ErrNoWorkspace) {
 		t.Fatalf("walkUp: got %v, want ErrNoWorkspace", err)
+	}
+}
+
+func TestInit_WritesConfigAndRepo(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: creates fossil repo")
+	}
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	// Temporarily redirect spawnLeaf to a no-op so this test focuses on
+	// config + repo creation. Replace in Task 5 when full Init lands.
+	savedSpawn := spawnLeafFunc
+	spawnLeafFunc = func(ctx context.Context, _ spawnParams) (int, error) { return 0, nil }
+	t.Cleanup(func() { spawnLeafFunc = savedSpawn })
+
+	info, err := Init(ctx, dir)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Marker dir present
+	if _, err := os.Stat(filepath.Join(dir, markerDirName)); err != nil {
+		t.Fatalf("marker dir missing: %v", err)
+	}
+	// Config round-trips
+	cfg, err := loadConfig(filepath.Join(dir, markerDirName, "config.json"))
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if cfg.AgentID == "" {
+		t.Error("config.AgentID empty")
+	}
+	if info.AgentID != cfg.AgentID {
+		t.Errorf("Info.AgentID %q != config %q", info.AgentID, cfg.AgentID)
+	}
+	// Fossil repo file exists
+	if _, err := os.Stat(filepath.Join(dir, markerDirName, "repo.fossil")); err != nil {
+		t.Fatalf("repo.fossil missing: %v", err)
 	}
 }
