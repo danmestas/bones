@@ -426,6 +426,69 @@ func isBoolFlag(f *flag.Flag) bool {
 }
 
 func init() {
+	handlers["claim"] = claimCmd
+}
+
+// errClaimConflict is returned when a task is held by another agent.
+// Wrapped around tasks.ErrInvalidTransition so toExitCode yields 7.
+type errClaimConflict struct{ holder string }
+
+func (e *errClaimConflict) Error() string {
+	return fmt.Sprintf("already claimed by %s; use update --claimed-by=<me> to steal", e.holder)
+}
+func (e *errClaimConflict) Unwrap() error { return tasks.ErrInvalidTransition }
+
+func claimCmd(ctx context.Context, info workspace.Info, args []string) error {
+	return runOp(ctx, "claim", func(ctx context.Context) error {
+		fs := flag.NewFlagSet("claim", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		var asJSON bool
+		fs.BoolVar(&asJSON, "json", false, "emit JSON")
+
+		id, flagArgs := splitIDFromFlags(fs, args)
+		if id == "" {
+			return errors.New("task id is required")
+		}
+		if err := fs.Parse(flagArgs); err != nil {
+			return err
+		}
+
+		mgr, err := openManager(ctx, info)
+		if err != nil {
+			return fmt.Errorf("open manager: %w", err)
+		}
+		defer mgr.Close()
+
+		var updated tasks.Task
+		err = mgr.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
+			switch {
+			case t.Status == tasks.StatusClaimed && t.ClaimedBy == info.AgentID:
+				// Idempotent: already ours.
+				updated = t
+				return t, nil
+			case t.Status == tasks.StatusClaimed:
+				return t, &errClaimConflict{holder: t.ClaimedBy}
+			case t.Status == tasks.StatusClosed:
+				return t, tasks.ErrInvalidTransition
+			}
+			t.Status = tasks.StatusClaimed
+			t.ClaimedBy = info.AgentID
+			t.UpdatedAt = time.Now().UTC()
+			updated = t
+			return t, nil
+		})
+		if err != nil {
+			return err
+		}
+
+		if asJSON {
+			return emitJSON(os.Stdout, updated)
+		}
+		return nil
+	})
+}
+
+func init() {
 	handlers["show"] = showCmd
 }
 
