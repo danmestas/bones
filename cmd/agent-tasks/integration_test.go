@@ -170,3 +170,46 @@ func TestCLI_Create(t *testing.T) {
 		}
 	})
 }
+
+func TestCLI_Show(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	dir := newWorkspace(t)
+
+	// Seed a task
+	createOut, _, code := runCmd(t, binPath, dir, "create", "show me")
+	if code != 0 {
+		t.Fatalf("seed create failed: code=%d", code)
+	}
+	id := firstLine(createOut)
+
+	t.Run("exists", func(t *testing.T) {
+		stdout, stderr, code := runCmd(t, binPath, dir, "show", id)
+		if code != 0 {
+			t.Fatalf("show exit=%d stderr=%s", code, stderr)
+		}
+		for _, sub := range []string{"id=" + id, "title=show me", "status=open"} {
+			if !strings.Contains(stdout, sub) {
+				t.Errorf("show stdout missing %q; got:\n%s", sub, stdout)
+			}
+		}
+	})
+
+	t.Run("missing_id_exits_6", func(t *testing.T) {
+		_, _, code := runCmd(t, binPath, dir, "show", "00000000-0000-0000-0000-000000000000")
+		if code != 6 {
+			t.Errorf("exit=%d, want 6", code)
+		}
+	})
+
+	t.Run("json", func(t *testing.T) {
+		stdout, _, code := runCmd(t, binPath, dir, "show", "--json", id)
+		if code != 0 {
+			t.Fatalf("show --json failed code=%d", code)
+		}
+		if !strings.Contains(stdout, `"id":"`+id+`"`) {
+			t.Errorf("json output missing id: %q", stdout)
+		}
+	})
+}

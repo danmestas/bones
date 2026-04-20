@@ -192,3 +192,39 @@ func createCmd(ctx context.Context, info workspace.Info, args []string) error {
 		return nil
 	})
 }
+
+func init() {
+	handlers["show"] = showCmd
+}
+
+func showCmd(ctx context.Context, info workspace.Info, args []string) error {
+	return runOp(ctx, "show", func(ctx context.Context) error {
+		fs := flag.NewFlagSet("show", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		var asJSON bool
+		fs.BoolVar(&asJSON, "json", false, "emit JSON")
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		if fs.NArg() < 1 {
+			return errors.New("task id is required")
+		}
+		id := fs.Arg(0)
+
+		mgr, err := openManager(ctx, info)
+		if err != nil {
+			return fmt.Errorf("open manager: %w", err)
+		}
+		defer mgr.Close()
+
+		t, _, err := mgr.Get(ctx, id)
+		if err != nil {
+			return err
+		}
+		if asJSON {
+			return emitJSON(os.Stdout, t)
+		}
+		fmt.Print(formatShowBlock(t))
+		return nil
+	})
+}
