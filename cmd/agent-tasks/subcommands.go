@@ -273,6 +273,102 @@ func filterTasks(in []tasks.Task, all bool, status tasks.Status, claimedBy strin
 }
 
 func init() {
+	handlers["update"] = updateCmd
+}
+
+func updateCmd(ctx context.Context, info workspace.Info, args []string) error {
+	return runOp(ctx, "update", func(ctx context.Context) error {
+		fs := flag.NewFlagSet("update", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		var (
+			statusStr string
+			title     string
+			files     string
+			parent    string
+			ctxPairs  contextFlag
+			claimedBy string
+			asJSON    bool
+		)
+		fs.StringVar(&statusStr, "status", "", "open|claimed|closed")
+		fs.StringVar(&title, "title", "", "new title")
+		fs.StringVar(&files, "files", "", "comma-separated file list (replaces existing)")
+		fs.StringVar(&parent, "parent", "", "parent task id")
+		fs.Var(&ctxPairs, "context", "key=value (repeatable; merges with existing)")
+		fs.StringVar(&claimedBy, "claimed-by", "", "agent id to claim as")
+		fs.BoolVar(&asJSON, "json", false, "emit JSON")
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		if fs.NArg() < 1 {
+			return errors.New("task id is required")
+		}
+		id := fs.Arg(0)
+
+		var statusUpdate tasks.Status
+		if statusStr != "" {
+			s, err := parseStatus(statusStr)
+			if err != nil {
+				return err
+			}
+			statusUpdate = s
+		}
+		titleSet := flagSet(fs, "title")
+		filesSet := flagSet(fs, "files")
+		parentSet := flagSet(fs, "parent")
+		claimedBySet := flagSet(fs, "claimed-by")
+
+		mgr, err := openManager(ctx, info)
+		if err != nil {
+			return fmt.Errorf("open manager: %w", err)
+		}
+		defer mgr.Close()
+
+		var updated tasks.Task
+		err = mgr.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
+			if statusUpdate != "" {
+				t.Status = statusUpdate
+			}
+			if titleSet {
+				t.Title = title
+			}
+			if filesSet {
+				t.Files = splitFiles(files)
+			}
+			if parentSet {
+				t.Parent = parent
+			}
+			if claimedBySet {
+				t.ClaimedBy = claimedBy
+			}
+			t.Context = applyContext(t.Context, []string(ctxPairs))
+			t.UpdatedAt = time.Now().UTC()
+			updated = t
+			return t, nil
+		})
+		if err != nil {
+			return err
+		}
+
+		if asJSON {
+			return emitJSON(os.Stdout, updated)
+		}
+		return nil
+	})
+}
+
+// flagSet reports whether the named flag was explicitly set on fs.
+// flag.FlagSet doesn't track this natively, so we walk Visit() output.
+func flagSet(fs *flag.FlagSet, name string) bool {
+	seen := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			seen = true
+		}
+	})
+	return seen
+}
+
+func init() {
 	handlers["show"] = showCmd
 }
 

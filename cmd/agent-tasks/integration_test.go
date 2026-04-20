@@ -288,3 +288,63 @@ func TestCLI_List(t *testing.T) {
 		}
 	})
 }
+
+func TestCLI_Update(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	dir := newWorkspace(t)
+
+	seed := func(title string) string {
+		out, _, code := runCmd(t, binPath, dir, "create", title)
+		if code != 0 {
+			t.Fatalf("seed create %q failed code=%d", title, code)
+		}
+		return firstLine(out)
+	}
+
+	t.Run("title", func(t *testing.T) {
+		id := seed("old title")
+		_, stderr, code := runCmd(t, binPath, dir, "update", id, "--title=new title")
+		if code != 0 {
+			t.Fatalf("update --title failed code=%d stderr=%s", code, stderr)
+		}
+		stdout, _, _ := runCmd(t, binPath, dir, "show", id)
+		if !strings.Contains(stdout, "title=new title") {
+			t.Errorf("title not updated; show:\n%s", stdout)
+		}
+	})
+
+	t.Run("context_merge", func(t *testing.T) {
+		id := seed("ctx test")
+		runCmd(t, binPath, dir, "update", id, "--context", "k1=v1")
+		runCmd(t, binPath, dir, "update", id, "--context", "k2=v2")
+		stdout, _, _ := runCmd(t, binPath, dir, "show", id)
+		if !strings.Contains(stdout, "context.k1=v1") || !strings.Contains(stdout, "context.k2=v2") {
+			t.Errorf("merge failed; show:\n%s", stdout)
+		}
+	})
+
+	t.Run("claimed_by", func(t *testing.T) {
+		id := seed("claimed via update")
+		_, stderr, code := runCmd(t, binPath, dir, "update", id, "--claimed-by=other-agent")
+		if code != 0 {
+			t.Fatalf("update --claimed-by failed code=%d stderr=%s", code, stderr)
+		}
+		stdout, _, _ := runCmd(t, binPath, dir, "show", id)
+		if !strings.Contains(stdout, "claimed_by=other-agent") {
+			t.Errorf("claimed_by not set; show:\n%s", stdout)
+		}
+	})
+
+	t.Run("invalid_status_exits_1", func(t *testing.T) {
+		id := seed("bad status")
+		_, stderr, code := runCmd(t, binPath, dir, "update", id, "--status=bogus")
+		if code != 1 {
+			t.Errorf("exit=%d, want 1", code)
+		}
+		if !strings.Contains(stderr, "invalid status") {
+			t.Errorf("stderr should flag invalid status: %q", stderr)
+		}
+	})
+}
