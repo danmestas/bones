@@ -1,8 +1,10 @@
 package workspace
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -295,5 +297,35 @@ func TestJoin_StaleLeaf(t *testing.T) {
 	_, err := Join(ctx, dir)
 	if !errors.Is(err, ErrLeafUnreachable) {
 		t.Fatalf("Join: got %v, want ErrLeafUnreachable", err)
+	}
+}
+
+func TestInit_EmitsSlogEvents(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: spawns leaf")
+	}
+	requireLeafBinary(t)
+
+	var buf bytes.Buffer
+	handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(oldLogger) })
+
+	dir := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	info, err := Init(ctx, dir)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	t.Cleanup(func() { killLeafPID(t, filepath.Join(dir, markerDirName, "leaf.pid")) })
+
+	logs := buf.String()
+	for _, want := range []string{`"msg":"init start"`, `"msg":"init complete"`, `"agent_id":"` + info.AgentID + `"`} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("slog output missing %q.\nFull logs:\n%s", want, logs)
+		}
 	}
 }

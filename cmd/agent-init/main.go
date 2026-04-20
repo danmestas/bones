@@ -10,11 +10,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/danmestas/agent-infra/internal/workspace"
+	"github.com/dmestas/edgesync/leaf/telemetry"
 )
 
 const usage = `Usage:
@@ -31,6 +34,11 @@ func run(args []string) int {
 		fmt.Fprint(os.Stderr, usage)
 		return 1
 	}
+
+	if os.Getenv("AGENT_INFRA_LOG") == "json" {
+		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-init: cwd: %v\n", err)
@@ -38,6 +46,20 @@ func run(args []string) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	tcfg := telemetry.TelemetryConfig{
+		ServiceName: "agent-init",
+		Endpoint:    os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+	}
+	if hdrs := os.Getenv("OTEL_EXPORTER_OTLP_HEADERS"); hdrs != "" {
+		tcfg.Headers = parseOTelHeaders(hdrs)
+	}
+	shutdown, err := telemetry.Setup(ctx, tcfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agent-init: telemetry setup: %v\n", err)
+	} else {
+		defer func() { _ = shutdown(context.Background()) }()
+	}
 
 	switch args[0] {
 	case "init":
@@ -50,6 +72,17 @@ func run(args []string) int {
 		fmt.Fprintf(os.Stderr, "agent-init: unknown command %q\n%s", args[0], usage)
 		return 1
 	}
+}
+
+func parseOTelHeaders(s string) map[string]string {
+	out := map[string]string{}
+	for _, pair := range strings.Split(s, ",") {
+		kv := strings.SplitN(pair, "=", 2)
+		if len(kv) == 2 {
+			out[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
+		}
+	}
+	return out
 }
 
 func report(op string, info workspace.Info, err error) int {
