@@ -194,6 +194,85 @@ func createCmd(ctx context.Context, info workspace.Info, args []string) error {
 }
 
 func init() {
+	handlers["list"] = listCmd
+}
+
+func listCmd(ctx context.Context, info workspace.Info, args []string) error {
+	return runOp(ctx, "list", func(ctx context.Context) error {
+		fs := flag.NewFlagSet("list", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		var (
+			all       bool
+			statusStr string
+			claimedBy string
+			asJSON    bool
+		)
+		fs.BoolVar(&all, "all", false, "include closed tasks")
+		fs.StringVar(&statusStr, "status", "", "open|claimed|closed")
+		fs.StringVar(&claimedBy, "claimed-by", "", "agent id, or - for unclaimed")
+		fs.BoolVar(&asJSON, "json", false, "emit JSON")
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+
+		var filterStatus tasks.Status
+		if statusStr != "" {
+			s, err := parseStatus(statusStr)
+			if err != nil {
+				return err
+			}
+			filterStatus = s
+		}
+
+		mgr, err := openManager(ctx, info)
+		if err != nil {
+			return fmt.Errorf("open manager: %w", err)
+		}
+		defer mgr.Close()
+
+		allTasks, err := mgr.List(ctx)
+		if err != nil {
+			return err
+		}
+
+		out := filterTasks(allTasks, all, filterStatus, claimedBy)
+
+		if asJSON {
+			return emitJSON(os.Stdout, out)
+		}
+		for _, t := range out {
+			fmt.Println(formatListLine(t))
+		}
+		return nil
+	})
+}
+
+// filterTasks applies the list filters in-memory. The Manager returns the
+// full set; filtering client-side keeps the Manager interface tiny.
+func filterTasks(in []tasks.Task, all bool, status tasks.Status, claimedBy string) []tasks.Task {
+	out := make([]tasks.Task, 0, len(in))
+	for _, t := range in {
+		if !all && t.Status == tasks.StatusClosed {
+			continue
+		}
+		if status != "" && t.Status != status {
+			continue
+		}
+		if claimedBy != "" {
+			if claimedBy == "-" {
+				if t.ClaimedBy != "" {
+					continue
+				}
+			} else if t.ClaimedBy != claimedBy {
+				continue
+			}
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+func init() {
 	handlers["show"] = showCmd
 }
 
