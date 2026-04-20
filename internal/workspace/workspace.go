@@ -45,6 +45,26 @@ var (
 	ErrLeafStartTimeout   = errors.New("leaf daemon failed to start within timeout")
 )
 
+// ExitCode maps errors returned by Init and Join to conventional process exit
+// codes: 0 on success, 2-5 for known sentinels, 1 for anything else. Callers
+// that want a different convention can inspect errors directly.
+func ExitCode(err error) int {
+	switch {
+	case err == nil:
+		return 0
+	case errors.Is(err, ErrAlreadyInitialized):
+		return 2
+	case errors.Is(err, ErrNoWorkspace):
+		return 3
+	case errors.Is(err, ErrLeafUnreachable):
+		return 4
+	case errors.Is(err, ErrLeafStartTimeout):
+		return 5
+	default:
+		return 1
+	}
+}
+
 var (
 	tracer = otel.Tracer("github.com/danmestas/agent-infra/internal/workspace")
 	meter  = otel.Meter("github.com/danmestas/agent-infra/internal/workspace")
@@ -78,18 +98,19 @@ type spawnParams struct {
 var spawnLeafFunc = spawnLeaf
 
 // instrumented wraps op with a span, slog start/complete events, and op metrics.
-// fn receives a ctx that carries the span so nested emissions link correctly.
+// The span is carried in ctx; logic functions pull it via trace.SpanFromContext
+// when they need to attach attributes.
 func instrumented(
 	ctx context.Context,
 	op, cwd string,
-	fn func(context.Context, trace.Span) (Info, error),
+	fn func(context.Context) (Info, error),
 ) (Info, error) {
 	ctx, span := tracer.Start(ctx, "agent_init."+op)
 	defer span.End()
 	start := time.Now()
 	slog.InfoContext(ctx, op+" start", "cwd", cwd)
 
-	info, err := fn(ctx, span)
+	info, err := fn(ctx)
 
 	result := "success"
 	if err != nil {
@@ -113,12 +134,12 @@ func instrumented(
 // returns its connection info. Returns ErrAlreadyInitialized if .agent-infra/
 // already exists in cwd.
 func Init(ctx context.Context, cwd string) (Info, error) {
-	return instrumented(ctx, "init", cwd, func(ctx context.Context, span trace.Span) (Info, error) {
-		return initLogic(ctx, span, cwd)
+	return instrumented(ctx, "init", cwd, func(ctx context.Context) (Info, error) {
+		return initLogic(ctx, cwd)
 	})
 }
 
-func initLogic(ctx context.Context, span trace.Span, cwd string) (Info, error) {
+func initLogic(ctx context.Context, cwd string) (Info, error) {
 	markerDir := filepath.Join(cwd, markerDirName)
 	if _, err := os.Stat(markerDir); err == nil {
 		return Info{}, ErrAlreadyInitialized
@@ -151,7 +172,7 @@ func initLogic(ctx context.Context, span trace.Span, cwd string) (Info, error) {
 	}
 
 	slog.InfoContext(ctx, "agent_id generated", "agent_id", cfg.AgentID)
-	span.SetAttributes(attribute.String("agent_id", cfg.AgentID))
+	trace.SpanFromContext(ctx).SetAttributes(attribute.String("agent_id", cfg.AgentID))
 
 	repo, err := libfossil.Create(repoPath, libfossil.CreateOpts{User: cfg.AgentID})
 	if err != nil {
@@ -185,12 +206,12 @@ func initLogic(ctx context.Context, span trace.Span, cwd string) (Info, error) {
 // Join locates the nearest .agent-infra/ walking up from cwd and verifies
 // the recorded leaf is still reachable.
 func Join(ctx context.Context, cwd string) (Info, error) {
-	return instrumented(ctx, "join", cwd, func(ctx context.Context, span trace.Span) (Info, error) {
-		return joinLogic(ctx, span, cwd)
+	return instrumented(ctx, "join", cwd, func(ctx context.Context) (Info, error) {
+		return joinLogic(ctx, cwd)
 	})
 }
 
-func joinLogic(ctx context.Context, span trace.Span, cwd string) (Info, error) {
+func joinLogic(ctx context.Context, cwd string) (Info, error) {
 	workspaceDir, err := walkUp(cwd)
 	if err != nil {
 		return Info{}, err
@@ -201,7 +222,7 @@ func joinLogic(ctx context.Context, span trace.Span, cwd string) (Info, error) {
 	}
 
 	slog.InfoContext(ctx, "config loaded", "agent_id", cfg.AgentID)
-	span.SetAttributes(attribute.String("agent_id", cfg.AgentID))
+	trace.SpanFromContext(ctx).SetAttributes(attribute.String("agent_id", cfg.AgentID))
 
 	pidData, err := os.ReadFile(filepath.Join(workspaceDir, markerDirName, "leaf.pid"))
 	if err != nil {
