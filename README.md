@@ -289,6 +289,34 @@ go test ./...
 you find yourself editing inside `reference/` that's a sign something's
 miswired.
 
+### Getting started with `agent-init`
+
+`agent-init` creates an `.agent-infra/` workspace and starts a local
+`leaf` daemon, or rejoins an existing workspace from any subdir.
+
+```bash
+# Build the binary (leaves it at ./bin/agent-init):
+make agent-init
+
+# First time in a fresh directory — starts a leaf, writes .agent-infra/:
+$ ./bin/agent-init init
+workspace=/path/to/dir
+agent_id=7c3d…
+nats_url=nats://127.0.0.1:4222
+leaf_http_url=http://127.0.0.1:51234
+
+# From any descendant directory — walks up to find the marker:
+$ ./bin/agent-init join
+workspace=/path/to/dir
+…
+```
+
+The `leaf` binary must be on `PATH` (or `LEAF_BIN` set to its absolute
+path). Build it from EdgeSync with `cd ../EdgeSync && make leaf`. Leaf
+stdout/stderr lands in `.agent-infra/leaf.log`; the PID sits at
+`.agent-infra/leaf.pid`. Set `AGENT_INFRA_LOG=json` to switch
+`agent-init`'s own logs to JSON.
+
 Release-time: each of the three repos (`agent-infra`, `EdgeSync`,
 `libfossil`) is tagged and published independently. `agent-infra`
 consumes tagged versions of the other two. No monorepo pressure.
