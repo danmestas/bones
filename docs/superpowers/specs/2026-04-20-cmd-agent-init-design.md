@@ -12,10 +12,10 @@ Give humans a one-command entry point to stand up an agent-infra workspace and j
 
 In scope:
 - `cmd/agent-init/` binary with two subcommands: `init`, `join`
-- Internal packages under `internal/initcmd/` for logic (keeps main thin, testable)
+- Single internal package `internal/workspace/` — two exported functions (`Init`, `Join`) plus `Info` value, all helpers unexported
 - `.agent-infra/` on-disk layout (config, pid, log, fossil repo)
 - Real-leaf integration test suite
-- slog + OTel instrumentation
+- slog + OTel instrumentation (wired from `main.go`, no package wrapper)
 
 Out of scope:
 - `cmd/agent-tasks` — separate ticket (agent-infra-9z0)
@@ -33,26 +33,48 @@ Out of scope:
 
 ## Architecture
 
+One deep package — two exported functions hiding ~400 LoC of filesystem, subprocess, HTTP, and rollback work.
+
 ```
-cmd/agent-init/main.go                     # CLI entry, flag parsing, dispatch
+cmd/agent-init/main.go                     # CLI entry: flag parsing, telemetry setup, call workspace.Init/Join
 cmd/agent-init/integration_test.go         # end-to-end with real leaf
 
-internal/initcmd/
-    walker.go        walker_test.go        # find .agent-infra/ upward
-    marker.go        marker_test.go        # create/read .agent-infra/
-    spawner.go       spawner_test.go       # exec leaf, wait for healthz, write pid
-    joiner.go        joiner_test.go        # verify pid + healthz alive, print URLs
-    config.go        config_test.go        # JSON schema + load/save
-    telemetry.go                           # slog + OTel wiring
+internal/workspace/
+    workspace.go         # exported: Init, Join, Info, error sentinels
+    workspace_test.go    # exercises exported surface + unexported helpers
+
+    # unexported helpers live in separate files for readability but are not a public surface:
+    walk.go              # find .agent-infra/ upward from cwd
+    config.go            # JSON schema + load/save
+    spawn.go             # exec leaf, poll healthz, write pid, rollback on failure
+    verify.go            # signal(0) + healthz GET
 ```
 
-Each unit answers:
-- **walker** — where is `.agent-infra/` relative to cwd? (filesystem only)
-- **marker** — create a fresh `.agent-infra/` dir tree with defaults
-- **config** — serialize/deserialize `config.json`
-- **spawner** — launch leaf, block until healthy, persist pid
-- **joiner** — confirm a running leaf matches the stored config
-- **main** — orchestrate: parse flags, call the right unit, format output
+Public surface (the interface the caller sees — small, deep):
+
+```go
+package workspace
+
+type Info struct {
+    AgentID      string
+    NATSURL      string
+    LeafHTTPURL  string
+    RepoPath     string
+    WorkspaceDir string
+}
+
+func Init(ctx context.Context, cwd string) (Info, error)  // creates + starts
+func Join(ctx context.Context, cwd string) (Info, error)  // walks + verifies
+
+var (
+    ErrAlreadyInitialized = errors.New(...)
+    ErrNoWorkspace        = errors.New(...)
+    ErrLeafUnreachable    = errors.New(...)
+    ErrLeafStartTimeout   = errors.New(...)
+)
+```
+
+`main.go` maps sentinel errors to exit codes. No other package imports `workspace` internals.
 
 ## `.agent-infra/` layout
 
@@ -119,44 +141,41 @@ Rollback rules:
 
 ## Testing
 
-### Unit tests
+All tests use `t.TempDir()` and real processes — no mocks.
 
-Each internal package has its own `_test.go` using `t.TempDir()`. No mocks:
-- `walker_test.go` — real nested tmpdirs
-- `marker_test.go` — real filesystem
-- `config_test.go` — JSON round-trip
-- `spawner_test.go` — spawns `/bin/sleep 30` as a stand-in for leaf (tests spawn mechanics, not leaf specifically)
-- `joiner_test.go` — spawns real leaf but scoped to the test
-- `telemetry_test.go` — in-memory OTel exporter, assert spans emitted
+### `internal/workspace/workspace_test.go` (package-internal)
 
-### Integration tests (`cmd/agent-init/integration_test.go`)
-
-Skipped under `-short`. Require `leaf` binary on PATH or `LEAF_BIN` env var. Suggested Makefile target builds it first.
+Exercises `Init`/`Join` directly plus unexported helpers. Spawns a real `leaf` binary (or a `-short`-gated stub when `leaf` isn't available). Covers:
 
 | Test | Flow | Asserts |
 |------|------|---------|
-| `TestInit_FreshDir` | tmpdir → `init` | `.agent-infra/` exists, pid alive, healthz 200, config round-trips |
-| `TestJoin_FromSubdir` | init → mkdir/chdir `a/b/c` → `join` | walker finds marker, output matches init |
-| `TestInit_AlreadyInitialized` | init twice | second call exits 2, first workspace untouched |
-| `TestJoin_NoMarker` | tmpdir → `join` | exits 3 |
-| `TestJoin_StaleLeaf` | init → kill leaf pid → `join` | exits 4 |
-| `TestInit_RollbackOnLeafFailure` | force leaf to fail (bogus repo) | `.agent-infra/` removed |
+| `TestInit_FreshDir` | tmpdir → `Init` | `.agent-infra/` populated, pid alive, healthz 200, `Info` fields match on-disk config |
+| `TestJoin_FromSubdir` | `Init` → nested subdir → `Join` | walker locates marker; `Join.Info` equals `Init.Info` |
+| `TestInit_AlreadyInitialized` | `Init` twice | second returns `ErrAlreadyInitialized`; first workspace untouched |
+| `TestJoin_NoMarker` | bare tmpdir → `Join` | returns `ErrNoWorkspace` |
+| `TestJoin_StaleLeaf` | `Init` → kill pid → `Join` | returns `ErrLeafUnreachable` |
+| `TestInit_RollbackOnLeafFailure` | force leaf failure (bogus repo flag) | returns error, `.agent-infra/` removed |
+| `TestWalk_FindsMarker`, `TestWalk_StopsAtRoot` | exercises unexported `walk()` directly | filesystem edge cases |
+| `TestConfig_RoundTrip`, `TestConfig_RejectsUnknownVersion` | exercises unexported config load/save | schema guards |
 
-Teardown on every test: `t.Cleanup` kills any leaf pid and `os.RemoveAll` the tmpdir.
+Teardown on every test: `t.Cleanup` kills any leaf pid and relies on `t.TempDir`'s own removal.
+
+### `cmd/agent-init/integration_test.go` (binary-level)
+
+Skipped under `-short`. Requires `agent-init` and `leaf` both built. Covers the exit-code surface that `workspace_test.go` cannot — error-to-exit-code mapping, flag parsing, stderr formatting. Shared `TestInit_FreshDir`/`TestJoin_FromSubdir` scenarios re-run through the binary to catch main.go wiring regressions.
 
 ### TDD order (red-green)
 
-Smallest-first so each step's failure mode is obvious:
+Inside-out so each step exercises real boundaries as soon as possible:
 
-1. `walker` — pure filesystem
-2. `config` — JSON round-trip
-3. `marker` — uses walker+config
-4. `spawner` — real subprocess, real port
-5. `joiner` — composes all above
-6. `main.go` — wire commands
-7. integration tests — full stack
+1. `config` + `walk` — pure helpers, fastest feedback
+2. `workspace.Init` — write failing `TestInit_FreshDir`, implement end-to-end (includes spawn + healthz)
+3. `workspace.Join` — failing `TestJoin_FromSubdir`, implement
+4. Error paths — one test at a time, one sentinel at a time
+5. `main.go` + exit codes — wire the CLI, failing integration test
+6. Observability — add slog/OTel assertions last (behavior already correct)
 
-Each step: write failing test, run, see red, implement minimum, run, see green, refactor.
+Each step: failing test, run, see red, implement minimum, run, see green, refactor.
 
 ## Observability
 
@@ -172,12 +191,9 @@ JSON output when `AGENT_INFRA_LOG=json`; otherwise text handler to stderr.
 
 ### OTel
 
-Reuse `github.com/dmestas/edgesync/leaf/telemetry` — already a dependency, no new module required. No-op when `OTEL_EXPORTER_OTLP_ENDPOINT` is unset.
+`main.go` calls `github.com/dmestas/edgesync/leaf/telemetry.Setup()` directly — no wrapper package. Already a transitive dependency. No-op when `OTEL_EXPORTER_OTLP_ENDPOINT` is unset.
 
-Spans:
-- `agent_init.init` (root for init)
-- `agent_init.join` (root for join)
-- child spans: `walk`, `write_config`, `create_repo`, `spawn_leaf`, `healthz_poll`
+`workspace.Init` and `workspace.Join` create root spans (`agent_init.init`, `agent_init.join`). Child spans for the significant internal steps: `walk`, `write_config`, `create_repo`, `spawn_leaf`, `healthz_poll`.
 
 Metrics:
 - `agent_init.operations.total{op,result}` — counter
