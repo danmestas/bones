@@ -213,3 +213,78 @@ func TestCLI_Show(t *testing.T) {
 		}
 	})
 }
+
+func TestCLI_List(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	dir := newWorkspace(t)
+
+	// Seed three tasks; we'll mutate the last one via update in Task 8 tests —
+	// for now just create three open tasks.
+	var ids []string
+	for _, title := range []string{"first", "second", "third"} {
+		out, _, code := runCmd(t, binPath, dir, "create", title)
+		if code != 0 {
+			t.Fatalf("seed create %q failed code=%d", title, code)
+		}
+		ids = append(ids, firstLine(out))
+	}
+
+	t.Run("default_excludes_nothing_here_yet", func(t *testing.T) {
+		// With no closed tasks, default list should show all 3.
+		stdout, stderr, code := runCmd(t, binPath, dir, "list")
+		if code != 0 {
+			t.Fatalf("list exit=%d stderr=%s", code, stderr)
+		}
+		lines := strings.Split(strings.TrimSpace(stdout), "\n")
+		if len(lines) != 3 {
+			t.Errorf("expected 3 lines, got %d:\n%s", len(lines), stdout)
+		}
+		for _, id := range ids {
+			if !strings.Contains(stdout, id) {
+				t.Errorf("list missing id %s", id)
+			}
+		}
+	})
+
+	t.Run("status_open_filter", func(t *testing.T) {
+		stdout, _, code := runCmd(t, binPath, dir, "list", "--status=open")
+		if code != 0 {
+			t.Fatalf("list --status=open failed code=%d", code)
+		}
+		if strings.Count(stdout, "\n") != 3 {
+			t.Errorf("expected 3 lines for open filter, got:\n%s", stdout)
+		}
+	})
+
+	t.Run("status_invalid_exits_1", func(t *testing.T) {
+		_, stderr, code := runCmd(t, binPath, dir, "list", "--status=bogus")
+		if code != 1 {
+			t.Errorf("exit=%d, want 1 (usage error)", code)
+		}
+		if !strings.Contains(stderr, "invalid status") {
+			t.Errorf("stderr should flag invalid status: %q", stderr)
+		}
+	})
+
+	t.Run("claimed_by_unclaimed", func(t *testing.T) {
+		stdout, _, code := runCmd(t, binPath, dir, "list", "--claimed-by=-")
+		if code != 0 {
+			t.Fatalf("list --claimed-by=- failed code=%d", code)
+		}
+		if strings.Count(stdout, "\n") != 3 {
+			t.Errorf("expected all 3 unclaimed, got:\n%s", stdout)
+		}
+	})
+
+	t.Run("json", func(t *testing.T) {
+		stdout, _, code := runCmd(t, binPath, dir, "list", "--json")
+		if code != 0 {
+			t.Fatalf("list --json failed code=%d", code)
+		}
+		if !strings.HasPrefix(strings.TrimSpace(stdout), "[") {
+			t.Errorf("json output should be an array, got: %q", stdout)
+		}
+	})
+}
