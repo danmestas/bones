@@ -15,6 +15,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/danmestas/libfossil"
@@ -117,7 +119,35 @@ func Init(ctx context.Context, cwd string) (Info, error) {
 // Join locates the nearest .agent-infra/ walking up from cwd and verifies
 // the recorded leaf is still reachable.
 func Join(ctx context.Context, cwd string) (Info, error) {
-	return Info{}, errors.New("not implemented")
+	workspaceDir, err := walkUp(cwd)
+	if err != nil {
+		return Info{}, err
+	}
+	cfg, err := loadConfig(filepath.Join(workspaceDir, markerDirName, "config.json"))
+	if err != nil {
+		return Info{}, fmt.Errorf("load config: %w", err)
+	}
+	pidData, err := os.ReadFile(filepath.Join(workspaceDir, markerDirName, "leaf.pid"))
+	if err != nil {
+		return Info{}, fmt.Errorf("read pid file: %w", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
+	if err != nil {
+		return Info{}, fmt.Errorf("parse pid %q: %w", pidData, err)
+	}
+	if !pidAlive(pid) {
+		return Info{}, ErrLeafUnreachable
+	}
+	if !healthzOK(cfg.LeafHTTPURL+"/healthz", 500*time.Millisecond) {
+		return Info{}, ErrLeafUnreachable
+	}
+	return Info{
+		AgentID:      cfg.AgentID,
+		NATSURL:      cfg.NATSURL,
+		LeafHTTPURL:  cfg.LeafHTTPURL,
+		RepoPath:     cfg.RepoPath,
+		WorkspaceDir: workspaceDir,
+	}, nil
 }
 
 func pickFreePort() (int, error) {
