@@ -28,7 +28,8 @@ const usage = `Usage:
   agent-tasks list   [--all] [--status=X] [--claimed-by=X] [--json]
   agent-tasks show   <id> [--json]
   agent-tasks claim  <id> [--json]
-  agent-tasks update <id> [--status=X] [--title=...] [--files=a,b,c] [--parent=<id>] [--context k=v]... [--claimed-by=X] [--json]
+  agent-tasks update <id> [--status=X] [--title=...] [--files=a,b,c] [--parent=<id>]
+                          [--context k=v]... [--claimed-by=X] [--json]
   agent-tasks close  <id> [--reason="..."] [--json]
 `
 
