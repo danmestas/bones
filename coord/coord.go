@@ -13,6 +13,7 @@ import (
 
 	"github.com/danmestas/agent-infra/internal/assert"
 	"github.com/danmestas/agent-infra/internal/chat"
+	"github.com/danmestas/agent-infra/internal/fossil"
 	"github.com/danmestas/agent-infra/internal/holds"
 	"github.com/danmestas/agent-infra/internal/presence"
 	"github.com/danmestas/agent-infra/internal/tasks"
@@ -134,6 +135,14 @@ func openSubstrate(
 	}); err != nil {
 		s.close()
 		return nil, fmt.Errorf("coord.Open: presence: %w", err)
+	}
+	if s.fossil, err = fossil.Open(ctx, fossil.Config{
+		AgentID:      cfg.AgentID,
+		RepoPath:     cfg.FossilRepoPath,
+		CheckoutRoot: cfg.CheckoutRoot,
+	}); err != nil {
+		s.close()
+		return nil, fmt.Errorf("coord.Open: fossil: %w", err)
 	}
 	return s, nil
 }

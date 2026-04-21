@@ -39,6 +39,8 @@ func validConfig(t *testing.T) Config {
 		NATSMaxReconnects:  5,
 		NATSURL:            "nats://127.0.0.1:0",
 		ChatFossilRepoPath: filepath.Join(t.TempDir(), "chat.fossil"),
+		FossilRepoPath:     filepath.Join(t.TempDir(), "code.fossil"),
+		CheckoutRoot:       t.TempDir(),
 	}
 }
 

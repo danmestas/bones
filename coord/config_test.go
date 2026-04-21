@@ -25,6 +25,8 @@ func baselineConfig() Config {
 		NATSMaxReconnects:  5,
 		NATSURL:            "nats://127.0.0.1:4222",
 		ChatFossilRepoPath: "/tmp/coord-baseline-chat.fossil",
+		FossilRepoPath:     "/tmp/coord-baseline-code.fossil",
+		CheckoutRoot:       "/tmp/coord-baseline-checkouts",
 	}
 }
 
@@ -143,6 +145,16 @@ func TestConfigValidate_Invalid(t *testing.T) {
 			name:    "empty ChatFossilRepoPath",
 			mutate:  func(c *Config) { c.ChatFossilRepoPath = "" },
 			wantKey: "ChatFossilRepoPath",
+		},
+		{
+			name:    "empty FossilRepoPath",
+			mutate:  func(c *Config) { c.FossilRepoPath = "" },
+			wantKey: "FossilRepoPath",
+		},
+		{
+			name:    "empty CheckoutRoot",
+			mutate:  func(c *Config) { c.CheckoutRoot = "" },
+			wantKey: "CheckoutRoot",
 		},
 	}
 	for _, tc := range cases {
