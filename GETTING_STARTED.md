@@ -32,7 +32,7 @@ provide natively.
   handing off to you. So task tracking lives in beads (`bd` CLI) now.
 
 **Active phase**: Phase 0 — scaffolding. See README.md "Initial plan" for
-the full sequence through Phase 6.
+the full sequence through Phase 8.
 
 ## 3. The beads dual role (important — don't confuse these)
 

@@ -237,6 +237,20 @@ NATS carries:
   explicitly mark as non-goal with rationale
 - Write a short "migrating from beads" note if the overlap warrants it
 
+### Phase 7 — MCP integration (per hf1)
+
+- ADR pinning whether `coord` exposes an MCP server directly or
+  whether a separate `cmd/agent-mcp/` wraps it
+- Lets external LLM agents consume coord primitives via the Model
+  Context Protocol
+
+### Phase 8 — ACL / role-based authorization (per ba6)
+
+- ADR pinning the ACL model (per-task ACL, per-project role,
+  JWT-carried claims)
+- Gates `AskAdmin`, `Merge`, `Reclaim`, and other surfaces currently
+  open to any agent
+
 ---
 
 ## Repository layout (planned — created as phases land)

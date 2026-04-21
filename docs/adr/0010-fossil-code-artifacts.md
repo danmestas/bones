@@ -68,9 +68,10 @@ rev; `coord.Diff(ctx, revA, revB)` surfaces a diff between two revs.
 The API mirrors the minimal-surface philosophy of ADR 0001.
 `libfossil` exposes more than this (`Add`, `Status`, `HasChanges`,
 `ListFiles`, raw UUID round-trips); coord exposes the five methods
-above and hides the rest behind the `internal/fossil` manager. If
-Phase 6+ surfaces a need for a narrower primitive, that primitive is
-added as a new method, not as a leak of the `Repo`/`Checkout` types.
+above and hides the rest behind the `internal/fossil` manager. If a
+later phase surfaces a need for a narrower primitive, that primitive
+is added as a new method, not as a leak of the `Repo`/`Checkout`
+types.
 
 `RevID` is a coord-owned type — a string alias — not a Fossil UUID.
 The substrate-hiding commitment (ADR 0003) means agents never see
@@ -177,7 +178,7 @@ func (c *Coord) Merge(
 
 Both `src` and `dst` are branch names. Any agent (or human via a CLI
 thin-wrapping coord) may call `Merge`; Phase 5 does not introduce a
-supervisor role. Role-based authorization is a Phase 6+ concern,
+supervisor role. Role-based authorization is a Phase 8+ concern,
 matching ADR 0009's deferral of the admin role.
 
 This is consistent with ADR 0004 as narrowed by ADR 0006: fork plus
@@ -230,7 +231,7 @@ func (c *Coord) Diff(
 
 // Merge combines two branches into a single commit with both as
 // parents. Returns the rev of the merge commit. Any agent may call;
-// role gating is Phase 6+.
+// role gating is Phase 8+.
 func (c *Coord) Merge(
     ctx context.Context, src, dst string, message string,
 ) (RevID, error)
@@ -341,9 +342,9 @@ clock-skew collision observable. The single-host assumption is
 consistent with Phase 5 leaf-daemon-per-host semantics.
 
 **Merge authorization.** RESOLVED in 0p9.4: any agent may call
-`coord.Merge` in Phase 5. Role gating is deferred to Phase 6+
+`coord.Merge` in Phase 5. Role gating is deferred to Phase 8+
 alongside the admin role (ADR 0009). The gating mechanism (config
-flag vs. role-based) is itself a Phase 6+ design question and is
+flag vs. role-based) is itself a Phase 8+ design question and is
 not re-litigated here.
 
 **Large-file payloads.** `Commit`'s `[]File` takes content by byte
