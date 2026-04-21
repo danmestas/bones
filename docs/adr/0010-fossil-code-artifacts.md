@@ -336,13 +336,11 @@ a tiebreaker) is deferred until a multi-host deployment shape makes
 clock-skew collision observable. The single-host assumption is
 consistent with Phase 5 leaf-daemon-per-host semantics.
 
-**Merge authorization.** Currently any agent can call `Merge`.
-Should a supervisor-only gate appear in Phase 5, or defer to Phase
-6+? Defer is the default (matches ADR 0009's admin-role deferral),
-but if early smoke tests show a pattern of agents merging their own
-forks without supervisor review, Phase 5 may add an opt-in gate.
-Decision lives outside this ADR because the gating mechanism
-(config flag vs. role-based) is itself a Phase 6+ design question.
+**Merge authorization.** RESOLVED in 0p9.4: any agent may call
+`coord.Merge` in Phase 5. Role gating is deferred to Phase 6+
+alongside the admin role (ADR 0009). The gating mechanism (config
+flag vs. role-based) is itself a Phase 6+ design question and is
+not re-litigated here.
 
 **Large-file payloads.** `Commit`'s `[]File` takes content by byte
 slice in memory. Large artifacts (binaries, generated assets) would
