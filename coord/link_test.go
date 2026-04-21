@@ -1,0 +1,104 @@
+package coord
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/danmestas/agent-infra/internal/tasks"
+)
+
+// linkTestSeed creates an open, unclaimed task via the existing
+// seedTask helper and returns its TaskID.
+func linkTestSeed(t *testing.T, c *Coord, id, title string) TaskID {
+	t.Helper()
+	rec := readyBaseline(id, time.Now().UTC())
+	rec.Title = title
+	seedTask(t, c, rec)
+	return TaskID(rec.ID)
+}
+
+// linkTestClose stamps a seeded task as closed by direct KV write.
+// Avoids the Claim→CloseTask flow — these tests are not about that
+// lifecycle.
+func linkTestClose(t *testing.T, c *Coord, id TaskID) {
+	t.Helper()
+	now := time.Now().UTC()
+	rec := readyBaseline(string(id), now)
+	rec.Status = tasks.StatusClosed
+	rec.ClosedAt = &now
+	rec.ClosedReason = "test-close"
+	seedRawTask(t, c, rec)
+}
+
+func TestLink_HappyPath(t *testing.T) {
+	c := mustOpen(t)
+	ctx := context.Background()
+	from := linkTestSeed(t, c, "agent-infra-ll11", "linker")
+	to := linkTestSeed(t, c, "agent-infra-ll22", "target")
+
+	if err := c.Link(ctx, from, to, EdgeBlocks); err != nil {
+		t.Fatalf("Link: %v", err)
+	}
+
+	rec, _, err := c.sub.tasks.Get(ctx, string(from))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(rec.Edges) != 1 {
+		t.Fatalf("Edges len = %d, want 1", len(rec.Edges))
+	}
+	got := rec.Edges[0]
+	if got.Type != EdgeBlocks || got.Target != string(to) {
+		t.Errorf("Edges[0] = %+v, want {blocks, %s}", got, to)
+	}
+}
+
+func TestLink_InvalidEdgeType(t *testing.T) {
+	c := mustOpen(t)
+	ctx := context.Background()
+	from := linkTestSeed(t, c, "agent-infra-ll33", "linker")
+	to := linkTestSeed(t, c, "agent-infra-ll44", "target")
+
+	err := c.Link(ctx, from, to, EdgeType("bogus"))
+	if !errors.Is(err, ErrInvalidEdgeType) {
+		t.Errorf("err = %v, want ErrInvalidEdgeType", err)
+	}
+}
+
+func TestLink_FromNotFound(t *testing.T) {
+	c := mustOpen(t)
+	ctx := context.Background()
+	to := linkTestSeed(t, c, "agent-infra-ll55", "target")
+
+	err := c.Link(ctx, TaskID("agent-infra-nonexist"), to, EdgeBlocks)
+	if !errors.Is(err, ErrTaskNotFound) {
+		t.Errorf("err = %v, want ErrTaskNotFound", err)
+	}
+}
+
+func TestLink_ToNotFound(t *testing.T) {
+	c := mustOpen(t)
+	ctx := context.Background()
+	from := linkTestSeed(t, c, "agent-infra-ll66", "linker")
+
+	err := c.Link(ctx, from, TaskID("agent-infra-nonexist"), EdgeBlocks)
+	if !errors.Is(err, ErrTaskNotFound) {
+		t.Errorf("err = %v, want ErrTaskNotFound", err)
+	}
+}
+
+func TestLink_ToClosedAllowed(t *testing.T) {
+	// supersedes and duplicates legitimately point at closed targets
+	// (ADR 0014 §API preconditions).
+	c := mustOpen(t)
+	ctx := context.Background()
+	from := linkTestSeed(t, c, "agent-infra-ll77", "linker")
+	to := linkTestSeed(t, c, "agent-infra-ll88", "target")
+	linkTestClose(t, c, to)
+
+	if err := c.Link(ctx, from, to, EdgeSupersedes); err != nil {
+		t.Errorf("Link supersedes→closed target: %v, want nil", err)
+	}
+}
