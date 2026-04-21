@@ -88,9 +88,11 @@ within 2s.
 
 **Step 2 — Claim/Release.** Parent publishes `trig:claim`. agent-a calls
 `Claim(T, 10*time.Second)`, captures the release closure. agent-b calls
-`Claim(T, 10*time.Second)` and asserts: `errors.Is(err, coord.ErrHeldByAnother)`
-within 1s. agent-a invokes its release closure. agent-b retries claim
-and asserts: succeeds within 2s. agent-b releases.
+`Claim(T, 10*time.Second)` and asserts: `errors.Is(err, coord.ErrTaskAlreadyClaimed)`
+within 1s. (The task-CAS layer fires before the file-hold layer, so the
+CAS sentinel — not `ErrHeldByAnother` — is the correct assertion for a
+same-task second claim.) agent-a invokes its release closure. agent-b
+retries claim and asserts: succeeds within 2s. agent-b releases.
 
 **Step 3 — Ask/Answer.** agent-b registers `Answer(func(ctx, q) (string, error))`
 that returns `strings.ToUpper(q)`. Parent publishes `trig:ask`. agent-a
