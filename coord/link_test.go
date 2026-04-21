@@ -108,3 +108,76 @@ func TestLink_ToClosedAllowed(t *testing.T) {
 		t.Errorf("Link supersedes→closed target: %v, want nil", err)
 	}
 }
+
+func TestLink_IdempotentDuplicate(t *testing.T) {
+	c := mustOpen(t)
+	ctx := context.Background()
+	from := linkTestSeed(t, c, "agent-infra-id11", "linker")
+	to := linkTestSeed(t, c, "agent-infra-id22", "target")
+
+	if err := c.Link(ctx, from, to, EdgeBlocks); err != nil {
+		t.Fatalf("Link 1: %v", err)
+	}
+	if err := c.Link(ctx, from, to, EdgeBlocks); err != nil {
+		t.Fatalf("Link 2 (duplicate): %v", err)
+	}
+
+	rec, _, err := c.sub.tasks.Get(ctx, string(from))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(rec.Edges) != 1 {
+		t.Errorf("Edges len = %d, want 1 (invariant 25: no duplicate (type, target) pairs)", len(rec.Edges))
+	}
+}
+
+func TestLink_MultipleTypesSameTarget(t *testing.T) {
+	// (blocks, T) and (duplicates, T) are distinct (type, target)
+	// pairs; both should append.
+	c := mustOpen(t)
+	ctx := context.Background()
+	from := linkTestSeed(t, c, "agent-infra-id33", "linker")
+	to := linkTestSeed(t, c, "agent-infra-id44", "target")
+
+	if err := c.Link(ctx, from, to, EdgeBlocks); err != nil {
+		t.Fatalf("Link blocks: %v", err)
+	}
+	if err := c.Link(ctx, from, to, EdgeDuplicates); err != nil {
+		t.Fatalf("Link duplicates: %v", err)
+	}
+
+	rec, _, err := c.sub.tasks.Get(ctx, string(from))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(rec.Edges) != 2 {
+		t.Errorf("Edges len = %d, want 2", len(rec.Edges))
+	}
+}
+
+func TestLink_ConcurrentWritersConverge(t *testing.T) {
+	// Two goroutines Link different edges on the same source; both must
+	// land. Relies on tasks.Manager.Update's existing CAS-retry.
+	c := mustOpen(t)
+	ctx := context.Background()
+	from := linkTestSeed(t, c, "agent-infra-co11", "linker")
+	toA := linkTestSeed(t, c, "agent-infra-co22", "target-a")
+	toB := linkTestSeed(t, c, "agent-infra-co33", "target-b")
+
+	errCh := make(chan error, 2)
+	go func() { errCh <- c.Link(ctx, from, toA, EdgeBlocks) }()
+	go func() { errCh <- c.Link(ctx, from, toB, EdgeDuplicates) }()
+	for i := range 2 {
+		if err := <-errCh; err != nil {
+			t.Errorf("Link goroutine %d: %v", i, err)
+		}
+	}
+
+	rec, _, err := c.sub.tasks.Get(ctx, string(from))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(rec.Edges) != 2 {
+		t.Errorf("Edges len = %d, want 2 (both concurrent Links must land via CAS-retry)", len(rec.Edges))
+	}
+}
