@@ -545,6 +545,9 @@ func stepWhoPresence(ctx context.Context, c *coord.Coord, natsURL, tempDir strin
 	if err != nil {
 		return fmt.Errorf("open probe coord: %w", err)
 	}
+	// Hold the probe open long enough for its presence-join to propagate
+	// to presenceEvents before we tear it down. This is a sync delay, not
+	// a timeout. ctx.Done short-circuits so the 30s cap / SIGTERM wins.
 	select {
 	case <-time.After(500 * time.Millisecond):
 	case <-ctx.Done():
@@ -647,7 +650,7 @@ func stepPostSubscribe(ctx context.Context, c *coord.Coord, role string, chatEve
 			return ok && cm.Body() == payload
 		})
 		if err != nil {
-			return fmt.Errorf("step 1: %w", err)
+			return c.Post(ctx, threadCtrl, []byte("result:step-1:FAIL:b wait: "+err.Error()))
 		}
 		_ = msg // ChatMessage observed; step passes
 		return c.Post(ctx, threadCtrl, []byte("result:step-1:PASS"))
