@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danmestas/agent-infra/internal/tasks"
 	"github.com/danmestas/agent-infra/internal/testutil/natstest"
 )
 
@@ -298,6 +299,34 @@ func TestCommit_ForkOnConflict_ChatNotify(t *testing.T) {
 				want,
 			)
 		}
+	}
+}
+
+// TestCommit_StaleEpoch_Refused verifies Invariant 24: Commit refuses a
+// write when the record's ClaimEpoch has been bumped past the caller's
+// view in activeEpochs (simulating a concurrent Reclaim by a peer).
+// ErrEpochStale must be returned. ADR 0013 la2.3.
+func TestCommit_StaleEpoch_Refused(t *testing.T) {
+	nc, _ := natstest.NewJetStreamServer(t)
+	dir := t.TempDir()
+	sharedRepo := filepath.Join(dir, "shared-code.fossil")
+	c := newCoordWithCodeRepo(t, nc.ConnectedUrl(), "epoch-agent", sharedRepo)
+	ctx := context.Background()
+
+	path := "/a.go"
+	taskID := openClaim(t, c, "stale epoch commit task", path)
+
+	// Simulate a concurrent Reclaim by bumping epoch out from under the caller.
+	if err := c.sub.tasks.Update(ctx, string(taskID), func(cur tasks.Task) (tasks.Task, error) {
+		cur.ClaimEpoch += 1
+		return cur, nil
+	}); err != nil {
+		t.Fatalf("simulated bump: %v", err)
+	}
+
+	_, err := c.Commit(ctx, taskID, "msg", []File{{Path: path, Content: []byte("hi")}})
+	if !errors.Is(err, ErrEpochStale) {
+		t.Fatalf("want ErrEpochStale, got %v", err)
 	}
 }
 

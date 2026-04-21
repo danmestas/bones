@@ -257,6 +257,38 @@ func TestCloseTask_AlreadyClosed(t *testing.T) {
 	}
 }
 
+// TestCloseTask_StaleEpoch_Refused verifies Invariant 24: CloseTask
+// refuses a write when the record's ClaimEpoch has been bumped past the
+// caller's view in activeEpochs (simulating a concurrent Reclaim by a
+// peer). ErrEpochStale must be returned and the record must remain
+// unchanged. ADR 0013 la2.3.
+func TestCloseTask_StaleEpoch_Refused(t *testing.T) {
+	// Simulate: A claims. A's Coord remembers epoch=1. Then the KV
+	// record's ClaimEpoch gets bumped out from under A (as if B had
+	// Reclaimed — we don't need the real Reclaim yet, la2.4 adds it).
+	// A's CloseTask must return ErrEpochStale.
+	c := newTestCoord(t, "agent-1")
+	ctx := context.Background()
+
+	taskID, rel := openAndClaim(t, c, "stale epoch task", []string{"/a.go"})
+	defer func() { _ = rel() }()
+
+	// Bump the record's epoch directly via the substrate to simulate
+	// a concurrent Reclaim having bumped past our view.
+	err := c.sub.tasks.Update(ctx, string(taskID), func(cur tasks.Task) (tasks.Task, error) {
+		cur.ClaimEpoch += 1
+		return cur, nil
+	})
+	if err != nil {
+		t.Fatalf("simulated bump: %v", err)
+	}
+
+	err = c.CloseTask(ctx, taskID, "done")
+	if !errors.Is(err, ErrEpochStale) {
+		t.Fatalf("want ErrEpochStale, got %v", err)
+	}
+}
+
 // TestCloseTask_InvariantPanics covers the three assert-panic
 // preconditions: nil ctx, empty TaskID, and use-after-close. Every case
 // is a programmer error at the caller and must abort via panic rather

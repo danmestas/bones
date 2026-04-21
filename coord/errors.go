@@ -128,3 +128,13 @@ func (e *ConflictForkedError) Is(target error) bool {
 // errors.Is(err, ErrMergeConflict). Per-file conflict detail is not
 // surfaced in Phase 5; future phases may add a typed error. See ADR 0010 §5.
 var ErrMergeConflict = errors.New("coord: merge has conflicts")
+
+// ErrEpochStale reports that a mutation from a claimed position was
+// attempted with a stale claim_epoch view — typically a zombie writer
+// (killed agent, partition-returning slow agent) after a peer has
+// Reclaimed the task. Commit and CloseTask fence against this. Per
+// ADR 0013 and Invariant 24, claim_epoch is monotonic and bumped on
+// every Claim/Reclaim; a CAS check against the current record's epoch
+// refuses the write. Callers should discard in-flight work; no
+// rollback at the coord layer.
+var ErrEpochStale = errors.New("coord: claim epoch is stale")
