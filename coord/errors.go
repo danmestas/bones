@@ -138,3 +138,19 @@ var ErrMergeConflict = errors.New("coord: merge has conflicts")
 // refuses the write. Callers should discard in-flight work; no
 // rollback at the coord layer.
 var ErrEpochStale = errors.New("coord: claim epoch is stale")
+
+// ErrClaimerLive reports that Reclaim saw the current claimed_by
+// agent as still present in coord.Who — presence staleness has not
+// yet converged (3 × HeartbeatInterval per Invariant 19). The caller
+// must retry after the window closes. ADR 0013.
+var ErrClaimerLive = errors.New("coord: current claimer is still live")
+
+// ErrTaskNotClaimed reports that Reclaim was called on a task whose
+// status is not 'claimed' — an 'open' task wants Claim; a 'closed'
+// task is terminal per invariant 13. ADR 0013.
+var ErrTaskNotClaimed = errors.New("coord: task is not claimed")
+
+// ErrAlreadyClaimer reports that Reclaim was called by an agent that
+// is already the current claimed_by — self-reclaim is nonsensical.
+// ADR 0013.
+var ErrAlreadyClaimer = errors.New("coord: caller is already the claimer")
