@@ -123,7 +123,7 @@ mode is silent corruption, not a loud error.
   remains unimplemented; presence cadence governs liveness detection
   across all claims an agent holds.
 - **No role-based authorization.** Any agent may Reclaim, mirroring the
-  Phase 6+ deferral in ADR 0009. Admin-gating is future work (see the
+  Phase 8+ deferral in ADR 0009. Admin-gating is future work (see the
   ADR 0012 reservation for ACL).
 
 ## Consequences
