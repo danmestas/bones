@@ -362,12 +362,16 @@ func (m *Manager) tipRID() (int64, string, error) {
 		rid  int64
 		uuid string
 	)
+	// Secondary sort on rid breaks mtime ties when two commits land in
+	// the same julian-day bucket — without it, the SQL engine may return
+	// either row and Commit's ParentID becomes flaky. Mirrors the fix in
+	// libfossil.Repo.BranchTip.
 	err := m.repo.DB().QueryRow(`
 		SELECT l.rid, b.uuid FROM leaf l
 		JOIN event e ON e.objid=l.rid
 		JOIN blob b ON b.rid=l.rid
 		WHERE e.type='ci'
-		ORDER BY e.mtime DESC LIMIT 1
+		ORDER BY e.mtime DESC, l.rid DESC LIMIT 1
 	`).Scan(&rid, &uuid)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
