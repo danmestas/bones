@@ -168,9 +168,13 @@ on the next repack.
 **Ordering of epoch bump vs hold acquisition.** The epoch bump happens
 inside the task-CAS step (atomic with the `claimed_by` swap), before holds
 are acquired. That is: the task record reflects the new claim before the
-holds are re-acquired. If hold acquisition fails, CAS-undo rolls back the
-task record including the epoch — the failed reclaim is observationally
-equivalent to no reclaim at all.
+holds are re-acquired. If hold acquisition fails, CAS-undo restores
+`status=open` and clears `claimed_by`, but the bumped epoch is left in
+place — Invariant 24 requires monotonic non-decreasing across the task's
+lifetime, so the epoch is never rolled back. A stale zombie A whose view
+still holds the pre-reclaim epoch will see `ErrEpochStale` on any Commit
+or CloseTask attempt regardless of whether B's reclaim ultimately
+succeeded, which is the safer direction.
 
 **ky0 follow-up.** The implementation ships alongside a chaos test in
 `examples/two-agents-chaos/` that kills agent-A mid-commit and verifies

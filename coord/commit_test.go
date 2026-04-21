@@ -330,6 +330,32 @@ func TestCommit_StaleEpoch_Refused(t *testing.T) {
 	}
 }
 
+// TestCommit_NoTracker_EpochNonZero_Refused is the Commit-side parallel of
+// TestCloseTask_NoTracker_EpochNonZero_Refused: when activeEpochs has no
+// entry for the task (simulates a Coord restarted after Claim — in-memory
+// tracker gone, KV record still has ClaimEpoch > 0), Commit must treat
+// the expected epoch as zero and refuse the write with ErrEpochStale.
+// ADR 0013 la2.3 + la2.vlc.
+func TestCommit_NoTracker_EpochNonZero_Refused(t *testing.T) {
+	nc, _ := natstest.NewJetStreamServer(t)
+	dir := t.TempDir()
+	sharedRepo := filepath.Join(dir, "shared-code.fossil")
+	c := newCoordWithCodeRepo(t, nc.ConnectedUrl(), "no-tracker-agent", sharedRepo)
+	ctx := context.Background()
+
+	path := "/a.go"
+	taskID := openClaim(t, c, "no tracker commit task", path)
+
+	// Simulate post-restart by clearing the in-memory tracker; the KV
+	// record still carries ClaimEpoch=1 from the Claim above.
+	c.activeEpochs.Delete(taskID)
+
+	_, err := c.Commit(ctx, taskID, "msg", []File{{Path: path, Content: []byte("hi")}})
+	if !errors.Is(err, ErrEpochStale) {
+		t.Fatalf("want ErrEpochStale, got %v", err)
+	}
+}
+
 // openClaim opens a task for a single path and claims it with a 10s
 // TTL. The release closure is registered via t.Cleanup.
 func openClaim(
