@@ -3,7 +3,7 @@ module github.com/danmestas/agent-infra
 go 1.26.0
 
 require (
-	github.com/danmestas/libfossil v0.1.0
+	github.com/danmestas/libfossil v0.3.0
 	github.com/danmestas/libfossil/db/driver/modernc v0.1.0
 	github.com/dmestas/edgesync/leaf v0.0.0-00010101000000-000000000000
 	github.com/google/uuid v1.6.0
@@ -11,6 +11,7 @@ require (
 	github.com/nats-io/nats.go v1.49.0
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/metric v1.43.0
+	go.opentelemetry.io/otel/trace v1.43.0
 )
 
 replace github.com/dmestas/edgesync/leaf => ../EdgeSync/leaf
@@ -43,7 +44,6 @@ require (
 	go.opentelemetry.io/otel/sdk v1.43.0 // indirect
 	go.opentelemetry.io/otel/sdk/log v0.19.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.43.0 // indirect
-	go.opentelemetry.io/otel/trace v1.43.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
 	golang.org/x/crypto v0.49.0 // indirect
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
