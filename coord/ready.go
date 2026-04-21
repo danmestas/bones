@@ -9,22 +9,24 @@ import (
 	"github.com/danmestas/agent-infra/internal/tasks"
 )
 
-// Ready returns tasks eligible for claim, i.e. status=open with
-// claimed_by empty. Results are sorted by CreatedAt ascending so the
-// oldest-waiting task surfaces first. The slice length is capped at
-// cfg.MaxReadyReturn; when the filtered set exceeds the cap, the
-// oldest-first prefix is returned (no signal to the caller that the
-// result was truncated — this is deliberate, Ready is a snapshot, not
-// a stream).
+// Ready returns open, unclaimed tasks eligible to be worked on, sorted
+// oldest-first and capped by Config.MaxReadyReturn. A task is eligible
+// iff ALL of the following hold:
 //
-// Invariants asserted (panics on violation): 1 (ctx non-nil), 8
-// (Coord not closed).
+//   - status == open
+//   - claimed_by == "" (not held by another agent)
+//   - no incoming blocks edge from a non-closed task (ADR 0014)
+//   - no incoming supersedes edge from a non-closed task
+//   - no incoming duplicates edge from a non-closed task
+//   - no non-closed task names it as Parent (parent waits on children)
 //
-// Errors from the underlying tasks.List are returned wrapped.
+// Cost is O(N+E) where N is the task count and E is the total edge
+// count across non-closed tasks; the reverse index is rebuilt on every
+// call. If this becomes a bottleneck, a cached reverse index is a
+// future optimization (see ADR 0014 §Consequences).
 //
-// Empty-bucket convention: when no eligible tasks exist, Ready returns
-// (nil, nil) rather than an empty non-nil slice. Callers that need a
-// concrete distinction should test len(result) == 0.
+// discovered-from edges are stored but intentionally ignored by the
+// filter — they are audit metadata, not a ready-blocker.
 func (c *Coord) Ready(ctx context.Context) ([]Task, error) {
 	c.assertOpen("Ready")
 	assert.NotNil(ctx, "coord.Ready: ctx is nil")
@@ -32,23 +34,78 @@ func (c *Coord) Ready(ctx context.Context) ([]Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("coord.Ready: %w", err)
 	}
-	eligible := filterReady(records)
+	blockers := buildReadyBlockers(records)
+	eligible := filterReady(records, blockers)
 	sortReady(eligible)
 	return capReady(eligible, c.cfg.MaxReadyReturn), nil
 }
 
-// filterReady keeps only records that are status=open and have an empty
-// claimed_by field. The claimed_by guard is belt-and-suspenders on top
-// of invariant 11: if the bucket ever contains an open task with a
-// non-empty claimant (seeded directly in a test, or via a future
-// migration bug), Ready must still refuse to return it as claimable.
-func filterReady(records []tasks.Task) []Task {
+// readyBlockers holds the reverse-index sets computed in the first
+// pass of Ready. Membership in any of these sets hides a task from
+// the output (ADR 0014).
+type readyBlockers struct {
+	blocked      map[string]struct{}
+	superseded   map[string]struct{}
+	duplicated   map[string]struct{}
+	hasOpenChild map[string]struct{}
+}
+
+// buildReadyBlockers walks every non-closed task record once and
+// records what each such record's outgoing edges and Parent reference
+// imply about which OTHER task IDs are blocked. Exposed at package
+// scope so coord.Blocked (agent-infra-0sr, future) can reuse it.
+func buildReadyBlockers(records []tasks.Task) readyBlockers {
+	b := readyBlockers{
+		blocked:      make(map[string]struct{}),
+		superseded:   make(map[string]struct{}),
+		duplicated:   make(map[string]struct{}),
+		hasOpenChild: make(map[string]struct{}),
+	}
+	for _, r := range records {
+		if r.Status == tasks.StatusClosed {
+			continue
+		}
+		if r.Parent != "" {
+			b.hasOpenChild[r.Parent] = struct{}{}
+		}
+		for _, e := range r.Edges {
+			switch e.Type {
+			case tasks.EdgeBlocks:
+				b.blocked[e.Target] = struct{}{}
+			case tasks.EdgeSupersedes:
+				b.superseded[e.Target] = struct{}{}
+			case tasks.EdgeDuplicates:
+				b.duplicated[e.Target] = struct{}{}
+			}
+			// discovered-from intentionally ignored — audit-only.
+			// Unknown EdgeType values (invariant 26) fall through the
+			// default arm and are also ignored.
+		}
+	}
+	return b
+}
+
+// filterReady applies all eligibility gates to records and returns
+// the external Task shape for each survivor.
+func filterReady(records []tasks.Task, b readyBlockers) []Task {
 	out := make([]Task, 0, len(records))
 	for _, r := range records {
 		if r.Status != tasks.StatusOpen {
 			continue
 		}
 		if r.ClaimedBy != "" {
+			continue
+		}
+		if _, ok := b.blocked[r.ID]; ok {
+			continue
+		}
+		if _, ok := b.superseded[r.ID]; ok {
+			continue
+		}
+		if _, ok := b.duplicated[r.ID]; ok {
+			continue
+		}
+		if _, ok := b.hasOpenChild[r.ID]; ok {
 			continue
 		}
 		out = append(out, taskFromRecord(r))
