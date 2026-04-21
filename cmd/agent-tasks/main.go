@@ -34,6 +34,7 @@ const usage = `Usage:
   agent-tasks ready  [--json]
   agent-tasks link   <from-id> <to-id> --type=blocks|supersedes|duplicates|discovered-from
                      [--json]
+  agent-tasks prime  [--json]
 `
 
 func main() {

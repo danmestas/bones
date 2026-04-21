@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	libfossil "github.com/danmestas/libfossil"
 	// Register the modernc SQLite driver with libfossil so
@@ -378,4 +380,101 @@ func (m *Manager) Respond(
 		})
 		return firstErr
 	}, nil
+}
+
+// ThreadSummary is a read-only view of a chat thread for agent context
+// recovery. Mirrors notify.ThreadSummary with only the fields needed by
+// coord.Prime().
+type ThreadSummary struct {
+	threadShort  string
+	lastActivity time.Time
+	messageCount int
+	lastBody     string
+}
+
+func (t ThreadSummary) ThreadShort() string     { return t.threadShort }
+func (t ThreadSummary) LastActivity() time.Time { return t.lastActivity }
+func (t ThreadSummary) MessageCount() int       { return t.messageCount }
+func (t ThreadSummary) LastBody() string        { return t.lastBody }
+
+// ListThreads returns all threads for this Manager's project, sorted by
+// last activity (most recent first).
+func (m *Manager) ListThreads(ctx context.Context) ([]ThreadSummary, error) {
+	assert.NotNil(ctx, "chat.ListThreads: ctx is nil")
+	if m.closed.Load() {
+		return nil, ErrClosed
+	}
+
+	summaries, err := notify.ListThreads(m.repo, m.cfg.ProjectPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("chat.ListThreads: %w", err)
+	}
+
+	out := make([]ThreadSummary, 0, len(summaries))
+	for _, s := range summaries {
+		out = append(out, ThreadSummary{
+			threadShort:  s.ThreadShort,
+			lastActivity: s.LastActivity,
+			messageCount: s.MessageCount,
+			lastBody:     s.LastMessage.Body,
+		})
+	}
+	return out, nil
+}
+
+// ThreadsForAgent returns up to maxThreads recent threads where the given
+// agentID has sent at least one message. Threads are sorted by last activity
+// (most recent first). Errors reading individual threads are logged and
+// skipped so one bad thread does not fail the whole snapshot.
+func (m *Manager) ThreadsForAgent(ctx context.Context, agentID string, maxThreads int) ([]ThreadSummary, error) {
+	assert.NotNil(ctx, "chat.ThreadsForAgent: ctx is nil")
+	assert.NotEmpty(agentID, "chat.ThreadsForAgent: agentID is empty")
+	if m.closed.Load() {
+		return nil, ErrClosed
+	}
+
+	all, err := notify.ListThreads(m.repo, m.cfg.ProjectPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("chat.ThreadsForAgent: %w", err)
+	}
+
+	out := make([]ThreadSummary, 0, maxThreads)
+	for _, s := range all {
+		if len(out) >= maxThreads {
+			break
+		}
+
+		// Fast path: if the last message is from this agent, include it.
+		if s.LastMessage.From == agentID {
+			out = append(out, ThreadSummary{
+				threadShort:  s.ThreadShort,
+				lastActivity: s.LastActivity,
+				messageCount: s.MessageCount,
+				lastBody:     s.LastMessage.Body,
+			})
+			continue
+		}
+
+		// Slow path: scan the full thread to see if this agent participated
+		// at any point. This is O(messages) per thread but accurate.
+		msgs, err := notify.ReadThread(m.repo, m.cfg.ProjectPrefix, s.ThreadShort)
+		if err != nil {
+			slog.WarnContext(ctx, "chat.ThreadsForAgent: skipping unreadable thread",
+				"thread", s.ThreadShort, "error", err)
+			continue
+		}
+
+		for _, msg := range msgs {
+			if msg.From == agentID {
+				out = append(out, ThreadSummary{
+					threadShort:  s.ThreadShort,
+					lastActivity: s.LastActivity,
+					messageCount: s.MessageCount,
+					lastBody:     s.LastMessage.Body,
+				})
+				break
+			}
+		}
+	}
+	return out, nil
 }
