@@ -204,6 +204,15 @@ func runParent(ctx context.Context) int {
 	}
 	fmt.Println("step 2 PASS (claim/release)")
 
+	// Step 3: Ask/Answer.
+	if err := c.Post(ctx, threadCtrl, []byte("trig:ask")); err != nil {
+		return parentFail(c, agentA, agentB, "trig:ask post", err)
+	}
+	if _, err := waitForResult(ctx, ctrlEvents, 3); err != nil {
+		return parentFail(c, agentA, agentB, "step 3", err)
+	}
+	fmt.Println("step 3 PASS (ask/answer)")
+
 	// Signal children to exit.
 	if err := c.Post(ctx, threadCtrl, []byte("trig:done")); err != nil {
 		fmt.Fprintf(os.Stderr, "parent: trig:done post failed: %v\n", err)
@@ -299,6 +308,17 @@ func runAgent(ctx context.Context, role string) int {
 	}
 	defer closeChat()
 
+	if role == "agent-b" {
+		unsubAnswer, err := c.Answer(ctx, func(_ context.Context, q string) (string, error) {
+			return strings.ToUpper(q), nil
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "FAIL: %s: register answer: %v\n", role, err)
+			return 1
+		}
+		defer unsubAnswer()
+	}
+
 	if err := c.Post(ctx, threadCtrl, []byte("ready:"+role)); err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: %s: post ready: %v\n", role, err)
 		return 1
@@ -331,8 +351,25 @@ func dispatchStep(ctx context.Context, c *coord.Coord, role, trig string, ctrlEv
 	case strings.HasPrefix(trig, "trig:claim:"):
 		taskID := coord.TaskID(strings.TrimPrefix(trig, "trig:claim:"))
 		return stepClaimRelease(ctx, c, role, taskID, ctrlEvents)
+	case trig == "trig:ask":
+		return stepAskAnswer(ctx, c, role)
 	}
 	return fmt.Errorf("unknown trigger: %s", trig)
+}
+
+// stepAskAnswer: agent-a asks agent-b "ping", reports the response on ctrl.
+func stepAskAnswer(ctx context.Context, c *coord.Coord, role string) error {
+	if role != "agent-a" {
+		return nil // agent-b's Answer handler fires automatically
+	}
+	resp, err := c.Ask(ctx, "twoagent-b", "ping")
+	if err != nil {
+		return c.Post(ctx, threadCtrl, []byte("result:step-3:FAIL:"+err.Error()))
+	}
+	if resp != "PING" {
+		return c.Post(ctx, threadCtrl, []byte("result:step-3:FAIL:got "+resp))
+	}
+	return c.Post(ctx, threadCtrl, []byte("result:step-3:PASS"))
 }
 
 // stepClaimRelease: agent-a claims first, posts handoff:a-claimed, holds briefly,
