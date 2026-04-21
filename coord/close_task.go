@@ -61,10 +61,12 @@ func (c *Coord) closeMutator(
 		if cur.ClaimedBy != agent {
 			return cur, ErrAgentMismatch
 		}
+		var want uint64
 		if v, ok := c.activeEpochs.Load(taskID); ok {
-			if cur.ClaimEpoch != v.(uint64) {
-				return cur, ErrEpochStale
-			}
+			want = v.(uint64)
+		}
+		if cur.ClaimEpoch != want {
+			return cur, ErrEpochStale
 		}
 		return applyClose(cur, agent, reason), nil
 	}

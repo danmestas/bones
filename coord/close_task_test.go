@@ -289,6 +289,30 @@ func TestCloseTask_StaleEpoch_Refused(t *testing.T) {
 	}
 }
 
+// TestCloseTask_NoTracker_EpochNonZero_Refused verifies the symmetric
+// fence: when activeEpochs has no entry for the task (simulates a Coord
+// that was restarted after Claim — in-memory tracker gone, KV record
+// still has ClaimEpoch > 0), CloseTask must treat the expected epoch as
+// zero and refuse the write. Matches checkEpoch in Commit. ADR 0013 la2.3.
+func TestCloseTask_NoTracker_EpochNonZero_Refused(t *testing.T) {
+	// Simulates post-restart: task is in KV with ClaimEpoch > 0 and
+	// ClaimedBy=agent, but activeEpochs is empty (crashed/restarted
+	// Coord). CloseTask must refuse.
+	c := newTestCoord(t, "agent-1")
+	ctx := context.Background()
+
+	taskID, rel := openAndClaim(t, c, "no tracker task", []string{"/a.go"})
+	defer func() { _ = rel() }()
+
+	// Simulate restart by clearing the in-memory tracker.
+	c.activeEpochs.Delete(taskID)
+
+	err := c.CloseTask(ctx, taskID, "done")
+	if !errors.Is(err, ErrEpochStale) {
+		t.Fatalf("want ErrEpochStale, got %v", err)
+	}
+}
+
 // TestCloseTask_InvariantPanics covers the three assert-panic
 // preconditions: nil ctx, empty TaskID, and use-after-close. Every case
 // is a programmer error at the caller and must abort via panic rather
