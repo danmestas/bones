@@ -176,9 +176,9 @@ func runParent(ctx context.Context) int {
 	if rc != 0 {
 		return rc
 	}
-	defer os.RemoveAll(ps.tempDir)
-	defer ps.c.Close()
-	defer ps.closeCtrl()
+	defer func() { _ = os.RemoveAll(ps.tempDir) }()
+	defer func() { _ = ps.c.Close() }()
+	defer func() { _ = ps.closeCtrl() }()
 
 	// Wait for both children to announce ready.
 	if err := waitBothReady(ctx, ps.ctrlEvents); err != nil {
@@ -378,14 +378,14 @@ func runAgentA(ctx context.Context) int {
 		fmt.Fprintf(os.Stderr, "FAIL: agent-a: coord open: %v\n", err)
 		return 1
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	ctrlEvents, closeCtrl, err := c.Subscribe(ctx, threadCtrl)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: agent-a: subscribe: %v\n", err)
 		return 1
 	}
-	defer closeCtrl()
+	defer func() { _ = closeCtrl() }()
 
 	if err := c.Post(ctx, threadCtrl, []byte("ready:agent-a")); err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: agent-a: post ready: %v\n", err)
@@ -449,7 +449,7 @@ func waitPresenceAbsent(
 		case <-ticker.C:
 			entries, err := cB.Who(ctx)
 			if err != nil {
-				return fmt.Errorf("Who: %w", err)
+				return fmt.Errorf("who: %w", err)
 			}
 			found := false
 			for _, p := range entries {
@@ -492,20 +492,29 @@ func runAgentB(ctx context.Context) int {
 		fmt.Fprintf(os.Stderr, "FAIL: agent-b: coord open: %v\n", err)
 		return 1
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	ctrlEvents, closeCtrl, err := c.Subscribe(ctx, threadCtrl)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: agent-b: subscribe: %v\n", err)
 		return 1
 	}
-	defer closeCtrl()
+	defer func() { _ = closeCtrl() }()
 
 	if err := c.Post(ctx, threadCtrl, []byte("ready:agent-b")); err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: agent-b: post ready: %v\n", err)
 		return 1
 	}
+	return runAgentBLoop(ctx, c, ctrlEvents)
+}
 
+// runAgentBLoop owns the reclaim + commit sequence. Split from runAgentB to
+// keep both functions under the funlen cap.
+func runAgentBLoop(
+	ctx context.Context,
+	c *coord.Coord,
+	ctrlEvents <-chan coord.Event,
+) int {
 	// Wait for reclaim trigger carrying taskID.
 	msg, err := waitFor(ctx, ctrlEvents, stepTimeout, func(e coord.Event) bool {
 		cm, ok := e.(coord.ChatMessage)

@@ -178,9 +178,9 @@ func runParent(ctx context.Context) int {
 	if rc != 0 {
 		return rc
 	}
-	defer os.RemoveAll(ps.tempDir)
-	defer ps.c.Close()
-	defer ps.closeCtrl()
+	defer func() { _ = os.RemoveAll(ps.tempDir) }()
+	defer func() { _ = ps.c.Close() }()
+	defer func() { _ = ps.closeCtrl() }()
 
 	if err := waitBothReady(ctx, ps.ctrlEvents); err != nil {
 		return parentFail(ps, "waiting for ready", err)
@@ -365,7 +365,7 @@ func runStep45Observe(ctx context.Context, ps *parentSetup, aTaskID string) (str
 	if err != nil {
 		return "", fmt.Errorf("subscribe %s: %w", thread, err)
 	}
-	defer closeSub()
+	defer func() { _ = closeSub() }()
 	if err := ps.c.Post(ctx, threadCtrl, []byte("trig:step-5-sub-ready")); err != nil {
 		return "", fmt.Errorf("post sub-ready: %w", err)
 	}
@@ -521,7 +521,7 @@ func runAgent(ctx context.Context, role string) int {
 		fmt.Fprintf(os.Stderr, "FAIL: %s: coord open: %v\n", role, err)
 		return 1
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	return runAgentLoop(ctx, c, role)
 }
 
@@ -533,7 +533,7 @@ func runAgentLoop(ctx context.Context, c *coord.Coord, role string) int {
 		fmt.Fprintf(os.Stderr, "FAIL: %s: subscribe ctrl: %v\n", role, err)
 		return 1
 	}
-	defer closeCtrl()
+	defer func() { _ = closeCtrl() }()
 
 	if err := c.Post(ctx, threadCtrl, []byte("ready:"+role)); err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: %s: post ready: %v\n", role, err)
@@ -783,7 +783,7 @@ func stepForkACommitAfterSub(
 	if err != nil {
 		return c.Post(ctx, threadCtrl, []byte("result:step-4:FAIL:a gate sub: "+err.Error()))
 	}
-	defer closeGate()
+	defer func() { _ = closeGate() }()
 	_, err = waitFor(ctx, gate, stepTimeout, func(e coord.Event) bool {
 		cm, ok := e.(coord.ChatMessage)
 		return ok && cm.Body() == "trig:step-5-sub-ready"

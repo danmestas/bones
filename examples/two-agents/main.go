@@ -62,7 +62,10 @@ func newConfig(agentID, natsURL, chatRepo, codeRepo, checkoutRoot string) coord.
 
 // waitFor drains the channel until predicate matches or ctx/timeout fires.
 // Returns the first matching value. Used for scenario step waits.
-func waitFor[T any](ctx context.Context, ch <-chan T, timeout time.Duration, pred func(T) bool) (T, error) {
+func waitFor[T any](
+	ctx context.Context, ch <-chan T,
+	timeout time.Duration, pred func(T) bool,
+) (T, error) {
 	var zero T
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -126,20 +129,33 @@ func run() int {
 	}
 }
 
-func runParent(ctx context.Context) int {
+// parentState holds the parent's runtime state so setup and step-running
+// can be split into sub-70-line functions.
+type parentState struct {
+	tempDir    string
+	natsURL    string
+	c          *coord.Coord
+	ctrlEvents <-chan coord.Event
+	closeCtrl  func() error
+	agentA     *exec.Cmd
+	agentB     *exec.Cmd
+}
+
+// parentInit sets up temp dir, workspace, coord, ctrl subscription, and
+// spawns both child processes. Returns (*parentState, 0) on success, or
+// (nil, exit-code) on failure.
+func parentInit(ctx context.Context) (*parentState, int) {
 	tempDir, err := os.MkdirTemp("", "two-agents-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: setup: mkdir temp: %v\n", err)
-		return 2
+		return nil, 2
 	}
-	defer os.RemoveAll(tempDir)
-
 	info, err := workspace.Init(ctx, tempDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: setup: workspace.Init: %v\n", err)
-		return 2
+		_ = os.RemoveAll(tempDir)
+		return nil, 2
 	}
-
 	c, err := coord.Open(ctx, newConfig(
 		"twoagent-parent",
 		info.NATSURL,
@@ -149,43 +165,69 @@ func runParent(ctx context.Context) int {
 	))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: setup: parent coord open: %v\n", err)
-		return 2
+		_ = os.RemoveAll(tempDir)
+		return nil, 2
 	}
-	defer c.Close()
-
 	ctrlEvents, closeCtrl, err := c.Subscribe(ctx, threadCtrl)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: setup: parent subscribe ctrl: %v\n", err)
-		return 2
+		_ = c.Close()
+		_ = os.RemoveAll(tempDir)
+		return nil, 2
 	}
-	defer closeCtrl()
+	ps := &parentState{
+		tempDir: tempDir, natsURL: info.NATSURL,
+		c: c, ctrlEvents: ctrlEvents, closeCtrl: closeCtrl,
+	}
+	return parentSpawn(ctx, ps, info.WorkspaceDir)
+}
 
-	agentA, err := spawnChild(ctx, "agent-a", info.WorkspaceDir)
+// parentSpawn launches both agent children. On failure cleans up resources.
+func parentSpawn(ctx context.Context, ps *parentState, workspaceDir string) (*parentState, int) {
+	a, err := spawnChild(ctx, "agent-a", workspaceDir)
 	if err != nil {
+		_ = ps.closeCtrl()
+		_ = ps.c.Close()
+		_ = os.RemoveAll(ps.tempDir)
 		fmt.Fprintf(os.Stderr, "FAIL: setup: %v\n", err)
-		return 2
+		return nil, 2
 	}
-	agentB, err := spawnChild(ctx, "agent-b", info.WorkspaceDir)
+	b, err := spawnChild(ctx, "agent-b", workspaceDir)
 	if err != nil {
-		_ = agentA.Process.Kill()
-		_ = agentA.Wait()
+		_ = a.Process.Kill()
+		_ = a.Wait()
+		_ = ps.closeCtrl()
+		_ = ps.c.Close()
+		_ = os.RemoveAll(ps.tempDir)
 		fmt.Fprintf(os.Stderr, "FAIL: setup: %v\n", err)
-		return 2
+		return nil, 2
 	}
+	ps.agentA, ps.agentB = a, b
+	return ps, 0
+}
+
+func runParent(ctx context.Context) int {
+	ps, rc := parentInit(ctx)
+	if rc != 0 {
+		return rc
+	}
+	defer func() { _ = os.RemoveAll(ps.tempDir) }()
+	defer func() { _ = ps.closeCtrl() }()
+	defer func() { _ = ps.c.Close() }()
 
 	// Wait for both ready messages.
 	gotA, gotB := false, false
-	for !(gotA && gotB) {
-		msg, err := waitFor(ctx, ctrlEvents, 5*time.Second, func(e coord.Event) bool {
+	for !gotA || !gotB {
+		msg, err := waitFor(ctx, ps.ctrlEvents, 5*time.Second, func(e coord.Event) bool {
 			cm, ok := e.(coord.ChatMessage)
 			return ok && strings.HasPrefix(cm.Body(), "ready:")
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "FAIL: setup: waiting for ready: %v\n", err)
-			_ = agentA.Process.Kill()
-			_ = agentB.Process.Kill()
-			_ = agentA.Wait()
-			_ = agentB.Wait()
+			_ = ps.agentA.Process.Kill()
+			_ = ps.agentB.Process.Kill()
+			_ = ps.agentA.Wait()
+			_ = ps.agentB.Wait()
 			return 1
 		}
 		body := msg.(coord.ChatMessage).Body()
@@ -197,60 +239,67 @@ func runParent(ctx context.Context) int {
 		}
 	}
 	slog.Info("both children ready")
+	return runParentSteps(ctx, ps)
+}
+
+// runParentSteps drives steps 1-6 and reaps children. Split from runParent
+// to keep both functions under the funlen cap.
+func runParentSteps(ctx context.Context, ps *parentState) int {
+	c := ps.c
 
 	taskID, err := c.OpenTask(ctx, "two-agents claim test", []string{"/dev/null"})
 	if err != nil {
-		return parentFail(c, agentA, agentB, "open task", err)
+		return parentFail(c, ps.agentA, ps.agentB, "open task", err)
 	}
 
 	// Step 1: Post/Subscribe.
 	if err := c.Post(ctx, threadCtrl, []byte("trig:go")); err != nil {
-		return parentFail(c, agentA, agentB, "trig:go post", err)
+		return parentFail(c, ps.agentA, ps.agentB, "trig:go post", err)
 	}
-	if _, err := waitForResult(ctx, ctrlEvents, 1); err != nil {
-		return parentFail(c, agentA, agentB, "step 1", err)
+	if _, err := waitForResult(ctx, ps.ctrlEvents, 1); err != nil {
+		return parentFail(c, ps.agentA, ps.agentB, "step 1", err)
 	}
 	fmt.Println("step 1 PASS (post/subscribe)")
 
 	// Step 2: Claim/Release.
 	if err := c.Post(ctx, threadCtrl, []byte("trig:claim:"+string(taskID))); err != nil {
-		return parentFail(c, agentA, agentB, "trig:claim post", err)
+		return parentFail(c, ps.agentA, ps.agentB, "trig:claim post", err)
 	}
-	if _, err := waitForResult(ctx, ctrlEvents, 2); err != nil {
-		return parentFail(c, agentA, agentB, "step 2", err)
+	if _, err := waitForResult(ctx, ps.ctrlEvents, 2); err != nil {
+		return parentFail(c, ps.agentA, ps.agentB, "step 2", err)
 	}
 	fmt.Println("step 2 PASS (claim/release)")
 
 	// Step 3: Ask/Answer.
 	if err := c.Post(ctx, threadCtrl, []byte("trig:ask")); err != nil {
-		return parentFail(c, agentA, agentB, "trig:ask post", err)
+		return parentFail(c, ps.agentA, ps.agentB, "trig:ask post", err)
 	}
-	if _, err := waitForResult(ctx, ctrlEvents, 3); err != nil {
-		return parentFail(c, agentA, agentB, "step 3", err)
+	if _, err := waitForResult(ctx, ps.ctrlEvents, 3); err != nil {
+		return parentFail(c, ps.agentA, ps.agentB, "step 3", err)
 	}
 	fmt.Println("step 3 PASS (ask/answer)")
 
 	// Step 4: Who / WatchPresence.
-	if err := stepWhoPresence(ctx, c, info.NATSURL, tempDir); err != nil {
-		return parentFail(c, agentA, agentB, "step 4", err)
+	if err := stepWhoPresence(ctx, c, ps.natsURL, ps.tempDir); err != nil {
+		return parentFail(c, ps.agentA, ps.agentB, "step 4", err)
 	}
 	fmt.Println("step 4 PASS (who/watch-presence)")
 
 	// Step 5: React.
 	if err := c.Post(ctx, threadCtrl, []byte("trig:react")); err != nil {
-		return parentFail(c, agentA, agentB, "trig:react post", err)
+		return parentFail(c, ps.agentA, ps.agentB, "trig:react post", err)
 	}
-	if _, err := waitForResult(ctx, ctrlEvents, 5); err != nil {
-		return parentFail(c, agentA, agentB, "step 5", err)
+	if _, err := waitForResult(ctx, ps.ctrlEvents, 5); err != nil {
+		return parentFail(c, ps.agentA, ps.agentB, "step 5", err)
 	}
 	fmt.Println("step 5 PASS (react)")
 
 	// Step 6: SubscribePattern.
 	if err := c.Post(ctx, threadCtrl, []byte("trig:wildcard")); err != nil {
-		return parentFail(c, agentA, agentB, "trig:wildcard post", err)
+		return parentFail(c, ps.agentA, ps.agentB, "trig:wildcard post", err)
 	}
-	if _, err := waitForResult(ctx, ctrlEvents, 6); err != nil {
-		return parentFail(c, agentA, agentB, "step 6", err)
+	if _, err := waitForResult(ctx, ps.ctrlEvents, 6); err != nil {
+		return parentFail(c, ps.agentA, ps.agentB, "step 6", err)
 	}
 	fmt.Println("step 6 PASS (subscribe-pattern)")
 	fmt.Println("all 6 steps PASSED")
@@ -261,15 +310,15 @@ func runParent(ctx context.Context) int {
 	}
 
 	// Reap children.
-	reapChild(agentA, "agent-a")
-	reapChild(agentB, "agent-b")
+	reapChild(ps.agentA, "agent-a")
+	reapChild(ps.agentB, "agent-b")
 	return 0
 }
 
 // parentFail prints FAIL, reaps children, returns exit 1.
 func parentFail(c *coord.Coord, a, b *exec.Cmd, step string, err error) int {
 	fmt.Fprintf(os.Stderr, "FAIL: %s: %v\n", step, err)
-	// Background ctx: scenario ctx may already be cancelled, but children still need trig:done.
+	// Background ctx: scenario ctx may already be canceled, but children still need trig:done.
 	_ = c.Post(context.Background(), threadCtrl, []byte("trig:done"))
 	reapChild(a, "agent-a")
 	reapChild(b, "agent-b")
@@ -336,21 +385,21 @@ func runAgent(ctx context.Context, role string) int {
 		fmt.Fprintf(os.Stderr, "FAIL: %s: coord open: %v\n", role, err)
 		return 1
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	ctrlEvents, closeCtrl, err := c.Subscribe(ctx, threadCtrl)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: %s: subscribe ctrl: %v\n", role, err)
 		return 1
 	}
-	defer closeCtrl()
+	defer func() { _ = closeCtrl() }()
 
 	chatEvents, closeChat, err := c.Subscribe(ctx, threadChat)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: %s: subscribe chat: %v\n", role, err)
 		return 1
 	}
-	defer closeChat()
+	defer func() { _ = closeChat() }()
 
 	if role == "agent-b" {
 		unsubAnswer, err := c.Answer(ctx, func(_ context.Context, q string) (string, error) {
@@ -360,14 +409,22 @@ func runAgent(ctx context.Context, role string) int {
 			fmt.Fprintf(os.Stderr, "FAIL: %s: register answer: %v\n", role, err)
 			return 1
 		}
-		defer unsubAnswer()
+		defer func() { _ = unsubAnswer() }()
 	}
 
 	if err := c.Post(ctx, threadCtrl, []byte("ready:"+role)); err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: %s: post ready: %v\n", role, err)
 		return 1
 	}
+	return runAgentLoop(ctx, c, role, ctrlEvents, chatEvents)
+}
 
+// runAgentLoop owns the trigger dispatch loop. Split from runAgent to keep
+// both under the funlen cap.
+func runAgentLoop(
+	ctx context.Context, c *coord.Coord, role string,
+	ctrlEvents, chatEvents <-chan coord.Event,
+) int {
 	for {
 		msg, err := waitFor(ctx, ctrlEvents, 30*time.Second, func(e coord.Event) bool {
 			cm, ok := e.(coord.ChatMessage)
@@ -388,7 +445,10 @@ func runAgent(ctx context.Context, role string) int {
 	}
 }
 
-func dispatchStep(ctx context.Context, c *coord.Coord, role, trig string, ctrlEvents, chatEvents <-chan coord.Event) error {
+func dispatchStep(
+	ctx context.Context, c *coord.Coord, role, trig string,
+	ctrlEvents, chatEvents <-chan coord.Event,
+) error {
 	switch {
 	case trig == "trig:go":
 		return stepPostSubscribe(ctx, c, role, chatEvents)
@@ -422,7 +482,10 @@ func stepAskAnswer(ctx context.Context, c *coord.Coord, role string) error {
 
 // stepReact: agent-a posts; agent-b reacts; agent-a asserts Reaction observed.
 // agent-a alone reports PASS on the ctrl thread.
-func stepReact(ctx context.Context, c *coord.Coord, role string, chatEvents <-chan coord.Event) error {
+func stepReact(
+	ctx context.Context, c *coord.Coord, role string,
+	chatEvents <-chan coord.Event,
+) error {
 	switch role {
 	case "agent-a":
 		// Post, then wait for our own message's reaction to be visible.
@@ -468,7 +531,10 @@ func stepReact(ctx context.Context, c *coord.Coord, role string, chatEvents <-ch
 // from runAgent — reused here to avoid a race window where a fresh Subscribe could
 // miss an already-published handoff (coord.Subscribe drops pre-subscribe events;
 // see coord/subscribe.go:112).
-func stepClaimRelease(ctx context.Context, c *coord.Coord, role string, taskID coord.TaskID, ctrlEvents <-chan coord.Event) error {
+func stepClaimRelease(
+	ctx context.Context, c *coord.Coord, role string,
+	taskID coord.TaskID, ctrlEvents <-chan coord.Event,
+) error {
 	switch role {
 	case "agent-a":
 		release, err := c.Claim(ctx, taskID, 10*time.Second)
@@ -477,7 +543,8 @@ func stepClaimRelease(ctx context.Context, c *coord.Coord, role string, taskID c
 		}
 		if err := c.Post(ctx, threadCtrl, []byte("handoff:a-claimed")); err != nil {
 			_ = release()
-			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:a post claimed: "+err.Error()))
+			msg := "result:step-2:FAIL:a post claimed: " + err.Error()
+			return c.Post(ctx, threadCtrl, []byte(msg))
 		}
 		// Hold long enough for agent-b to attempt and fail its claim.
 		time.Sleep(1500 * time.Millisecond)
@@ -491,7 +558,8 @@ func stepClaimRelease(ctx context.Context, c *coord.Coord, role string, taskID c
 			cm, ok := e.(coord.ChatMessage)
 			return ok && cm.Body() == "handoff:a-claimed"
 		}); waitErr != nil {
-			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:b wait a-claimed: "+waitErr.Error()))
+			msg := "result:step-2:FAIL:b wait a-claimed: " + waitErr.Error()
+			return c.Post(ctx, threadCtrl, []byte(msg))
 		}
 		_, err := c.Claim(ctx, taskID, 10*time.Second)
 		if !errors.Is(err, coord.ErrTaskAlreadyClaimed) {
@@ -503,7 +571,8 @@ func stepClaimRelease(ctx context.Context, c *coord.Coord, role string, taskID c
 			return ok && cm.Body() == "handoff:released"
 		})
 		if waitErr != nil {
-			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:b wait released: "+waitErr.Error()))
+			msg := "result:step-2:FAIL:b wait released: " + waitErr.Error()
+			return c.Post(ctx, threadCtrl, []byte(msg))
 		}
 		release, err := c.Claim(ctx, taskID, 10*time.Second)
 		if err != nil {
@@ -525,7 +594,7 @@ func stepWhoPresence(ctx context.Context, c *coord.Coord, natsURL, tempDir strin
 	// Part A: Who snapshot — all three agents must be visible.
 	who, err := c.Who(ctx)
 	if err != nil {
-		return fmt.Errorf("Who: %w", err)
+		return fmt.Errorf("who: %w", err)
 	}
 	seen := make(map[string]bool)
 	for _, p := range who {
@@ -533,7 +602,7 @@ func stepWhoPresence(ctx context.Context, c *coord.Coord, natsURL, tempDir strin
 	}
 	for _, want := range []string{"twoagent-parent", "twoagent-a", "twoagent-b"} {
 		if !seen[want] {
-			return fmt.Errorf("Who missing %s; got %v", want, who)
+			return fmt.Errorf("who missing %s; got %v", want, who)
 		}
 	}
 
@@ -542,7 +611,7 @@ func stepWhoPresence(ctx context.Context, c *coord.Coord, natsURL, tempDir strin
 	if err != nil {
 		return fmt.Errorf("WatchPresence: %w", err)
 	}
-	defer closePresence()
+	defer func() { _ = closePresence() }()
 
 	probeID := "twoagent-probe" + uuid.NewString()[:8]
 	probe, err := coord.Open(ctx, newConfig(
@@ -569,7 +638,7 @@ func stepWhoPresence(ctx context.Context, c *coord.Coord, natsURL, tempDir strin
 	sawJoin, sawLeave := false, false
 	timer := time.NewTimer(3 * time.Second)
 	defer timer.Stop()
-	for !(sawJoin && sawLeave) {
+	for !sawJoin || !sawLeave {
 		select {
 		case e := <-presenceEvents:
 			pc, ok := e.(coord.PresenceChange)
@@ -598,14 +667,17 @@ func stepWhoPresence(ctx context.Context, c *coord.Coord, natsURL, tempDir strin
 // ctrlEvents is the existing subscription from runAgent — reused to avoid a race where a
 // fresh Subscribe could miss the ready:wildcard signal (coord.Subscribe drops pre-subscribe
 // events; see coord/subscribe.go).
-func stepWildcard(ctx context.Context, c *coord.Coord, role string, ctrlEvents <-chan coord.Event) error {
+func stepWildcard(
+	ctx context.Context, c *coord.Coord, role string,
+	ctrlEvents <-chan coord.Event,
+) error {
 	switch role {
 	case "agent-a":
 		patternEvents, closePattern, err := c.SubscribePattern(ctx, "*")
 		if err != nil {
 			return c.Post(ctx, threadCtrl, []byte("result:step-6:FAIL:subscribe: "+err.Error()))
 		}
-		defer closePattern()
+		defer func() { _ = closePattern() }()
 
 		// Signal readiness — parent waits before triggering agent-b.
 		if err := c.Post(ctx, threadCtrl, []byte("ready:wildcard")); err != nil {
@@ -649,7 +721,10 @@ func stepWildcard(ctx context.Context, c *coord.Coord, role string, ctrlEvents <
 }
 
 // stepPostSubscribe: agent-a posts "hello from a"; agent-b asserts receipt.
-func stepPostSubscribe(ctx context.Context, c *coord.Coord, role string, chatEvents <-chan coord.Event) error {
+func stepPostSubscribe(
+	ctx context.Context, c *coord.Coord, role string,
+	chatEvents <-chan coord.Event,
+) error {
 	const payload = "hello from a"
 	switch role {
 	case "agent-a":
