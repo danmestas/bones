@@ -55,7 +55,8 @@ func newConfig(agentID, natsURL, chatRepo string) coord.Config {
 // Returns the first matching value. Used for scenario step waits.
 func waitFor[T any](ctx context.Context, ch <-chan T, timeout time.Duration, pred func(T) bool) (T, error) {
 	var zero T
-	deadline := time.After(timeout)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	for {
 		select {
 		case v, ok := <-ch:
@@ -65,7 +66,7 @@ func waitFor[T any](ctx context.Context, ch <-chan T, timeout time.Duration, pre
 			if pred(v) {
 				return v, nil
 			}
-		case <-deadline:
+		case <-timer.C:
 			return zero, fmt.Errorf("timeout after %s", timeout)
 		case <-ctx.Done():
 			return zero, ctx.Err()
