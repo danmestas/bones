@@ -221,6 +221,15 @@ func runParent(ctx context.Context) int {
 	}
 	fmt.Println("step 4 PASS (who/watch-presence)")
 
+	// Step 5: React.
+	if err := c.Post(ctx, threadCtrl, []byte("trig:react")); err != nil {
+		return parentFail(c, agentA, agentB, "trig:react post", err)
+	}
+	if _, err := waitForResult(ctx, ctrlEvents, 5); err != nil {
+		return parentFail(c, agentA, agentB, "step 5", err)
+	}
+	fmt.Println("step 5 PASS (react)")
+
 	// Signal children to exit.
 	if err := c.Post(ctx, threadCtrl, []byte("trig:done")); err != nil {
 		fmt.Fprintf(os.Stderr, "parent: trig:done post failed: %v\n", err)
@@ -361,6 +370,8 @@ func dispatchStep(ctx context.Context, c *coord.Coord, role, trig string, ctrlEv
 		return stepClaimRelease(ctx, c, role, taskID, ctrlEvents)
 	case trig == "trig:ask":
 		return stepAskAnswer(ctx, c, role)
+	case trig == "trig:react":
+		return stepReact(ctx, c, role, chatEvents)
 	}
 	return fmt.Errorf("unknown trigger: %s", trig)
 }
@@ -378,6 +389,39 @@ func stepAskAnswer(ctx context.Context, c *coord.Coord, role string) error {
 		return c.Post(ctx, threadCtrl, []byte("result:step-3:FAIL:got "+resp))
 	}
 	return c.Post(ctx, threadCtrl, []byte("result:step-3:PASS"))
+}
+
+// stepReact: agent-a posts; agent-b reacts; agent-a asserts Reaction observed.
+func stepReact(ctx context.Context, c *coord.Coord, role string, chatEvents <-chan coord.Event) error {
+	switch role {
+	case "agent-a":
+		// Post, then wait for our own message's reaction to be visible.
+		if err := c.Post(ctx, threadChat, []byte("react-me")); err != nil {
+			return c.Post(ctx, threadCtrl, []byte("result:step-5:FAIL:post: "+err.Error()))
+		}
+		// Wait for a Reaction event on threadChat.
+		_, err := waitFor(ctx, chatEvents, 3*time.Second, func(e coord.Event) bool {
+			r, ok := e.(coord.Reaction)
+			return ok && r.Body() == "👍"
+		})
+		if err != nil {
+			return c.Post(ctx, threadCtrl, []byte("result:step-5:FAIL:"+err.Error()))
+		}
+		return c.Post(ctx, threadCtrl, []byte("result:step-5:PASS"))
+
+	case "agent-b":
+		// Wait for agent-a's "react-me" message, then react.
+		msg, err := waitFor(ctx, chatEvents, 2*time.Second, func(e coord.Event) bool {
+			cm, ok := e.(coord.ChatMessage)
+			return ok && cm.Body() == "react-me"
+		})
+		if err != nil {
+			return c.Post(ctx, threadCtrl, []byte("result:step-5:FAIL:b wait: "+err.Error()))
+		}
+		cm := msg.(coord.ChatMessage)
+		return c.React(ctx, threadChat, cm.MessageID(), "👍")
+	}
+	return nil
 }
 
 // stepClaimRelease: agent-a claims first, posts handoff:a-claimed, holds briefly,
