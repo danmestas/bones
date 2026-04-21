@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/danmestas/agent-infra/coord"
 	"github.com/danmestas/agent-infra/internal/workspace"
 )
@@ -212,6 +214,12 @@ func runParent(ctx context.Context) int {
 		return parentFail(c, agentA, agentB, "step 3", err)
 	}
 	fmt.Println("step 3 PASS (ask/answer)")
+
+	// Step 4: Who / WatchPresence.
+	if err := stepWhoPresence(ctx, c, info.NATSURL, tempDir); err != nil {
+		return parentFail(c, agentA, agentB, "step 4", err)
+	}
+	fmt.Println("step 4 PASS (who/watch-presence)")
 
 	// Signal children to exit.
 	if err := c.Post(ctx, threadCtrl, []byte("trig:done")); err != nil {
@@ -427,6 +435,69 @@ func stepClaimRelease(ctx context.Context, c *coord.Coord, role string, taskID c
 			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:b release: "+err.Error()))
 		}
 		return c.Post(ctx, threadCtrl, []byte("result:step-2:PASS"))
+	}
+	return nil
+}
+
+// stepWhoPresence validates coord.Who (snapshot) and coord.WatchPresence
+// (delta stream). It is parent-only: children keep their trigger loop
+// idle while the parent runs this check. The probe coord opens and
+// immediately closes so we can observe both a join and a leave event.
+func stepWhoPresence(ctx context.Context, c *coord.Coord, natsURL, tempDir string) error {
+	// Part A: Who snapshot — all three agents must be visible.
+	who, err := c.Who(ctx)
+	if err != nil {
+		return fmt.Errorf("Who: %w", err)
+	}
+	seen := make(map[string]bool)
+	for _, p := range who {
+		seen[p.AgentID()] = true
+	}
+	for _, want := range []string{"twoagent-parent", "twoagent-a", "twoagent-b"} {
+		if !seen[want] {
+			return fmt.Errorf("Who missing %s; got %v", want, who)
+		}
+	}
+
+	// Part B: WatchPresence + probe join/leave.
+	presenceEvents, closePresence, err := c.WatchPresence(ctx)
+	if err != nil {
+		return fmt.Errorf("WatchPresence: %w", err)
+	}
+	defer closePresence()
+
+	probeID := "twoagent-probe" + uuid.NewString()[:8]
+	probe, err := coord.Open(ctx, newConfig(
+		probeID,
+		natsURL,
+		filepath.Join(tempDir, probeID+".fossil"),
+	))
+	if err != nil {
+		return fmt.Errorf("open probe coord: %w", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	_ = probe.Close()
+
+	sawJoin, sawLeave := false, false
+	timer := time.NewTimer(3 * time.Second)
+	defer timer.Stop()
+	for !(sawJoin && sawLeave) {
+		select {
+		case e := <-presenceEvents:
+			pc, ok := e.(coord.PresenceChange)
+			if !ok || pc.AgentID() != probeID {
+				continue
+			}
+			if pc.Up() {
+				sawJoin = true
+			} else {
+				sawLeave = true
+			}
+		case <-timer.C:
+			return fmt.Errorf("probe presence: join=%v leave=%v", sawJoin, sawLeave)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	return nil
 }
