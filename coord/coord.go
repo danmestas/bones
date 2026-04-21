@@ -60,6 +60,15 @@ type Coord struct {
 	// back if the new count exceeds the cap; the close closure
 	// decrements it exactly once via sync.Once (invariant 17).
 	subsActive atomic.Int32
+
+	// activeEpochs tracks the claim_epoch observed when this Coord took
+	// ownership of each live claim. Populated by acquireTaskCAS on
+	// Claim/Reclaim success, cleared by releaseClosure on un-claim.
+	// Commit and CloseTask look up this map to fence against zombie
+	// writes after a peer Reclaim bumped the record's epoch past ours.
+	// Per-Coord in-memory — process crash means no Commit is possible
+	// anyway, so durability is not a concern. ADR 0013.
+	activeEpochs sync.Map // key: TaskID, value: uint64
 }
 
 // Open constructs a Coord and validates its configuration per
@@ -290,10 +299,12 @@ func (c *Coord) acquireTaskCAS(
 		)
 	}
 	files := append([]string(nil), rec.Files...)
-	mutate := c.claimMutator()
+	var newEpoch uint64
+	mutate := c.claimMutator(&newEpoch)
 	if err := c.sub.tasks.Update(ctx, string(taskID), mutate); err != nil {
 		return nil, translateClaimCASErr(err)
 	}
+	c.activeEpochs.Store(taskID, newEpoch)
 	return files, nil
 }
 
@@ -301,8 +312,11 @@ func (c *Coord) acquireTaskCAS(
 // the acquire-side CAS. The closure re-checks status==open and
 // claimed_by=="" against the just-read record inside Update's retry
 // loop so a racing writer between our Get and the CAS surfaces as
-// ErrTaskAlreadyClaimed rather than a malformed transition.
-func (c *Coord) claimMutator() func(tasks.Task) (tasks.Task, error) {
+// ErrTaskAlreadyClaimed rather than a malformed transition. On
+// success, claim_epoch is bumped by 1 (Invariant 24); the new value
+// is captured into *newEpoch so the caller can register it in
+// activeEpochs without a second Get. ADR 0013.
+func (c *Coord) claimMutator(newEpoch *uint64) func(tasks.Task) (tasks.Task, error) {
 	agent := c.cfg.AgentID
 	return func(cur tasks.Task) (tasks.Task, error) {
 		if cur.Status != tasks.StatusOpen || cur.ClaimedBy != "" {
@@ -310,7 +324,9 @@ func (c *Coord) claimMutator() func(tasks.Task) (tasks.Task, error) {
 		}
 		cur.Status = tasks.StatusClaimed
 		cur.ClaimedBy = agent
+		cur.ClaimEpoch++
 		cur.UpdatedAt = time.Now().UTC()
+		*newEpoch = cur.ClaimEpoch
 		return cur, nil
 	}
 }
@@ -380,6 +396,7 @@ func (c *Coord) undoTaskCAS(ctx context.Context, taskID TaskID) {
 		return cur, nil
 	}
 	_ = c.sub.tasks.Update(ctx, string(taskID), mutate)
+	c.activeEpochs.Delete(taskID)
 }
 
 // errClaimCASNoOp is an internal sentinel the release-side and
@@ -420,6 +437,7 @@ func (c *Coord) releaseClosure(
 					firstErr = err
 				}
 			}
+			c.activeEpochs.Delete(taskID)
 		})
 		return firstErr
 	}

@@ -293,6 +293,64 @@ func TestClaim_ReleaseAfterCloseTask(t *testing.T) {
 	}
 }
 
+// TestClaim_BumpsClaimEpoch verifies that a first successful Claim
+// sets ClaimEpoch to 1 in the stored task record (ADR 0013 la2.2).
+func TestClaim_BumpsClaimEpoch(t *testing.T) {
+	c := newTestCoord(t, "agent-1")
+	ctx := context.Background()
+
+	id, err := c.OpenTask(ctx, "claim-epoch-1", []string{"/a.go"})
+	if err != nil {
+		t.Fatalf("OpenTask: %v", err)
+	}
+	rel, err := c.Claim(ctx, id, claimTTL)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	defer func() { _ = rel() }()
+
+	rec, _, err := c.sub.tasks.Get(ctx, string(id))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.ClaimEpoch != 1 {
+		t.Fatalf("want ClaimEpoch=1 after first Claim, got %d", rec.ClaimEpoch)
+	}
+}
+
+// TestClaim_SecondClaim_BumpsEpoch verifies that a second Claim on
+// the same task (after a release) increments ClaimEpoch to 2
+// (ADR 0013 la2.2, Invariant 24 strict monotonic).
+func TestClaim_SecondClaim_BumpsEpoch(t *testing.T) {
+	c := newTestCoord(t, "agent-1")
+	ctx := context.Background()
+
+	id, err := c.OpenTask(ctx, "claim-epoch-2", []string{"/a.go"})
+	if err != nil {
+		t.Fatalf("OpenTask: %v", err)
+	}
+	rel1, err := c.Claim(ctx, id, claimTTL)
+	if err != nil {
+		t.Fatalf("first Claim: %v", err)
+	}
+	if err := rel1(); err != nil {
+		t.Fatalf("release 1: %v", err)
+	}
+	rel2, err := c.Claim(ctx, id, claimTTL)
+	if err != nil {
+		t.Fatalf("second Claim: %v", err)
+	}
+	defer func() { _ = rel2() }()
+
+	rec, _, err := c.sub.tasks.Get(ctx, string(id))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.ClaimEpoch != 2 {
+		t.Fatalf("want ClaimEpoch=2 after re-Claim, got %d", rec.ClaimEpoch)
+	}
+}
+
 // TestClaim_HoldContentionRollsBackTaskCAS verifies the
 // hold-acquire-failure path from ADR 0007: if any hold fails after the
 // task-CAS succeeds, the task CAS is undone so invariant 6 (atomic
