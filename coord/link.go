@@ -54,7 +54,7 @@ func (c *Coord) Link(ctx context.Context, from, to TaskID, edgeType EdgeType) er
 		if errors.Is(err, tasks.ErrNotFound) {
 			return fmt.Errorf("coord.Link: from=%s: %w", from, ErrTaskNotFound)
 		}
-		return fmt.Errorf("coord.Link: %w", err)
+		return fmt.Errorf("coord.Link: from=%s: %w", from, err)
 	}
 	return nil
 }

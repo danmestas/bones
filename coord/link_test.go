@@ -20,15 +20,21 @@ func linkTestSeed(t *testing.T, c *Coord, id, title string) TaskID {
 }
 
 // linkTestClose stamps a seeded task as closed by direct KV write.
+// Fetches the existing record so Edges and other fields are preserved.
 // Avoids the Claim→CloseTask flow — these tests are not about that
 // lifecycle.
 func linkTestClose(t *testing.T, c *Coord, id TaskID) {
 	t.Helper()
+	ctx := context.Background()
+	rec, _, err := c.sub.tasks.Get(ctx, string(id))
+	if err != nil {
+		t.Fatalf("Get %q before close: %v", id, err)
+	}
 	now := time.Now().UTC()
-	rec := readyBaseline(string(id), now)
 	rec.Status = tasks.StatusClosed
 	rec.ClosedAt = &now
 	rec.ClosedReason = "test-close"
+	rec.UpdatedAt = now
 	seedRawTask(t, c, rec)
 }
 
