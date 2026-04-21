@@ -327,6 +327,24 @@ Reclaim. Mutations under a stale epoch (Commit, CloseTask) are refused
 with ErrEpochStale. Legacy records without the field decode as epoch=0;
 the first Claim bumps to 1. ADR 0013.
 
+## Invariant 25: Task.Edges has no duplicate (Type, Target) pairs
+
+Each (EdgeType, Target) pair appears at most once in a given
+Task.Edges slice. coord.Link enforces this on write: a second Link
+call with the same (from, to, edgeType) is a silent no-op. Readers
+that somehow observe a duplicate dedupe on read; the duplicate is
+tolerated but never produced by a current-version write. ADR 0014.
+
+## Invariant 26: Edge.Type values on write must be defined constants
+
+coord.Link rejects an Edge.Type that is not one of EdgeBlocks,
+EdgeDiscoveredFrom, EdgeSupersedes, or EdgeDuplicates with
+ErrInvalidEdgeType. On read, decoders silently preserve unknown
+type values so a future phase adding a type stays round-trip
+compatible with records this version writes. Callers that switch
+on EdgeType see unknown values fall through the default arm and
+are ignored by Ready's reverse-index pass. ADR 0014.
+
 ## Where the invariants live
 
 Invariants 6 and 7 are the load-bearing guarantees of ADR 0002 (scoped holds via
@@ -338,5 +356,6 @@ is entailed by ADR 0008 (chat substrate). Invariants 18-19 are entailed by ADR 0
 (presence substrate). Invariants 20-23 are entailed by ADR 0010 (code artifacts:
 hold-gated commits, fork-on-conflict, unique fork branch names, merge-to-single-commit).
 Invariant 24 is entailed by ADR 0013 (claim reclamation: claim_epoch monotonicity).
-This document is the canonical list; coord method godoc
+Invariants 25-26 are entailed by ADR 0014 (typed edges on task records: dedup
+and type validity). This document is the canonical list; coord method godoc
 will cite these numbers rather than restating the reasoning.
