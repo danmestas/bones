@@ -25,14 +25,19 @@ func newTestCoord(t *testing.T, agentID string) *Coord {
 // Coords share a substrate for contention tests. Each agent gets its
 // own chat Fossil repo namespaced by agentID within the test's
 // t.TempDir() so two in-process Coords don't collide on the same repo
-// file.
+// file. The code-artifact Fossil repo and CheckoutRoot are likewise
+// namespaced per agent so two coords opening in the same test each
+// get a fresh repo + checkout tree.
 func newCoordOnURL(t *testing.T, url, agentID string) *Coord {
 	t.Helper()
 	cfg := validConfigWithURL(t, url)
 	cfg.AgentID = agentID
+	dir := t.TempDir()
 	cfg.ChatFossilRepoPath = filepath.Join(
-		t.TempDir(), agentID+"-chat.fossil",
+		dir, agentID+"-chat.fossil",
 	)
+	cfg.FossilRepoPath = filepath.Join(dir, agentID+"-code.fossil")
+	cfg.CheckoutRoot = filepath.Join(dir, agentID+"-checkouts")
 	c, err := Open(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("Open(%s): %v", agentID, err)

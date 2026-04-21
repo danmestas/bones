@@ -71,3 +71,22 @@ var ErrAgentOffline = errors.New("coord: agent offline")
 
 // ErrNotImplemented is returned by Phase 1 stub methods.
 var ErrNotImplemented = errors.New("coord: not implemented")
+
+// ErrNotHeld reports that coord.Commit was called on one or more files
+// the caller does not hold per Invariant 20. Commit is hold-gated: every
+// file named in files must be held by cfg.AgentID at precheck time or
+// the write is refused. Callers that see this should re-Claim the
+// affected task or investigate lost holds.
+var ErrNotHeld = errors.New("coord: file(s) not held by caller")
+
+// ErrBranchNotFound reports that a branch name referenced by a fossil
+// method does not exist in the repo. Surfaced by future coord.Merge and
+// any method that takes a branch argument.
+var ErrBranchNotFound = errors.New("coord: branch not found")
+
+// ErrConflictForked reports that a coord.Commit landed on a
+// sibling-leaf branch because another agent's commit raced ours on the
+// same branch. The caller's work is preserved on the forked branch;
+// reconciliation is via coord.Merge. Real detection ships in 0p9.3;
+// this sentinel is declared now so the error surface is stable.
+var ErrConflictForked = errors.New("coord: commit forked from branch tip")

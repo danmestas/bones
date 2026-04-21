@@ -105,3 +105,18 @@ func taskFromRecord(rec tasks.Task) Task {
 		updatedAt: rec.UpdatedAt,
 	}
 }
+
+// RevID is the opaque identifier of a committed revision in the
+// code-artifact Fossil substrate per ADR 0010. Treated as opaque by
+// coord callers: equality and display are supported, structural parsing
+// is not. Under the hood it is Fossil's 40-character SHA-1 UUID.
+type RevID string
+
+// File is a single file body paired with its logical path. The path is
+// whatever naming scheme the caller uses for its holds (typically
+// absolute). Content is the raw bytes to commit. Fossil stores both
+// verbatim — coord applies no path normalization.
+type File struct {
+	Path    string
+	Content []byte
+}

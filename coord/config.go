@@ -80,6 +80,18 @@ type Config struct {
 	// pass t.TempDir() — a fresh directory per test keeps two
 	// concurrent Coords on one substrate from colliding on the repo.
 	ChatFossilRepoPath string
+
+	// FossilRepoPath is the absolute filesystem path to the shared Fossil
+	// repo DB used for the code-artifact substrate per ADR 0010. The
+	// operator owns cleanup; coord never calls RemoveAll. Distinct from
+	// ChatFossilRepoPath: chat messages and code commits live in separate
+	// Fossil repos so their replay streams stay untangled.
+	FossilRepoPath string
+
+	// CheckoutRoot is the absolute directory under which per-agent
+	// working-copy checkouts live per ADR 0010. Coord writes to
+	// CheckoutRoot/<AgentID>/. In tests, pass t.TempDir().
+	CheckoutRoot string
 }
 
 // Validate checks every Config field against its documented bounds and
@@ -137,6 +149,16 @@ func (c Config) Validate() error {
 	if c.ChatFossilRepoPath == "" {
 		return fmt.Errorf(
 			"coord.Config: ChatFossilRepoPath: must be non-empty",
+		)
+	}
+	if c.FossilRepoPath == "" {
+		return fmt.Errorf(
+			"coord.Config: FossilRepoPath: must be non-empty",
+		)
+	}
+	if c.CheckoutRoot == "" {
+		return fmt.Errorf(
+			"coord.Config: CheckoutRoot: must be non-empty",
 		)
 	}
 	return nil
