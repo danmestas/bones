@@ -180,7 +180,16 @@ func runParent(ctx context.Context) int {
 	}
 	slog.Info("both children ready")
 
-	// Signal children to exit (no scenario yet).
+	// Step 1: Post/Subscribe.
+	if err := c.Post(ctx, threadCtrl, []byte("trig:go")); err != nil {
+		return parentFail(c, agentA, agentB, "trig:go post", err)
+	}
+	if _, err := waitForResult(ctx, ctrlEvents, 1); err != nil {
+		return parentFail(c, agentA, agentB, "step 1", err)
+	}
+	fmt.Println("step 1 PASS (post/subscribe)")
+
+	// Signal children to exit.
 	if err := c.Post(ctx, threadCtrl, []byte("trig:done")); err != nil {
 		fmt.Fprintf(os.Stderr, "parent: trig:done post failed: %v\n", err)
 	}
@@ -189,6 +198,32 @@ func runParent(ctx context.Context) int {
 	reapChild(agentA, "agent-a")
 	reapChild(agentB, "agent-b")
 	return 0
+}
+
+// parentFail prints FAIL, reaps children, returns exit 1.
+func parentFail(c *coord.Coord, a, b *exec.Cmd, step string, err error) int {
+	fmt.Fprintf(os.Stderr, "FAIL: %s: %v\n", step, err)
+	_ = c.Post(context.Background(), threadCtrl, []byte("trig:done"))
+	reapChild(a, "agent-a")
+	reapChild(b, "agent-b")
+	return 1
+}
+
+// waitForResult blocks until a result:step-<N>:PASS or FAIL message arrives.
+func waitForResult(ctx context.Context, ch <-chan coord.Event, step int) (string, error) {
+	prefix := fmt.Sprintf("result:step-%d:", step)
+	msg, err := waitFor(ctx, ch, 5*time.Second, func(e coord.Event) bool {
+		cm, ok := e.(coord.ChatMessage)
+		return ok && strings.HasPrefix(cm.Body(), prefix)
+	})
+	if err != nil {
+		return "", err
+	}
+	body := msg.(coord.ChatMessage).Body()
+	if strings.HasSuffix(body, ":PASS") {
+		return body, nil
+	}
+	return body, fmt.Errorf("child reported: %s", body)
 }
 
 // reapChild waits up to 5s for a child; SIGKILL if it hangs.
@@ -237,19 +272,62 @@ func runAgent(ctx context.Context, role string) int {
 	}
 	defer closeCtrl()
 
+	chatEvents, closeChat, err := c.Subscribe(ctx, threadChat)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FAIL: %s: subscribe chat: %v\n", role, err)
+		return 1
+	}
+	defer closeChat()
+
 	if err := c.Post(ctx, threadCtrl, []byte("ready:"+role)); err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: %s: post ready: %v\n", role, err)
 		return 1
 	}
 
-	// Wait for trig:done.
-	_, err = waitFor(ctx, ctrlEvents, 30*time.Second, func(e coord.Event) bool {
-		cm, ok := e.(coord.ChatMessage)
-		return ok && cm.Body() == "trig:done"
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "FAIL: %s: waiting for done: %v\n", role, err)
-		return 1
+	for {
+		msg, err := waitFor(ctx, ctrlEvents, 30*time.Second, func(e coord.Event) bool {
+			cm, ok := e.(coord.ChatMessage)
+			return ok && strings.HasPrefix(cm.Body(), "trig:")
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "FAIL: %s: waiting for trigger: %v\n", role, err)
+			return 1
+		}
+		body := msg.(coord.ChatMessage).Body()
+		if body == "trig:done" {
+			return 0
+		}
+		if err := dispatchStep(ctx, c, role, body, chatEvents); err != nil {
+			fmt.Fprintf(os.Stderr, "FAIL: %s: %s: %v\n", role, body, err)
+			return 1
+		}
 	}
-	return 0
+}
+
+func dispatchStep(ctx context.Context, c *coord.Coord, role, trig string, chatEvents <-chan coord.Event) error {
+	switch trig {
+	case "trig:go":
+		return stepPostSubscribe(ctx, c, role, chatEvents)
+	}
+	return fmt.Errorf("unknown trigger: %s", trig)
+}
+
+// stepPostSubscribe: agent-a posts "hello from a"; agent-b asserts receipt.
+func stepPostSubscribe(ctx context.Context, c *coord.Coord, role string, chatEvents <-chan coord.Event) error {
+	const payload = "hello from a"
+	switch role {
+	case "agent-a":
+		return c.Post(ctx, threadChat, []byte(payload))
+	case "agent-b":
+		msg, err := waitFor(ctx, chatEvents, 2*time.Second, func(e coord.Event) bool {
+			cm, ok := e.(coord.ChatMessage)
+			return ok && cm.Body() == payload
+		})
+		if err != nil {
+			return fmt.Errorf("step 1: %w", err)
+		}
+		_ = msg // ChatMessage observed; step passes
+		return c.Post(ctx, threadCtrl, []byte("result:step-1:PASS"))
+	}
+	return nil
 }
