@@ -2,6 +2,7 @@ package tasks_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -430,6 +431,39 @@ func TestInvariant_NilMutate(t *testing.T) {
 	requirePanic(t, func() {
 		_ = m.Update(context.Background(), "x", nil)
 	}, "mutate is nil")
+}
+
+func TestTask_ClaimEpoch_DecodeMissing(t *testing.T) {
+	// Legacy JSON (no claim_epoch field) must decode with ClaimEpoch=0.
+	legacy := []byte(`{"id":"t1","title":"x","status":"open","files":["/a"],"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","schema_version":1}`)
+	got, err := tasks.Task{}, error(nil)
+	if err = json.Unmarshal(legacy, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.ClaimEpoch != 0 {
+		t.Fatalf("want ClaimEpoch=0 on missing field, got %d", got.ClaimEpoch)
+	}
+}
+
+func TestTask_ClaimEpoch_EncodeRoundTrip(t *testing.T) {
+	in := tasks.Task{
+		ID: "t1", Title: "x", Status: tasks.StatusClaimed,
+		ClaimedBy: "A", Files: []string{"/a"},
+		ClaimEpoch:    7,
+		SchemaVersion: tasks.SchemaVersion,
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	out := tasks.Task{}
+	err = json.Unmarshal(b, &out)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.ClaimEpoch != 7 {
+		t.Fatalf("want ClaimEpoch=7 round-tripped, got %d", out.ClaimEpoch)
+	}
 }
 
 func TestInvariant_UseAfterClose(t *testing.T) {

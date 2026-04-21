@@ -88,6 +88,13 @@ type Task struct {
 	// ClosedReason is the free-form close reason; empty if not closed.
 	ClosedReason string `json:"closed_reason,omitempty"`
 
+	// ClaimEpoch is the monotonic counter bumped on every successful
+	// Claim or Reclaim. Invariant 24 requires strict increase per Claim/
+	// Reclaim; Commit and CloseTask fence against it to refuse zombie
+	// writes after a Reclaim. Zero on records that never had a claim
+	// (legacy records decode to zero; first Claim bumps to 1). ADR 0013.
+	ClaimEpoch uint64 `json:"claim_epoch,omitempty"`
+
 	// SchemaVersion stamps the schema this record was written against.
 	SchemaVersion int `json:"schema_version"`
 }
