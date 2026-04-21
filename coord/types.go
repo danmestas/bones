@@ -106,6 +106,20 @@ func taskFromRecord(rec tasks.Task) Task {
 	}
 }
 
+// EdgeType re-exports tasks.EdgeType so callers do not import
+// internal/tasks. See ADR 0014.
+type EdgeType = tasks.EdgeType
+
+const (
+	EdgeBlocks         = tasks.EdgeBlocks
+	EdgeDiscoveredFrom = tasks.EdgeDiscoveredFrom
+	EdgeSupersedes     = tasks.EdgeSupersedes
+	EdgeDuplicates     = tasks.EdgeDuplicates
+)
+
+// Edge re-exports tasks.Edge. See ADR 0014.
+type Edge = tasks.Edge
+
 // RevID is the opaque identifier of a committed revision in the
 // code-artifact Fossil substrate per ADR 0010. Treated as opaque by
 // coord callers: equality and display are supported, structural parsing
