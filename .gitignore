@@ -1,6 +1,9 @@
 
 # Built binaries
 bin/
+# examples/two-agents leaves these in cwd when run without -o or from the repo root.
+/two-agents
+/.nats-store/
 
 # Beads / Dolt files (added by bd init)
 .dolt/
