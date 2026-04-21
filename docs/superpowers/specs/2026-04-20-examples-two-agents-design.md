@@ -182,7 +182,9 @@ Summary of threads used by the harness:
   both children subscribe.
 - `harness.chat` — Steps 1 and 5 primary traffic. Both agents subscribe.
 - `room.42`, `room.99` — Step 6 wildcard targets. agent-a subscribes
-  via `SubscribePattern("room.*")`.
+  via `SubscribePattern("*")` — matches every ThreadShort (see Step 6
+  above for the ADR 0009 substrate-leak rationale; `"room.*"` cannot
+  match a hashed ThreadShort).
 
 ## File layout
 
