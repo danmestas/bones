@@ -293,6 +293,40 @@ use case: either the default is right or it needs ADR-level discussion. ADR
 exactly once in `Open` when the KV bucket is declared. A change to the
 constant is a visible diff that pairs naturally with an ADR amendment.
 
+## Invariant 20: Commit is hold-gated
+
+Every File.Path passed to coord.Commit must be held by cfg.AgentID at
+precheck time; unheld files cause ErrNotHeld without any write to the
+fossil repo. Introduced by ADR 0010 §4.
+
+## Invariant 21: Fork-on-conflict preserves work
+
+When coord.Commit detects a sibling leaf on the current branch, the
+commit is placed on a new branch named `${agent_id}-${task_id}-${unix_nano}`
+and the returned error wraps ErrConflictForked. The commit is durable
+on the forked branch; the error signals that reconciliation via
+coord.Merge is the caller's next step. ADR 0010 §4-5.
+
+## Invariant 22: Fork branch names are unique-per-commit
+
+Forked branches use `${agent_id}-${task_id}-${unix_nano}` so a single
+agent forking repeatedly on the same task in quick succession still
+produces distinct branch names. ADR 0010 §5.
+
+## Invariant 23: Merge produces a single commit on dst
+
+coord.Merge(src, dst) places exactly one merge commit on dst
+referencing src's tip as a parent. On unresolved three-way conflicts,
+no commit is created and ErrMergeConflict is returned. ADR 0010 §5.
+
+## Invariant 24: claim_epoch is monotonic
+
+The Task.ClaimEpoch field is monotonically non-decreasing across the
+task's lifetime and strictly increases on every successful Claim or
+Reclaim. Mutations under a stale epoch (Commit, CloseTask) are refused
+with ErrEpochStale. Legacy records without the field decode as epoch=0;
+the first Claim bumps to 1. ADR 0013.
+
 ## Where the invariants live
 
 Invariants 6 and 7 are the load-bearing guarantees of ADR 0002 (scoped holds via
@@ -301,5 +335,8 @@ closure/return-release). Invariant 10 is the no-error-swallowing corollary to AD
 and 0007 (Claim task-CAS ordering); ADR 0006 is the narrowing that made those
 invariants the task-conflict contract rather than fork-merge policy. Invariant 17
 is entailed by ADR 0008 (chat substrate). Invariants 18-19 are entailed by ADR 0009
-(presence substrate). This document is the canonical list; coord method godoc
+(presence substrate). Invariants 20-23 are entailed by ADR 0010 (code artifacts:
+hold-gated commits, fork-on-conflict, unique fork branch names, merge-to-single-commit).
+Invariant 24 is entailed by ADR 0013 (claim reclamation: claim_epoch monotonicity).
+This document is the canonical list; coord method godoc
 will cite these numbers rather than restating the reasoning.
