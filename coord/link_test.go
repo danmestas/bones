@@ -127,7 +127,8 @@ func TestLink_IdempotentDuplicate(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	if len(rec.Edges) != 1 {
-		t.Errorf("Edges len = %d, want 1 (invariant 25: no duplicate (type, target) pairs)", len(rec.Edges))
+		t.Errorf("Edges len = %d, want 1 (invariant 25: no duplicate pairs)",
+			len(rec.Edges))
 	}
 }
 
@@ -178,6 +179,7 @@ func TestLink_ConcurrentWritersConverge(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	if len(rec.Edges) != 2 {
-		t.Errorf("Edges len = %d, want 2 (both concurrent Links must land via CAS-retry)", len(rec.Edges))
+		t.Errorf("Edges len = %d, want 2 (concurrent Links must land)",
+			len(rec.Edges))
 	}
 }
