@@ -150,6 +150,10 @@ var ErrClaimerLive = errors.New("coord: current claimer is still live")
 // task is terminal per invariant 13. ADR 0013.
 var ErrTaskNotClaimed = errors.New("coord: task is not claimed")
 
+// ErrInvalidEdgeType is returned from Link when the supplied EdgeType
+// is not one of the defined constants. Invariant 26 (ADR 0014).
+var ErrInvalidEdgeType = errors.New("coord: invalid edge type")
+
 // ErrAlreadyClaimer reports that Reclaim was called by an agent that
 // is already the current claimed_by — self-reclaim is nonsensical.
 // ADR 0013.
