@@ -475,7 +475,12 @@ func stepWhoPresence(ctx context.Context, c *coord.Coord, natsURL, tempDir strin
 	if err != nil {
 		return fmt.Errorf("open probe coord: %w", err)
 	}
-	time.Sleep(500 * time.Millisecond)
+	select {
+	case <-time.After(500 * time.Millisecond):
+	case <-ctx.Done():
+		_ = probe.Close()
+		return ctx.Err()
+	}
 	_ = probe.Close()
 
 	sawJoin, sawLeave := false, false
