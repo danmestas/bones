@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -180,6 +181,11 @@ func runParent(ctx context.Context) int {
 	}
 	slog.Info("both children ready")
 
+	taskID, err := c.OpenTask(ctx, "two-agents claim test", []string{"/dev/null"})
+	if err != nil {
+		return parentFail(c, agentA, agentB, "open task", err)
+	}
+
 	// Step 1: Post/Subscribe.
 	if err := c.Post(ctx, threadCtrl, []byte("trig:go")); err != nil {
 		return parentFail(c, agentA, agentB, "trig:go post", err)
@@ -188,6 +194,15 @@ func runParent(ctx context.Context) int {
 		return parentFail(c, agentA, agentB, "step 1", err)
 	}
 	fmt.Println("step 1 PASS (post/subscribe)")
+
+	// Step 2: Claim/Release.
+	if err := c.Post(ctx, threadCtrl, []byte("trig:claim:"+string(taskID))); err != nil {
+		return parentFail(c, agentA, agentB, "trig:claim post", err)
+	}
+	if _, err := waitForResult(ctx, ctrlEvents, 2); err != nil {
+		return parentFail(c, agentA, agentB, "step 2", err)
+	}
+	fmt.Println("step 2 PASS (claim/release)")
 
 	// Signal children to exit.
 	if err := c.Post(ctx, threadCtrl, []byte("trig:done")); err != nil {
@@ -310,11 +325,60 @@ func runAgent(ctx context.Context, role string) int {
 }
 
 func dispatchStep(ctx context.Context, c *coord.Coord, role, trig string, chatEvents <-chan coord.Event) error {
-	switch trig {
-	case "trig:go":
+	switch {
+	case trig == "trig:go":
 		return stepPostSubscribe(ctx, c, role, chatEvents)
+	case strings.HasPrefix(trig, "trig:claim:"):
+		taskID := coord.TaskID(strings.TrimPrefix(trig, "trig:claim:"))
+		return stepClaimRelease(ctx, c, role, taskID)
 	}
 	return fmt.Errorf("unknown trigger: %s", trig)
+}
+
+// stepClaimRelease: agent-a claims; agent-b asserts ErrHeldByAnother; release/retry/release.
+// Agent-a posts handoff:released on harness.ctrl so agent-b retries only after release.
+func stepClaimRelease(ctx context.Context, c *coord.Coord, role string, taskID coord.TaskID) error {
+	switch role {
+	case "agent-a":
+		release, err := c.Claim(ctx, taskID, 10*time.Second)
+		if err != nil {
+			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:a claim: "+err.Error()))
+		}
+		// Give agent-b 1s to attempt its (failing) claim; then release.
+		time.Sleep(1500 * time.Millisecond)
+		if err := release(); err != nil {
+			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:a release: "+err.Error()))
+		}
+		return c.Post(ctx, threadCtrl, []byte("handoff:released"))
+
+	case "agent-b":
+		_, err := c.Claim(ctx, taskID, 10*time.Second)
+		if !errors.Is(err, coord.ErrTaskAlreadyClaimed) {
+			return c.Post(ctx, threadCtrl, []byte(fmt.Sprintf(
+				"result:step-2:FAIL:b first claim: want ErrTaskAlreadyClaimed got %v", err)))
+		}
+		ctrlSub, closeCtrl, subErr := c.Subscribe(ctx, threadCtrl)
+		if subErr != nil {
+			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:b subscribe ctrl: "+subErr.Error()))
+		}
+		defer closeCtrl()
+		_, waitErr := waitFor(ctx, ctrlSub, 3*time.Second, func(e coord.Event) bool {
+			cm, ok := e.(coord.ChatMessage)
+			return ok && cm.Body() == "handoff:released"
+		})
+		if waitErr != nil {
+			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:b wait handoff: "+waitErr.Error()))
+		}
+		release, err := c.Claim(ctx, taskID, 10*time.Second)
+		if err != nil {
+			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:b retry: "+err.Error()))
+		}
+		if err := release(); err != nil {
+			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:b release: "+err.Error()))
+		}
+		return c.Post(ctx, threadCtrl, []byte("result:step-2:PASS"))
+	}
+	return nil
 }
 
 // stepPostSubscribe: agent-a posts "hello from a"; agent-b asserts receipt.
