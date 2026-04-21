@@ -436,8 +436,8 @@ func TestInvariant_NilMutate(t *testing.T) {
 func TestTask_ClaimEpoch_DecodeMissing(t *testing.T) {
 	// Legacy JSON (no claim_epoch field) must decode with ClaimEpoch=0.
 	legacy := []byte(`{"id":"t1","title":"x","status":"open","files":["/a"],"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","schema_version":1}`)
-	got, err := tasks.Task{}, error(nil)
-	if err = json.Unmarshal(legacy, &got); err != nil {
+	var got tasks.Task
+	if err := json.Unmarshal(legacy, &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if got.ClaimEpoch != 0 {
