@@ -1,8 +1,12 @@
 # CAPABILITIES — beads → agent-infra side-by-side
 
 *Last updated 2026-04-21 — revised after Phase 5 (fossil code artifacts)
-landed per ADR 0010. Phases 1–5 are shipped; Phase 6 (beads capability
-closure) is the next scope.*
+landed per ADR 0010 and ADR 0013 (claim reclamation). Phases 1–5 are
+shipped; Phase 6 (beads capability closure) is the next scope, with
+eight tickets filed: `dcd` (typed edges), `0sr` (Blocked), `8m9`
+(defer_until), `9bu` (this doc refresh), `rbu` (Prime + plugin),
+`znr` (AI compaction), `kue` (stale/orphans/preflight), `ayy` (--json
+audit).*
 
 This doc enumerates what **beads** provides and maps each capability to
 **agent-infra**'s shipped or planned equivalent (or explicit non-goal).
@@ -48,10 +52,10 @@ conflict resolution is one round trip with a deterministic winner
 | `bd update --claim` — atomic assignment | `coord.Claim(ctx, taskID, ttl)` — task-CAS then hold acquisition per ADR 0007 | implemented | See `coord/coord.go` (`Claim`, `releaseClosure`). CAS-lose returns `ErrTaskAlreadyClaimed` immediately; no intermediate fork state. |
 | `bd close --reason` / `--suggest-next` | `coord.CloseTask(ctx, taskID, reason)` | implemented | See `coord/close_task.go`. Closer must be the current claimed_by (invariant 12). "suggest-next" (show newly unblocked) is not yet shipped — requires a DAG query layer on top of Ready. |
 | `bd ready --json` | `coord.Ready(ctx)` — KV scan filtered to status=open, claimed_by empty | implemented | See `coord/ready.go`. Sorts oldest-first; capped by `Config.MaxReadyReturn`. |
-| `bd blocked` | `coord.Blocked()` | planned | Same DAG, filtered inversely. Phase 5+ once links land. |
+| `bd blocked` | `coord.Blocked()` | planned | Same DAG, filtered inversely. Phase 6 (tickets `dcd` → `0sr`). |
 | `bd list --status=X` | `coord.List(filter struct)` | planned | Struct filter, not a query-string DSL. |
-| `bd defer --until` | `defer_until:` field + Ready filter | planned | Not yet on the task record. |
-| `bd stale` / `bd orphans` / `bd preflight` | Helpers under `cmd/agent-tasks/` | TBD | Lint-style checks fit the CLI better than the library. CLI itself still planned. |
+| `bd defer --until` | `defer_until:` field + Ready filter | planned | Phase 6 (ticket `8m9`). Not yet on the task record. |
+| `bd stale` / `bd orphans` / `bd preflight` | Helpers under `cmd/agent-tasks/` | planned | Lint-style checks fit the CLI better than the library. `cmd/agent-tasks` ships with `create`/`list`/`show`/`claim`/`update`/`close`; the stale/orphans/preflight helpers are Phase 6 (ticket `kue`). |
 | Priority 0–4 (0=critical) | Same integer scheme | planned | Additive extension to the Phase 2 record. |
 
 ## 2. Dependency graph
@@ -59,9 +63,9 @@ conflict resolution is one round trip with a deterministic winner
 | Beads | agent-infra plan | Status | Notes |
 |---|---|---|---|
 | Typed edges: `blocks`, `parent-child`, `conditional-blocks`, `waits-for`, `discovered-from`, `replies-to`, `supersedes`, `duplicates`, `relates-to`, `authored-by`, `assigned-to`, `approved-by`, `attests` | `links:` frontmatter array of `{type, target}` | planned | Keep beads' type set — it's well-considered. `discovered-from` especially valuable for cross-session context. |
-| `bd dep add` / `bd dep remove` | `coord.Link(from, to, type)` | planned | Phase 2 or 3. |
-| Ready computation excludes blocked by {`blocks`, `conditional-blocks`, `parent-child`} | Same logic over in-memory DAG built on read | planned | No denormalized `blocked_ids` table. At hundreds–thousands of tasks this is fine. |
-| Thread roots via `thread_id` on edges (`replies-to`) | Thread = `replies-to` edges OR dedicated `thread:` frontmatter field | TBD | Open: model threads as edges or as timeline subtrees. |
+| `bd dep add` / `bd dep remove` | `coord.Link(from, to, type)` | planned | Phase 6 (ticket `dcd`). Schema bump required — edges land as a new field on the task record. |
+| Ready computation excludes blocked by {`blocks`, `conditional-blocks`, `parent-child`} | Same logic over in-memory DAG built on read | planned | Phase 6 (ticket `dcd`). No denormalized `blocked_ids` table. At hundreds–thousands of tasks this is fine. |
+| Thread roots via `thread_id` on edges (`replies-to`) | `ChatMessage.ReplyTo` carries the threading edge per ADR 0008 | implemented | Threads are edges (not subtrees). Resolved by ADR 0008; see `coord/events.go`. |
 
 ## 3. Persistence and sync
 
@@ -70,7 +74,7 @@ conflict resolution is one round trip with a deterministic winner
 | Dolt SQL server (MySQL-compatible, :3307) | Two substrates by role: tasks on NATS JetStream KV (ADR 0005), code on Fossil via libfossil (ADR 0010, Phase 5) | implemented | Fundamentally different from Dolt. Tasks are CAS-shaped, not commit-shaped; code gets a Fossil commit timeline. See `internal/tasks/`, `internal/fossil/`. |
 | Cell-level merge (auto-resolve non-conflicting cells) | **Application-layer** merge on code artifacts via fossil fork-as-sibling-leaf + chat notify (ADR 0004 / ADR 0010); task state is CAS-gated and never merges | implemented for code / non-issue for tasks | **Permanent gap on the code side.** Tasks avoid the problem entirely (CAS-lose returns immediately, no fork state). Code-side fork detection lands in `coord.Commit` via `WouldFork`; reconciliation is explicit via `coord.Merge`. |
 | Versioned schema migrations (0001–0015+) | `schema_version` field on each task record; forward-only migrator | planned | Schema field exists (starts at 1) but no migrator shipped. |
-| Content hash on Issue (SHA256 canonical) | Fossil artifact hash is native | planned | Free from fossil once Phase 5 lands. |
+| Content hash on Issue (SHA256 canonical) | Fossil artifact hash on code; task records still carry only `schema_version` | implemented for code / planned for tasks | Content-addressed `RevID` returned by every `coord.Commit` (see `coord/commit.go`). Task-record content hash is additive, not yet ticketed. |
 | `bd dolt push` / pull | Fossil autosync via leaf daemon | implemented | Agents don't push/pull — autosync does. Real ergonomic win. Phase 5 ships per-leaf checkouts writing to a shared repo DB; the leaf daemon handles replication. |
 | `RemoteStore` interface, push to Dolt remotes | Fossil sync to remote(s) via leaf daemon | implemented | Ships in Phase 5 alongside per-leaf checkouts. |
 | Merge slot (exclusive conflict-resolution slot) | Fossil fork-merge-commit (two leaves, next commit merges) for code per ADR 0010; no analogue needed for tasks | implemented for code | ADR 0010 §4 surfaces conflicts as `ErrConflictForked` on a deterministic branch name; `coord.Merge` converges branches back via a merge commit. See `coord/commit.go`, `coord/merge.go`. |
@@ -82,12 +86,12 @@ conflict resolution is one round trip with a deterministic winner
 
 | Beads | agent-infra plan | Status | Notes |
 |---|---|---|---|
-| `bd prime` — canonical context recovery | `agent-infra prime` (Phase 4) — outputs project state, ready work, claimed work, thread summaries | planned | Borrow the single-source-of-truth pattern directly. |
-| SessionStart + PreCompact hooks auto-inject `bd prime` | Claude plugin with the same two hooks calling `agent-infra prime` | planned | Phase 4 or 5. |
+| `bd prime` — canonical context recovery | `coord.Prime(ctx)` + `agent-tasks prime` CLI wrapper — outputs project state, ready work, claimed work, thread summaries | planned | Phase 6 (ticket `rbu`). Borrow the single-source-of-truth pattern directly. |
+| SessionStart + PreCompact hooks auto-inject `bd prime` | Claude plugin with the same two hooks calling `agent-tasks prime` | planned | Phase 6 (ticket `rbu`). |
 | "Landing the plane" session close (close issues, run QA, push, verify up-to-date) | Same ceremony, adapted: verify fossil timeline is synced, no outstanding txns | planned | Conceptual win to keep: agents are accountable for finalization, not "ready when you are." |
 | `bd edit` is prohibited (opens `$EDITOR`, blocks agents) | Never ship an equivalent; all mutations via flags or stdin | planned | Pre-learned lesson. |
-| `--json` everywhere | Every CLI subcommand supports `--json`; programmatic contract | planned | |
-| `discovered-from` linking for context recovery | Same edge type; `agent-infra task discover <new> --from <parent>` | planned | Cheap to implement, large payoff for multi-session continuity. |
+| `--json` everywhere | Every CLI subcommand supports `--json`; programmatic contract | partially implemented | `agent-tasks` subcommands accept `--json` per `cmd/agent-tasks/main.go`; schema stability audit is Phase 6 (ticket `ayy`). |
+| `discovered-from` linking for context recovery | Same edge type; `agent-infra task discover <new> --from <parent>` | planned | Phase 6 (ticket `dcd`). Cheap to implement once typed edges land, large payoff for multi-session continuity. |
 | `bd remember` / `bd memories` — memory as first-class, in Dolt not MEMORY.md | Memory is either an issue-type (`type: memory`) or a dedicated `memories/` dir | TBD | Open: memory as a task-type or a separate primitive? |
 
 ## 5. Communication and messaging
@@ -114,8 +118,8 @@ conflict resolution is one round trip with a deterministic winner
 
 | Beads | agent-infra plan | Status | Notes |
 |---|---|---|---|
-| Multi-tier AI compaction (summarize old closed issues via Haiku) | Port an equivalent — compaction pass over closed tasks, summaries as new records, originals archived | TBD | README flags this explicitly ("we'll likely port an equivalent"). Phase 6. |
-| `original_size`, `compact_level`, `compacted_at` metadata | Same scheme, frontmatter | TBD | |
+| Multi-tier AI compaction (summarize old closed issues via Haiku) | Port an equivalent — compaction pass over closed tasks, summaries as new records, originals archived | planned | Phase 6 (ticket `znr`). README flags this explicitly ("we'll likely port an equivalent"). ADR required to pin batch-vs-stream and summarizer choice. |
+| `original_size`, `compact_level`, `compacted_at` metadata | Same scheme on the task record | planned | Phase 6 (ticket `znr`). Lands with the compaction pass. |
 | Compaction audit trail | Fossil timeline *is* the audit trail — no separate log needed | planned | Free. |
 
 ## 8. Workflow templates
@@ -136,19 +140,19 @@ build one on top of `coord`.
 | Beads | agent-infra equivalent | Status | Notes |
 |---|---|---|---|
 | Content hash on Issue (SHA256 of canonical fields) | Fossil artifact hash on code artifacts (Phase 5 per ADR 0010); task records carry a schema_version but no content hash | implemented for code / planned for tasks | Free on the code side: every `coord.Commit` returns a content-addressed `RevID` (see `coord/commit.go`). Task records still carry only `schema_version`. |
-| `events` table + `EventKind` namespacing (`patrol.muted`, `agent.started`, ...) | In-process `coord.Event` interface carrying `ChatMessage`, `Reaction`, `PresenceChange` (ADR 0008 / 0009); no durable event store | TBD | Current events are live-only on Subscribe channels. Durable event records still TBD. |
+| `events` table + `EventKind` namespacing (`patrol.muted`, `agent.started`, ...) | In-process `coord.Event` interface carrying `ChatMessage`, `Reaction`, `PresenceChange` (ADR 0008 / 0009) | implemented (live-only) / TBD (durable) | `coord.Event` interface is shipped with three concrete types — see `coord/events.go`. Current events are live-only on Subscribe channels; whether a durable event store is worth building is still open. |
 | Append-only `interactions.jsonl` (LLM calls, tool calls, labeling) | Out of scope — consumers track their own LLM audit | non-goal | Not a substrate concern. |
-| Lint / orphan / stale checks | Helpers in `cmd/agent-tasks/` | TBD | CLI not yet shipped. |
+| Lint / orphan / stale checks | Helpers in `cmd/agent-tasks/` | planned | Phase 6 (ticket `kue`). Base CLI ships; these three helpers are additive. |
 
 ## 10. CLI and plugin surface
 
 | Beads | agent-infra plan | Status | Notes |
 |---|---|---|---|
-| ~29 `bd` subcommands | `agent-init` + `agent-tasks` binaries; narrow CLI | TBD | Won't match the breadth at v0.1. Focus on 8–10 commands that carry lifecycle + session management. |
-| Claude plugin: `plugin.json` with hooks, commands, skill, agents, MCP | Ship our own plugin in Phase 4/5 — same shape | planned | Direct borrow. |
-| MCP server exposing tool-level operations | Sibling binary (Phase 4 or 5) | TBD | Scope TBD. |
-| Task-agent autonomous workflow doc | Ship equivalent under `claude-plugin/agents/` | planned | Direct borrow. |
-| ADR directory | Adopt ADR pattern as decisions land; `docs/adr/` | TBD | When the first substantive decision arrives. |
+| ~29 `bd` subcommands | `agent-init` + `agent-tasks` binaries; narrow CLI | partially implemented | `agent-init` ships `init` + `join`; `agent-tasks` ships `create`/`list`/`show`/`claim`/`update`/`close` (~8 total). Stale/orphans/preflight helpers planned in Phase 6 (`kue`). Won't match beads' breadth at v0.1. |
+| Claude plugin: `plugin.json` with hooks, commands, skill, agents, MCP | Ship our own plugin in Phase 6 — same shape | planned | Phase 6 (ticket `rbu`). Direct borrow. |
+| MCP server exposing tool-level operations | Sibling binary (Phase 7) | planned | ADR 0011 reserved; ticket `hf1`. |
+| Task-agent autonomous workflow doc | Ship equivalent under `claude-plugin/agents/` | planned | Phase 6 (ticket `rbu`). Direct borrow. |
+| ADR directory | `docs/adr/` with ADRs 0001–0010, 0013 | implemented | 0011 and 0012 reserved for MCP and ACL respectively. |
 
 ## 11. Code artifacts (Phase 5 per ADR 0010)
 
@@ -229,9 +233,12 @@ NATS / JetStream KV).
   it.
 - **§7** — Compaction as a batch pass vs a streaming operation.
 - **§9** — Events as in-process-only vs a dedicated durable records
-  store. Phases 3–4 ship the in-process `coord.Event` interface only.
-- **§10** — Whether an MCP server is a required v0.1 deliverable
-  (tracked against ADR 0011).
+  store. The in-process `coord.Event` interface is shipped
+  (`ChatMessage`, `Reaction`, `PresenceChange`); a durable event
+  records store is still open.
+- **§10** — Whether an MCP server is a required deliverable
+  (tracked against ADR 0011 / ticket `hf1`; shifted to Phase 7 per
+  the 2026-04-21 phase-number reconciliation).
 
 ## 15. Migrating from beads (short)
 
@@ -244,7 +251,7 @@ For users coming from `bd`, the mental mapping is approximately:
 | `bd close <id> --reason` | `coord.CloseTask(ctx, taskID, reason)` — `coord/close_task.go` |
 | `bd ready --json` | `coord.Ready(ctx)` — `coord/ready.go` |
 | `bd remember` / `bd memories` | No equivalent yet — memory primitive is still TBD (§4). |
-| `bd prime` | Not yet — `agent-infra prime` is planned. |
+| `bd prime` | Not yet — `coord.Prime()` + `agent-tasks prime` is Phase 6 (`rbu`). |
 
 The substrate differences that matter most:
 
