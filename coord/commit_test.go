@@ -160,6 +160,39 @@ func TestOpenFile_InvariantPanics(t *testing.T) {
 	})
 }
 
+// TestCheckout_AfterCommit_WithAbsolutePaths is the coord-layer
+// regression that closes agent-infra-oar. OpenTask's Invariant 4 forces
+// absolute paths for every tracked file; before the fix,
+// coord.Checkout(ctx, rev) propagated libfossil's path-traversal
+// rejection on any such rev. After the fix, internal/fossil.normalize
+// strips the leading slash before reaching libfossil, so Checkout
+// succeeds. On-disk verification lives in the fossil-layer test; this
+// one only exercises the API surface callers actually use.
+func TestCheckout_AfterCommit_WithAbsolutePaths(t *testing.T) {
+	nc, _ := natstest.NewJetStreamServer(t)
+	dir := t.TempDir()
+	sharedRepo := filepath.Join(dir, "shared-code.fossil")
+	c := newCoordWithCodeRepo(
+		t, nc.ConnectedUrl(), "checkout-abs-agent", sharedRepo,
+	)
+	ctx := context.Background()
+
+	path := "/src/navigator.go"
+	id := openClaim(t, c, "navigation task", path)
+	rev, err := c.Commit(ctx, id, "initial", []File{
+		{Path: path, Content: []byte("package main\n")},
+	})
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if rev == "" {
+		t.Fatalf("Commit: empty rev")
+	}
+	if err := c.Checkout(ctx, rev); err != nil {
+		t.Fatalf("Checkout: %v", err)
+	}
+}
+
 // TestCommit_ForkOnConflict_ChatNotify proves ADR 0010 §4-5 end-to-end
 // against a shared Fossil repo. Flow:
 //
