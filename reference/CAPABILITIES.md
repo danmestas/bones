@@ -1,8 +1,8 @@
 # CAPABILITIES — beads → agent-infra side-by-side
 
-*Last updated 2026-04-19 — revised after Phase 4 (presence, reactions,
-AskAdmin, SubscribePattern) landed. Phases 1–4 are shipped; Phase 5
-(fossil code artifacts) is designed but not yet implemented.*
+*Last updated 2026-04-21 — revised after Phase 5 (fossil code artifacts)
+landed per ADR 0010. Phases 1–5 are shipped; Phase 6 (beads capability
+closure) is the next scope.*
 
 This doc enumerates what **beads** provides and maps each capability to
 **agent-infra**'s shipped or planned equivalent (or explicit non-goal).
@@ -67,16 +67,16 @@ conflict resolution is one round trip with a deterministic winner
 
 | Beads | agent-infra equivalent | Status | Notes |
 |---|---|---|---|
-| Dolt SQL server (MySQL-compatible, :3307) | Two substrates by role: tasks on NATS JetStream KV (ADR 0005), code on Fossil via go-libfossil (ADR 0010, Phase 5 — designed, not yet implemented) | implemented for tasks / planned for code | Fundamentally different from Dolt. Tasks are CAS-shaped, not commit-shaped; code still gets a commit timeline. See `internal/tasks/`. |
-| Cell-level merge (auto-resolve non-conflicting cells) | **Application-layer** merge on code artifacts via fossil fork-as-sibling-leaf + chat notify (ADR 0004 / ADR 0010); task state is CAS-gated and never merges | TBD for code / non-issue for tasks | **Permanent gap on the code side.** Tasks avoid the problem entirely (CAS-lose returns immediately, no fork state). The code-side merge story lands with Phase 5. |
+| Dolt SQL server (MySQL-compatible, :3307) | Two substrates by role: tasks on NATS JetStream KV (ADR 0005), code on Fossil via libfossil (ADR 0010, Phase 5) | implemented | Fundamentally different from Dolt. Tasks are CAS-shaped, not commit-shaped; code gets a Fossil commit timeline. See `internal/tasks/`, `internal/fossil/`. |
+| Cell-level merge (auto-resolve non-conflicting cells) | **Application-layer** merge on code artifacts via fossil fork-as-sibling-leaf + chat notify (ADR 0004 / ADR 0010); task state is CAS-gated and never merges | implemented for code / non-issue for tasks | **Permanent gap on the code side.** Tasks avoid the problem entirely (CAS-lose returns immediately, no fork state). Code-side fork detection lands in `coord.Commit` via `WouldFork`; reconciliation is explicit via `coord.Merge`. |
 | Versioned schema migrations (0001–0015+) | `schema_version` field on each task record; forward-only migrator | planned | Schema field exists (starts at 1) but no migrator shipped. |
 | Content hash on Issue (SHA256 canonical) | Fossil artifact hash is native | planned | Free from fossil once Phase 5 lands. |
-| `bd dolt push` / pull | Fossil autosync via leaf daemon | planned | Agents don't push/pull — autosync does. Real ergonomic win. Arrives with Phase 5. |
-| `RemoteStore` interface, push to Dolt remotes | Fossil sync to remote(s) via leaf daemon | planned | Phase 5. |
-| Merge slot (exclusive conflict-resolution slot) | Fossil fork-merge-commit (two leaves, next commit merges) for code per ADR 0010; no analogue needed for tasks | planned for code | ADR 0010 §4 surfaces conflicts as `ErrConflictForked` on a deterministic branch name. |
+| `bd dolt push` / pull | Fossil autosync via leaf daemon | implemented | Agents don't push/pull — autosync does. Real ergonomic win. Phase 5 ships per-leaf checkouts writing to a shared repo DB; the leaf daemon handles replication. |
+| `RemoteStore` interface, push to Dolt remotes | Fossil sync to remote(s) via leaf daemon | implemented | Ships in Phase 5 alongside per-leaf checkouts. |
+| Merge slot (exclusive conflict-resolution slot) | Fossil fork-merge-commit (two leaves, next commit merges) for code per ADR 0010; no analogue needed for tasks | implemented for code | ADR 0010 §4 surfaces conflicts as `ErrConflictForked` on a deterministic branch name; `coord.Merge` converges branches back via a merge commit. See `coord/commit.go`, `coord/merge.go`. |
 | External tracker sync (Linear, Jira, GitLab, Notion, ADO) via `IssueTracker` adapter | Out of scope for v0.1 | non-goal | Consumers can author adapters. |
 | Federation via `external_ref` / `source_system` | Same concept, additive fields on the task record | TBD | Phase 6 if needed. |
-| `wisps` ephemeral table (dolt_ignored, no history bloat) | NATS KV TTL state for ephemeral (holds, presence); fossil only receives durable code state | implemented | See `internal/holds/`, `internal/presence/`. Ephemeral = NATS-KV with TTL; durable code = fossil (Phase 5). |
+| `wisps` ephemeral table (dolt_ignored, no history bloat) | NATS KV TTL state for ephemeral (holds, presence); fossil only receives durable code state | implemented | See `internal/holds/`, `internal/presence/`. Ephemeral = NATS-KV with TTL; durable code = fossil (`internal/fossil/`, shipped Phase 5). |
 
 ## 4. Agent-facing workflow
 
@@ -135,7 +135,7 @@ build one on top of `coord`.
 
 | Beads | agent-infra equivalent | Status | Notes |
 |---|---|---|---|
-| Content hash on Issue (SHA256 of canonical fields) | Fossil artifact hash on code artifacts (Phase 5 per ADR 0010); task records carry a schema_version but no content hash | planned | Free on the code side once Phase 5 lands; not yet shipped for task records. |
+| Content hash on Issue (SHA256 of canonical fields) | Fossil artifact hash on code artifacts (Phase 5 per ADR 0010); task records carry a schema_version but no content hash | implemented for code / planned for tasks | Free on the code side: every `coord.Commit` returns a content-addressed `RevID` (see `coord/commit.go`). Task records still carry only `schema_version`. |
 | `events` table + `EventKind` namespacing (`patrol.muted`, `agent.started`, ...) | In-process `coord.Event` interface carrying `ChatMessage`, `Reaction`, `PresenceChange` (ADR 0008 / 0009); no durable event store | TBD | Current events are live-only on Subscribe channels. Durable event records still TBD. |
 | Append-only `interactions.jsonl` (LLM calls, tool calls, labeling) | Out of scope — consumers track their own LLM audit | non-goal | Not a substrate concern. |
 | Lint / orphan / stale checks | Helpers in `cmd/agent-tasks/` | TBD | CLI not yet shipped. |
@@ -150,9 +150,30 @@ build one on top of `coord`.
 | Task-agent autonomous workflow doc | Ship equivalent under `claude-plugin/agents/` | planned | Direct borrow. |
 | ADR directory | Adopt ADR pattern as decisions land; `docs/adr/` | TBD | When the first substantive decision arrives. |
 
+## 11. Code artifacts (Phase 5 per ADR 0010)
+
+Code artifacts are where beads explicitly stops: beads users keep code in
+git. agent-infra ships the substrate for them alongside the task and chat
+substrates — Fossil per-leaf checkouts writing to a shared repo DB,
+hold-gated commits, and deterministic fork-on-conflict with chat notify.
+
+| Beads | agent-infra equivalent | Status | Notes |
+|---|---|---|---|
+| — (code lives in git, external to beads) | `coord.Commit(ctx, taskID, message, files)` — writes files + author commit under `cfg.AgentID`; hold-gated per Invariant 20 | implemented | See `coord/commit.go`. Paths must all be held by the caller; uses the `Claim` release closure pattern from ADR 0007. |
+| — | `coord.OpenFile(ctx, rev, path)` — reads file contents at an arbitrary rev | implemented | See `coord/open_file.go`. Reads from the blob store; doesn't require a synced working tree at `rev`. |
+| — | `coord.Checkout(ctx, rev)` — moves the caller's working checkout to `rev` | implemented | See `coord/checkout.go`. For navigation and rollback; writes still go through `Commit`. |
+| — | `coord.Diff(ctx, revA, revB, path)` — unified diff between two revs | implemented | See `coord/diff.go`. Format is stable across coord versions but not wire-stable. |
+| — | Fork-on-conflict: `ErrConflictForked` + `ConflictForkedError{Branch, Rev}` plus a `ChatMessage` on the task thread (single-line `"fork: agent=… branch=… rev=… path=…"` body) | implemented | See `coord/commit.go`, `coord/errors.go`. Fork branch names follow Invariant 22 (`<agent_id>-<task_id>-<unix_nano>`). |
+| — | `coord.Merge(ctx, src, dst, message)` — agent-callable merge with no role gate in Phase 5 | implemented | See `coord/merge.go`. Surfaces `ErrMergeConflict` when the three-way merge has unresolved conflicts. |
+
+The end-to-end dance — commit → OpenFile round-trip → Checkout → Diff →
+fork-on-conflict → Merge — is exercised by the `examples/two-agents-commit`
+smoke harness, alongside the Phase 3+4 coordination primitives covered by
+`examples/two-agents`.
+
 ---
 
-## 11. Things beads has that we explicitly will not ship
+## 12. Things beads has that we explicitly will not ship
 
 - **Workflow DSLs / formulas / molecules** — non-goal (§8).
 - **Built-in gates** — non-goal; consumers build gates on primitives.
@@ -165,7 +186,7 @@ build one on top of `coord`.
 - **Dolt cell-level merge** — we cannot match this with files. We accept
   the gap and absorb merge at the application layer (§3).
 
-## 12. Things we ship that beads does not
+## 13. Things we ship that beads does not
 
 - **Live presence** — `coord.Who` / `coord.WatchPresence` backed by
   NATS KV with TTL heartbeats per ADR 0009. **Implemented** — see
@@ -182,16 +203,20 @@ build one on top of `coord`.
   Beads has no file-level concurrency protocol (it operates at issue
   granularity only).
 - **Code artifacts in the same substrate** — fossil holds code commits
-  alongside the agent substrate per ADR 0010. Planned, not yet
-  implemented (Phase 5).
+  alongside the agent substrate per ADR 0010. **Implemented** — see
+  `coord/commit.go`, `coord/open_file.go`, `coord/checkout.go`,
+  `coord/diff.go`, `coord/merge.go`, `internal/fossil/`.
 - **Autosync via leaf daemon** — agents don't explicitly push/pull;
-  convergence happens lazily. Planned (Phase 5).
+  convergence happens lazily. **Implemented** — per-leaf checkouts
+  write to a shared repo DB; the leaf daemon handles sibling-leaf
+  replication.
 - **Fossil fork as a first-class merge primitive** — two concurrent
   leaves plus a next commit *is* the merge, surfaced as
-  `ErrConflictForked` per ADR 0010. Designed (Phase 5 scope); not
-  yet implemented.
+  `ErrConflictForked` per ADR 0010. **Implemented** — `coord.Commit`
+  returns `*ConflictForkedError` on sibling-leaf races; `coord.Merge`
+  is the agent-callable convergence primitive.
 
-## 13. Open questions parked for implementation phases
+## 14. Open questions parked for implementation phases
 
 Resolved and removed from this list: threads-as-edges-vs-subtrees (§2
 — chat threads are `replies-to` edges on `ChatMessage`, closed by
@@ -208,7 +233,7 @@ NATS / JetStream KV).
 - **§10** — Whether an MCP server is a required v0.1 deliverable
   (tracked against ADR 0011).
 
-## 14. Migrating from beads (short)
+## 15. Migrating from beads (short)
 
 For users coming from `bd`, the mental mapping is approximately:
 

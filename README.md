@@ -225,6 +225,9 @@ NATS carries:
 - `examples/two-agents/` — harness that spawns two subagents via Claude Code
   `Task` tool, each gets a checkout, writes complementary files, syncs,
   chats
+- `examples/two-agents-commit/` — sibling harness exercising the Phase 5
+  code-artifact surface end to end: `coord.Commit`, `OpenFile`,
+  `Checkout`, `Diff`, fork-on-conflict, and `Merge` per ADR 0010
 - Chaos: overlapping edits, simultaneous task claim, agent kill-and-restart
   mid-commit
 
@@ -255,7 +258,8 @@ agent-infra/
     nats.go/          # Shallow clone (nats-io/nats.go)
     CAPABILITIES.md   # Side-by-side: beads feature → our equivalent (TBD)
   examples/
-    two-agents/       # Smoke-test harness
+    two-agents/         # Smoke-test harness (Phase 3+4 coord primitives)
+    two-agents-commit/  # Smoke-test harness (Phase 5 code artifacts per ADR 0010)
   go.work.example     # Points at ../EdgeSync and ../libfossil (NOT reference/)
   GETTING_STARTED.md  # Fresh-session handoff doc
   README.md           # This file

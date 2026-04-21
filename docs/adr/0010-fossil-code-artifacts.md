@@ -146,16 +146,20 @@ suffix on the retry's conflict. Beads-style hash IDs would work too;
 already guarantee cross-agent uniqueness.
 
 On conflict, coord auto-posts a `ChatMessage` to the task's chat
-thread (resolvable from the task record's thread pointer). Body
-format:
+thread (resolvable from the task record's thread pointer) using a
+single-line body format — chat readers and log scrapers parse it as
+one message rather than multi-line prose. Exact form:
 
 ```
-[fork] agent=<agent-id> task=<task-id>
-  branch=<agent-id>-<task-id>-<ts>
-  rev=<short-rev>
-  parent=<short-rev>
-  summary=<commit message first line>
+fork: agent=<agent-id> branch=<agent-id>-<task-id>-<unix-nano> rev=<rev> path=<committed-path>
 ```
+
+The single-line format was chosen during 0p9.5 implementation over the
+multi-line sketch this ADR originally carried: one `coord.Post` stays
+one `ChatMessage`, which keeps Subscribe-side matching trivial (a
+single `strings.HasPrefix(body, "fork: ")` check) and lines up with
+the `examples/two-agents-commit` smoke harness's fork-notify
+assertion.
 
 The message body is coord-formatted but lives in chat as an ordinary
 `ChatMessage` — no new event type, no substrate wedge. A supervisor
@@ -352,14 +356,13 @@ binary-artifact pipe. Media payloads (ADR 0009 deferred item) and
 large code artifacts may converge on the same solution; the ticket
 tracks them together.
 
-**ADR 0004 reconciliation.** ADR 0004's chat-notify step was
-underspecified; this ADR concretizes it as a `ChatMessage` post on
-the task's thread with a documented body format. If the ADR 0004
-authors intended a distinct event type, that is a deliberate
-override here — inventing a `Fork` event type for one code path is
-strictly more surface than the chat-message format this ADR ships
-with, and `ChatMessage` is already the supervisor-visible channel.
-Flag if revisiting.
+**ADR 0004 reconciliation.** RESOLVED in 0p9.5: the chat-notify step
+ships as a single-line `ChatMessage` body
+(`"fork: agent=<> branch=<> rev=<> path=<>"` — see §5) on the task's
+thread. No `Fork` event type was introduced — a one-path-only event
+subtype would have cost more surface than the chat-message format,
+and `ChatMessage` is already the supervisor-visible channel. ADR 0004
+is considered concretized by this landing; no further follow-up.
 
 ## Cross-links
 
