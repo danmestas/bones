@@ -65,7 +65,10 @@ func TestTask_EmptyEdgesOmitted(t *testing.T) {
 }
 
 func TestTask_UnknownEdgeTypePreserved(t *testing.T) {
-	raw := `{"id":"agent-infra-gg77","title":"t","status":"open","files":["c.go"],"created_at":"2026-04-21T00:00:00Z","updated_at":"2026-04-21T00:00:00Z","schema_version":1,"edges":[{"type":"future-type","target":"agent-infra-hh88"}]}`
+	raw := `{"id":"agent-infra-gg77","title":"t","status":"open",` +
+		`"files":["c.go"],"created_at":"2026-04-21T00:00:00Z",` +
+		`"updated_at":"2026-04-21T00:00:00Z","schema_version":1,` +
+		`"edges":[{"type":"future-type","target":"agent-infra-hh88"}]}`
 	var rec tasks.Task
 	if err := json.Unmarshal([]byte(raw), &rec); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
@@ -74,6 +77,7 @@ func TestTask_UnknownEdgeTypePreserved(t *testing.T) {
 		t.Fatalf("Edges len = %d, want 1", len(rec.Edges))
 	}
 	if rec.Edges[0].Type != tasks.EdgeType("future-type") {
-		t.Errorf("unknown type dropped; got %q (invariant 26 requires preservation)", rec.Edges[0].Type)
+		t.Errorf("unknown type dropped; got %q (invariant 26)",
+			rec.Edges[0].Type)
 	}
 }
