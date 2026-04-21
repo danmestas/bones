@@ -991,7 +991,11 @@ git commit -m "examples/two-agents: step 5 (react)"
 
 ### Task 8: Step 6 — SubscribePattern
 
-agent-a additionally subscribes `room.*` pattern. agent-b posts to `room.42` and `room.99`. agent-a asserts it receives both.
+agent-a additionally subscribes pattern `*` (matches any ThreadShort). agent-b posts to `room.42` and `room.99`. agent-a asserts it receives both via the same pattern subscription. Two distinct thread names hash to two distinct ThreadShorts, both matching `*`, so `len(seen) == 2` keyed by `cm.Thread()` confirms receipt.
+
+**Substrate leak:** `SubscribePattern` operates on the raw NATS ThreadShort (8-char SHA-256 hex), NOT on the thread-name string. A name-level pattern like `room.*` never matches any real ThreadShort (ADR 0009, ticket agent-infra-6wv — name-prefix matching needs the deferred option-3 KV registry). `*` is the documented way to exercise cross-thread pattern delivery here.
+
+**ctrlEvents threading (same fix as Task 4):** `stepWildcard` takes `ctrlEvents` from `dispatchStep` instead of opening a second `Subscribe` call. A second subscribe would be subject to the same drop-on-miss race Task 4 hit: agent-a's `ready:wildcard` post can fire before agent-b's fresh subscription is live.
 
 **Files:**
 - Modify: `examples/two-agents/main.go`
@@ -1000,23 +1004,25 @@ agent-a additionally subscribes `room.*` pattern. agent-b posts to `room.42` and
 
 ```go
 	case trig == "trig:wildcard":
-		return stepWildcard(ctx, c, role)
+		return stepWildcard(ctx, c, role, ctrlEvents)
 ```
 
 ```go
-// stepWildcard: agent-a opens SubscribePattern("room.*") per step; agent-b posts to room.42/room.99.
-func stepWildcard(ctx context.Context, c *coord.Coord, role string) error {
+// stepWildcard: agent-a opens SubscribePattern("*"); agent-b posts to room.42 and room.99;
+// agent-a asserts receipt of both via the hashed ThreadShort keys. See ADR 0009 for why
+// the pattern is "*", not "room.*".
+func stepWildcard(ctx context.Context, c *coord.Coord, role string, ctrlEvents <-chan coord.Event) error {
 	switch role {
 	case "agent-a":
-		patternEvents, closePattern, err := c.SubscribePattern(ctx, "room.*")
+		patternEvents, closePattern, err := c.SubscribePattern(ctx, "*")
 		if err != nil {
 			return c.Post(ctx, threadCtrl, []byte("result:step-6:FAIL:subscribe: "+err.Error()))
 		}
 		defer closePattern()
 
-		// Signal readiness — parent waits before triggering agent-b.
+		// Signal readiness — agent-b waits before posting to the rooms.
 		if err := c.Post(ctx, threadCtrl, []byte("ready:wildcard")); err != nil {
-			return err
+			return c.Post(ctx, threadCtrl, []byte("result:step-6:FAIL:post ready: "+err.Error()))
 		}
 
 		seen := make(map[string]bool)
@@ -1035,13 +1041,9 @@ func stepWildcard(ctx context.Context, c *coord.Coord, role string) error {
 		return c.Post(ctx, threadCtrl, []byte("result:step-6:PASS"))
 
 	case "agent-b":
-		// Wait for ready:wildcard from agent-a, then post to both rooms.
-		ctrlSub, closeCtrl, err := c.Subscribe(ctx, threadCtrl)
-		if err != nil {
-			return err
-		}
-		defer closeCtrl()
-		_, err = waitFor(ctx, ctrlSub, 2*time.Second, func(e coord.Event) bool {
+		// Wait for ready:wildcard from agent-a via the existing ctrlEvents
+		// channel — avoids Task-4 subscribe-race window.
+		_, err := waitFor(ctx, ctrlEvents, 2*time.Second, func(e coord.Event) bool {
 			cm, ok := e.(coord.ChatMessage)
 			return ok && cm.Body() == "ready:wildcard"
 		})
@@ -1049,9 +1051,12 @@ func stepWildcard(ctx context.Context, c *coord.Coord, role string) error {
 			return c.Post(ctx, threadCtrl, []byte("result:step-6:FAIL:b wait: "+err.Error()))
 		}
 		if err := c.Post(ctx, "room.42", []byte("in-42")); err != nil {
-			return err
+			return c.Post(ctx, threadCtrl, []byte("result:step-6:FAIL:post room.42: "+err.Error()))
 		}
-		return c.Post(ctx, "room.99", []byte("in-99"))
+		if err := c.Post(ctx, "room.99", []byte("in-99")); err != nil {
+			return c.Post(ctx, threadCtrl, []byte("result:step-6:FAIL:post room.99: "+err.Error()))
+		}
+		return nil
 	}
 	return nil
 }

@@ -127,10 +127,20 @@ event it just received. agent-a, also subscribed to `harness.chat`,
 asserts: a `Reaction` event referencing `msgID` with reaction `"👍"`
 arrives within 2s.
 
-**Step 6 — SubscribePattern.** agent-a subscribes pattern `room.*`.
-Parent publishes `trig:wildcard`. agent-b posts to `room.42` and `room.99`.
-agent-a asserts: received two `ChatMessage` events, one per thread,
-within 2s total.
+**Step 6 — SubscribePattern.** agent-a subscribes pattern `*` (matches
+every ThreadShort). Parent publishes `trig:wildcard`. agent-b posts to
+`room.42` and `room.99`. agent-a asserts: received two `ChatMessage`
+events with distinct `Thread()` shorts within 3s total.
+
+`SubscribePattern` operates on the raw NATS ThreadShort segment —
+8-char SHA-256 hex — *not* on the thread-name string passed to `Post`.
+The name-level pattern `room.*` can never match any real ThreadShort
+(ADR 0009's documented substrate leak; name-prefix matching needs the
+deferred option-3 KV registry). `*` is the documented way to exercise
+cross-thread pattern delivery across process boundaries here — two
+distinct thread names produce two distinct hashes, both match `*`, so
+`len(seen) == 2` keyed by `cm.Thread()` reliably asserts receipt of
+both posts.
 
 ### Teardown
 
