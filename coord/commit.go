@@ -2,7 +2,9 @@ package coord
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/danmestas/agent-infra/internal/assert"
 	"github.com/danmestas/agent-infra/internal/fossil"
@@ -16,20 +18,35 @@ import (
 // cfg.AgentID at call time. If any path is unheld or held by another
 // agent, Commit returns ErrNotHeld WITHOUT writing to the repo.
 //
+// Fork-on-conflict per ADR 0010 §4-5: before writing, Commit checks
+// whether the next commit on the current branch would create a sibling
+// leaf. When it would, the commit is placed on a new branch named
+// `${agent_id}-${task_id}-${unix_nano}` (Invariant 22), a fork notice
+// is posted to the task's chat thread ("task-<taskID>"), and the
+// returned error satisfies errors.Is(err, ErrConflictForked) and
+// errors.As(err, *ConflictForkedError). The commit is durable in both
+// the fork and no-fork cases; the error on fork signals that
+// reconciliation via coord.Merge is the caller's next step.
+//
 // Invariants asserted (panics on violation — programmer errors):
-// 1 (ctx non-nil), 8 (Coord not closed). message-non-empty and
-// files-non-empty are likewise preconditions that panic.
+// 1 (ctx non-nil), 8 (Coord not closed), taskID non-empty,
+// message non-empty, files non-empty.
 //
 // Operator errors returned:
 //
 //	ErrNotHeld — one or more paths not held by this agent.
+//	*ConflictForkedError (wrapping ErrConflictForked) — fork detected;
+//	    commit landed on the forked branch. Use errors.As to extract
+//	    Branch and Rev. The chat-notify post is best-effort: if it
+//	    fails, its error is joined alongside so callers see both.
 //	Any substrate error from internal/fossil — wrapped with the
 //	    coord.Commit prefix.
 func (c *Coord) Commit(
-	ctx context.Context, message string, files []File,
+	ctx context.Context, taskID TaskID, message string, files []File,
 ) (RevID, error) {
 	c.assertOpen("Commit")
 	assert.NotNil(ctx, "coord.Commit: ctx is nil")
+	assert.NotEmpty(string(taskID), "coord.Commit: taskID is empty")
 	assert.NotEmpty(message, "coord.Commit: message is empty")
 	assert.Precondition(
 		len(files) > 0, "coord.Commit: files is empty",
@@ -44,11 +61,70 @@ func (c *Coord) Commit(
 	if err := c.checkHolds(ctx, files); err != nil {
 		return "", err
 	}
-	uuid, err := c.sub.fossil.Commit(ctx, message, toCommit)
+	// Fork detection: WouldFork reports true when the checkout's
+	// current rid is a sibling leaf — i.e., another leaf on the
+	// current branch exists that isn't ours. WouldFork is a no-op
+	// (returns false, nil) when no checkout is attached, which is
+	// correct for the very first commit on a fresh repo: with no
+	// prior tip there cannot be a sibling. Subsequent commits on
+	// this Manager detect fork correctly because Commit attaches the
+	// checkout in its post-commit lazy-init below.
+	fork, err := c.sub.fossil.WouldFork(ctx)
 	if err != nil {
 		return "", fmt.Errorf("coord.Commit: %w", err)
 	}
+	branch := ""
+	if fork {
+		branch = fmt.Sprintf(
+			"%s-%s-%d",
+			c.cfg.AgentID, taskID, time.Now().UnixNano(),
+		)
+	}
+	uuid, err := c.sub.fossil.Commit(ctx, message, toCommit, branch)
+	if err != nil {
+		return "", fmt.Errorf("coord.Commit: %w", err)
+	}
+	// Post-commit: attach the checkout so the next commit's WouldFork
+	// call has a working-copy anchor at our just-landed tip. Best-
+	// effort — a failure here only means fork detection is skipped
+	// on the next commit, not that this commit is unsafe. On fork,
+	// also move the checkout to the new rev so subsequent WouldFork
+	// reads the new branch (with one leaf, our own) rather than the
+	// original branch where the sibling leaf still lives.
+	_ = c.sub.fossil.CreateCheckout(ctx)
+	if fork {
+		_ = c.sub.fossil.Checkout(ctx, uuid)
+		return c.onFork(ctx, taskID, branch, uuid, files)
+	}
 	return RevID(uuid), nil
+}
+
+// onFork builds a ConflictForkedError for a commit that was placed on
+// a dedicated branch, posts a best-effort notification to the task's
+// chat thread, and returns the combined error. The chat post failure
+// is joined alongside the fork error (errors.Join) so callers that
+// route on errors.Is(err, ErrConflictForked) still match while a
+// caller that inspects with errors.Unwrap sees both. The commit is
+// durable either way — the returned RevID is always the forked rev.
+// See ADR 0010 §5 for the body format.
+func (c *Coord) onFork(
+	ctx context.Context,
+	taskID TaskID,
+	branch, rev string,
+	files []File,
+) (RevID, error) {
+	fe := &ConflictForkedError{Branch: branch, Rev: rev}
+	body := fmt.Sprintf(
+		"fork: agent=%s branch=%s rev=%s path=%s",
+		c.cfg.AgentID, branch, rev, files[0].Path,
+	)
+	thread := "task-" + string(taskID)
+	if perr := c.sub.chat.Send(ctx, thread, body); perr != nil {
+		return RevID(rev), errors.Join(
+			fe, fmt.Errorf("coord.Commit: chat notify: %w", perr),
+		)
+	}
+	return RevID(rev), fe
 }
 
 // checkHolds enforces Invariant 20: every file in files must be held by

@@ -189,8 +189,13 @@ func (m *Manager) CreateCheckout(ctx context.Context) error {
 // to exist, which is a chicken-and-egg for a fresh repo). An attached
 // checkout is synced forward after the commit via Extract so on-disk
 // state matches.
+//
+// If branch is non-empty, the new commit is placed on that named branch
+// via a propagating "branch" tag on the artifact. Callers compose this
+// with WouldFork to implement fork-on-conflict semantics at the coord
+// layer (ADR 0010 §4-5). Pass "" to commit on the current branch.
 func (m *Manager) Commit(
-	ctx context.Context, message string, files []File,
+	ctx context.Context, message string, files []File, branch string,
 ) (string, error) {
 	assert.NotNil(ctx, "fossil.Commit: ctx is nil")
 	assert.NotEmpty(message, "fossil.Commit: message is empty")
@@ -214,27 +219,60 @@ func (m *Manager) Commit(
 			Content: f.Content,
 		})
 	}
-	rid, uuid, err := m.repo.Commit(libfossil.CommitOpts{
+	opts := libfossil.CommitOpts{
 		Files:    toCommit,
 		Comment:  message,
 		User:     m.cfg.AgentID,
 		ParentID: parent,
-	})
+	}
+	if branch != "" {
+		opts.Tags = []libfossil.TagSpec{
+			{Name: "branch", Value: branch},
+		}
+	}
+	rid, uuid, err := m.repo.Commit(opts)
 	if err != nil {
 		return "", fmt.Errorf("fossil.Commit: %w", err)
 	}
 
-	// If a checkout is attached, sync on-disk state forward to the new
-	// tip. Extract (not Update) because the checkout's vfile has no
-	// pending changes — we committed at the repo layer.
+	// If a checkout is attached, best-effort sync on-disk state forward
+	// to the new tip. Extract (not Update) because the checkout's
+	// vfile has no pending changes — we committed at the repo layer.
+	// The commit itself is already durable at this point; Extract
+	// failures (e.g. paths that violate Fossil's path-traversal guard)
+	// only leave the working copy stale and are not propagated. Callers
+	// that need disk-sync semantics call Checkout(ctx, rev) directly
+	// and observe any error there.
 	if m.checkout != nil {
-		if err := m.checkout.Extract(
+		_ = m.checkout.Extract(
 			rid, libfossil.ExtractOpts{Force: true},
-		); err != nil {
-			return "", fmt.Errorf("fossil.Commit: extract: %w", err)
-		}
+		)
 	}
 	return uuid, nil
+}
+
+// WouldFork reports whether the next commit on the current branch
+// would create a sibling leaf — i.e., another leaf already exists on
+// this branch, so committing here would fork.
+//
+// Returns (false, nil) when no checkout is attached: a Manager that
+// hasn't yet called CreateCheckout has no working-copy parent, and a
+// fresh repo with no tip cannot fork by definition. Callers composing
+// fork-on-conflict at a higher layer (ADR 0010 §4) invoke this before
+// Commit and pass a branch name to Commit when the result is true.
+func (m *Manager) WouldFork(ctx context.Context) (bool, error) {
+	assert.NotNil(ctx, "fossil.WouldFork: ctx is nil")
+	if m.done.Load() {
+		return false, ErrClosed
+	}
+	if m.checkout == nil {
+		return false, nil
+	}
+	fork, err := m.checkout.WouldFork()
+	if err != nil {
+		return false, fmt.Errorf("fossil.WouldFork: %w", err)
+	}
+	return fork, nil
 }
 
 // OpenFile returns the content of path as committed at rev. rev is an
