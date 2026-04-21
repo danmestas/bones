@@ -513,3 +513,163 @@ func TestCLI_Close(t *testing.T) {
 		}
 	})
 }
+
+func TestCLI_Ready(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	dir := newWorkspace(t)
+
+	seed := func(title string) string {
+		out, _, code := runCmd(t, binPath, dir, "create", title)
+		if code != 0 {
+			t.Fatalf("seed create %q failed code=%d", title, code)
+		}
+		return firstLine(out)
+	}
+
+	t.Run("empty_bucket", func(t *testing.T) {
+		stdout, stderr, code := runCmd(t, binPath, dir, "ready")
+		if code != 0 {
+			t.Fatalf("ready exit=%d stderr=%s", code, stderr)
+		}
+		if strings.TrimSpace(stdout) != "" {
+			t.Errorf("expected empty output, got: %q", stdout)
+		}
+	})
+
+	t.Run("shows_open_tasks", func(t *testing.T) {
+		id := seed("ready task")
+		stdout, stderr, code := runCmd(t, binPath, dir, "ready")
+		if code != 0 {
+			t.Fatalf("ready exit=%d stderr=%s", code, stderr)
+		}
+		if !strings.Contains(stdout, id) {
+			t.Errorf("ready missing task %s; got:\n%s", id, stdout)
+		}
+	})
+
+	t.Run("hides_claimed_tasks", func(t *testing.T) {
+		id := seed("claimed task")
+		_, _, code := runCmd(t, binPath, dir, "claim", id)
+		if code != 0 {
+			t.Fatalf("seed claim failed code=%d", code)
+		}
+		stdout, _, _ := runCmd(t, binPath, dir, "ready")
+		if strings.Contains(stdout, id) {
+			t.Errorf("claimed task should be hidden; got:\n%s", stdout)
+		}
+	})
+
+	t.Run("json", func(t *testing.T) {
+		id := seed("json ready")
+		stdout, stderr, code := runCmd(t, binPath, dir, "ready", "--json")
+		if code != 0 {
+			t.Fatalf("ready --json exit=%d stderr=%s", code, stderr)
+		}
+		if !strings.Contains(stdout, `"id":"`+id+`"`) {
+			t.Errorf("json missing id: %q", stdout)
+		}
+	})
+}
+
+func TestCLI_Link(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	dir := newWorkspace(t)
+
+	seed := func(title string) string {
+		out, _, code := runCmd(t, binPath, dir, "create", title)
+		if code != 0 {
+			t.Fatalf("seed create %q failed code=%d", title, code)
+		}
+		return firstLine(out)
+	}
+
+	t.Run("blocks_hides_target_from_ready", func(t *testing.T) {
+		from := seed("blocker")
+		to := seed("blocked")
+		_, stderr, code := runCmd(t, binPath, dir, "link",
+			from, to, "--type=blocks")
+		if code != 0 {
+			t.Fatalf("link exit=%d stderr=%s", code, stderr)
+		}
+		stdout, _, _ := runCmd(t, binPath, dir, "ready")
+		if strings.Contains(stdout, to) {
+			t.Errorf("blocked target should be hidden; got:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, from) {
+			t.Errorf("blocker should still be ready; got:\n%s", stdout)
+		}
+	})
+
+	t.Run("supersedes_hides_target", func(t *testing.T) {
+		from := seed("winner")
+		to := seed("loser")
+		_, stderr, code := runCmd(t, binPath, dir, "link",
+			from, to, "--type=supersedes")
+		if code != 0 {
+			t.Fatalf("link exit=%d stderr=%s", code, stderr)
+		}
+		stdout, _, _ := runCmd(t, binPath, dir, "ready")
+		if strings.Contains(stdout, to) {
+			t.Errorf("superseded task should be hidden; got:\n%s", stdout)
+		}
+	})
+
+	t.Run("discovered_from_does_not_hide", func(t *testing.T) {
+		from := seed("discovery")
+		to := seed("seed")
+		_, stderr, code := runCmd(t, binPath, dir, "link",
+			from, to, "--type=discovered-from")
+		if code != 0 {
+			t.Fatalf("link exit=%d stderr=%s", code, stderr)
+		}
+		stdout, _, _ := runCmd(t, binPath, dir, "ready")
+		if !strings.Contains(stdout, to) {
+			t.Errorf("discovered-from should not hide target; got:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, from) {
+			t.Errorf("discovering task should still be ready; got:\n%s", stdout)
+		}
+	})
+
+	t.Run("missing_type", func(t *testing.T) {
+		from := seed("no type")
+		to := seed("target")
+		_, stderr, code := runCmd(t, binPath, dir, "link", from, to)
+		if code != 1 {
+			t.Errorf("exit=%d, want 1", code)
+		}
+		if !strings.Contains(stderr, "--type") {
+			t.Errorf("stderr should mention --type: %q", stderr)
+		}
+	})
+
+	t.Run("invalid_type", func(t *testing.T) {
+		from := seed("bad type")
+		to := seed("target")
+		_, stderr, code := runCmd(t, binPath, dir, "link",
+			from, to, "--type=bogus")
+		if code != 1 {
+			t.Errorf("exit=%d, want 1", code)
+		}
+		if !strings.Contains(stderr, "invalid edge type") {
+			t.Errorf("stderr should flag invalid type: %q", stderr)
+		}
+	})
+
+	t.Run("json", func(t *testing.T) {
+		from := seed("json link")
+		to := seed("json target")
+		stdout, stderr, code := runCmd(t, binPath, dir, "link",
+			from, to, "--type=blocks", "--json")
+		if code != 0 {
+			t.Fatalf("link --json exit=%d stderr=%s", code, stderr)
+		}
+		if !strings.Contains(stdout, `"from":"`+from+`"`) {
+			t.Errorf("json missing from: %q", stdout)
+		}
+	})
+}

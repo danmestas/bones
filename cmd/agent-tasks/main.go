@@ -31,6 +31,9 @@ const usage = `Usage:
   agent-tasks update <id> [--status=X] [--title=...] [--files=a,b,c] [--parent=<id>]
                           [--context k=v]... [--claimed-by=X] [--json]
   agent-tasks close  <id> [--reason="..."] [--json]
+  agent-tasks ready  [--json]
+  agent-tasks link   <from-id> <to-id> --type=blocks|supersedes|duplicates|discovered-from
+                     [--json]
 `
 
 func main() {
