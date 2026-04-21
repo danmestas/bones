@@ -392,14 +392,16 @@ func stepAskAnswer(ctx context.Context, c *coord.Coord, role string) error {
 }
 
 // stepReact: agent-a posts; agent-b reacts; agent-a asserts Reaction observed.
+// agent-a alone reports PASS on the ctrl thread.
 func stepReact(ctx context.Context, c *coord.Coord, role string, chatEvents <-chan coord.Event) error {
 	switch role {
 	case "agent-a":
 		// Post, then wait for our own message's reaction to be visible.
+		// Our own ChatMessage event arrives on chatEvents first; waitFor
+		// silently skips it because the predicate only matches Reactions.
 		if err := c.Post(ctx, threadChat, []byte("react-me")); err != nil {
 			return c.Post(ctx, threadCtrl, []byte("result:step-5:FAIL:post: "+err.Error()))
 		}
-		// Wait for a Reaction event on threadChat.
 		_, err := waitFor(ctx, chatEvents, 3*time.Second, func(e coord.Event) bool {
 			r, ok := e.(coord.Reaction)
 			return ok && r.Body() == "👍"
@@ -419,7 +421,10 @@ func stepReact(ctx context.Context, c *coord.Coord, role string, chatEvents <-ch
 			return c.Post(ctx, threadCtrl, []byte("result:step-5:FAIL:b wait: "+err.Error()))
 		}
 		cm := msg.(coord.ChatMessage)
-		return c.React(ctx, threadChat, cm.MessageID(), "👍")
+		if err := c.React(ctx, threadChat, cm.MessageID(), "👍"); err != nil {
+			return c.Post(ctx, threadCtrl, []byte("result:step-5:FAIL:b react: "+err.Error()))
+		}
+		return nil
 	}
 	return nil
 }
