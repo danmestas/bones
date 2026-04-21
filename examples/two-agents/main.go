@@ -203,6 +203,7 @@ func runParent(ctx context.Context) int {
 // parentFail prints FAIL, reaps children, returns exit 1.
 func parentFail(c *coord.Coord, a, b *exec.Cmd, step string, err error) int {
 	fmt.Fprintf(os.Stderr, "FAIL: %s: %v\n", step, err)
+	// Background ctx: scenario ctx may already be cancelled, but children still need trig:done.
 	_ = c.Post(context.Background(), threadCtrl, []byte("trig:done"))
 	reapChild(a, "agent-a")
 	reapChild(b, "agent-b")
@@ -219,7 +220,11 @@ func waitForResult(ctx context.Context, ch <-chan coord.Event, step int) (string
 	if err != nil {
 		return "", err
 	}
-	body := msg.(coord.ChatMessage).Body()
+	cm, ok := msg.(coord.ChatMessage)
+	if !ok {
+		return "", fmt.Errorf("waitForResult: unexpected event type %T", msg)
+	}
+	body := cm.Body()
 	if strings.HasSuffix(body, ":PASS") {
 		return body, nil
 	}
