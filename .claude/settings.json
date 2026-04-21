@@ -6,6 +6,10 @@
           {
             "command": "bd prime",
             "type": "command"
+          },
+          {
+            "command": "agent-tasks prime",
+            "type": "command"
           }
         ],
         "matcher": ""
@@ -16,6 +20,10 @@
         "hooks": [
           {
             "command": "bd prime",
+            "type": "command"
+          },
+          {
+            "command": "agent-tasks prime",
             "type": "command"
           }
         ],

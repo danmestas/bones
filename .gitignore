@@ -1,6 +1,7 @@
 
 # Built binaries
 bin/
+/agent-tasks
 # examples/* leave these in cwd when run without -o or from the repo root.
 /two-agents
 /two-agents-commit
