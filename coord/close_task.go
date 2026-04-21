@@ -39,18 +39,19 @@ func (c *Coord) CloseTask(
 	assert.NotEmpty(
 		string(taskID), "coord.CloseTask: taskID is empty",
 	)
-	mutate := c.closeMutator(reason)
+	mutate := c.closeMutator(taskID, reason)
 	err := c.sub.tasks.Update(ctx, string(taskID), mutate)
 	return translateCloseErr(err)
 }
 
 // closeMutator returns the mutate closure passed to tasks.Update. The
-// closure enforces invariant 12 (closer == claimed_by) and invariant 13
-// (closed→closed rejected) before returning the mutated Task; either
-// rejection surfaces as a sentinel that translateCloseErr maps to the
-// coord-level error surface.
+// closure enforces invariant 12 (closer == claimed_by), invariant 13
+// (closed→closed rejected), and invariant 24 (claim_epoch fence —
+// the record's epoch must match the caller's view in activeEpochs,
+// otherwise a peer has Reclaimed). Each rejection surfaces as a
+// sentinel that translateCloseErr maps to the coord error surface.
 func (c *Coord) closeMutator(
-	reason string,
+	taskID TaskID, reason string,
 ) func(tasks.Task) (tasks.Task, error) {
 	agent := c.cfg.AgentID
 	return func(cur tasks.Task) (tasks.Task, error) {
@@ -59,6 +60,11 @@ func (c *Coord) closeMutator(
 		}
 		if cur.ClaimedBy != agent {
 			return cur, ErrAgentMismatch
+		}
+		if v, ok := c.activeEpochs.Load(taskID); ok {
+			if cur.ClaimEpoch != v.(uint64) {
+				return cur, ErrEpochStale
+			}
 		}
 		return applyClose(cur, agent, reason), nil
 	}
@@ -93,6 +99,8 @@ func translateCloseErr(err error) error {
 		return fmt.Errorf("coord.CloseTask: %w", ErrAgentMismatch)
 	case errors.Is(err, ErrTaskAlreadyClosed):
 		return fmt.Errorf("coord.CloseTask: %w", ErrTaskAlreadyClosed)
+	case errors.Is(err, ErrEpochStale):
+		return fmt.Errorf("coord.CloseTask: %w", ErrEpochStale)
 	default:
 		return fmt.Errorf("coord.CloseTask: %w", err)
 	}
