@@ -34,9 +34,11 @@ const (
 	threadChat = "harness.chat"
 )
 
-// newConfig builds a coord.Config for a role. ChatFossilRepoPath gets a
-// unique file per coord — shared paths would deadlock the fossil writer.
-func newConfig(agentID, natsURL, chatRepo string) coord.Config {
+// newConfig builds a coord.Config for a role. Per-coord FossilRepoPath,
+// ChatFossilRepoPath, and CheckoutRoot are all distinct — this harness
+// tests Phase 3+4 primitives and does not exercise coord.Commit, so the
+// code-artifact substrate paths only need to validate.
+func newConfig(agentID, natsURL, chatRepo, codeRepo, checkoutRoot string) coord.Config {
 	return coord.Config{
 		AgentID:            agentID,
 		HoldTTLDefault:     30 * time.Second,
@@ -53,6 +55,8 @@ func newConfig(agentID, natsURL, chatRepo string) coord.Config {
 		NATSMaxReconnects:  5,
 		NATSURL:            natsURL,
 		ChatFossilRepoPath: chatRepo,
+		FossilRepoPath:     codeRepo,
+		CheckoutRoot:       checkoutRoot,
 	}
 }
 
@@ -140,6 +144,8 @@ func runParent(ctx context.Context) int {
 		"twoagent-parent",
 		info.NATSURL,
 		filepath.Join(tempDir, "chat-parent.fossil"),
+		filepath.Join(tempDir, "code-parent.fossil"),
+		filepath.Join(tempDir, "checkouts-parent"),
 	))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: setup: parent coord open: %v\n", err)
@@ -323,6 +329,8 @@ func runAgent(ctx context.Context, role string) int {
 		agentID,
 		info.NATSURL,
 		filepath.Join(*workspaceFlag, "chat-"+role+".fossil"),
+		filepath.Join(*workspaceFlag, "code-"+role+".fossil"),
+		filepath.Join(*workspaceFlag, "checkouts-"+role),
 	))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: %s: coord open: %v\n", role, err)
@@ -540,7 +548,9 @@ func stepWhoPresence(ctx context.Context, c *coord.Coord, natsURL, tempDir strin
 	probe, err := coord.Open(ctx, newConfig(
 		probeID,
 		natsURL,
-		filepath.Join(tempDir, probeID+".fossil"),
+		filepath.Join(tempDir, probeID+"-chat.fossil"),
+		filepath.Join(tempDir, probeID+"-code.fossil"),
+		filepath.Join(tempDir, probeID+"-checkouts"),
 	))
 	if err != nil {
 		return fmt.Errorf("open probe coord: %w", err)
