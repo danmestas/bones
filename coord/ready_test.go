@@ -203,3 +203,158 @@ func TestReady_InvariantPanics(t *testing.T) {
 		}, "coord is closed")
 	})
 }
+
+// containsTask returns true iff got includes a task with the given ID.
+// Used by every filter-gate assertion below.
+func containsTask(got []Task, id TaskID) bool {
+	for _, tk := range got {
+		if tk.ID() == id {
+			return true
+		}
+	}
+	return false
+}
+
+// seedChild stamps an open task with Parent set. Uses seedRawTask
+// because the public Create path may not permit a Parent at create time.
+func seedChild(t *testing.T, c *Coord, id, title string, parent TaskID) TaskID {
+	t.Helper()
+	rec := readyBaseline(id, time.Now().UTC())
+	rec.Title = title
+	rec.Parent = string(parent)
+	seedRawTask(t, c, rec)
+	return TaskID(rec.ID)
+}
+
+func TestReady_HidesTargetOfOpenBlocker(t *testing.T) {
+	c := mustOpen(t)
+	ctx := context.Background()
+	blocker := linkTestSeed(t, c, "agent-infra-bk11", "blocker-open")
+	target := linkTestSeed(t, c, "agent-infra-bk22", "target")
+
+	if err := c.Link(ctx, blocker, target, EdgeBlocks); err != nil {
+		t.Fatalf("Link: %v", err)
+	}
+
+	got, err := c.Ready(ctx)
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	if containsTask(got, target) {
+		t.Errorf("Ready included blocked target %s", target)
+	}
+}
+
+func TestReady_UnhidesTargetWhenBlockerClosed(t *testing.T) {
+	c := mustOpen(t)
+	ctx := context.Background()
+	blocker := linkTestSeed(t, c, "agent-infra-bk33", "blocker-closed")
+	target := linkTestSeed(t, c, "agent-infra-bk44", "target")
+
+	if err := c.Link(ctx, blocker, target, EdgeBlocks); err != nil {
+		t.Fatalf("Link: %v", err)
+	}
+	linkTestClose(t, c, blocker)
+
+	got, err := c.Ready(ctx)
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	if !containsTask(got, target) {
+		t.Errorf("Ready did not include target %s after blocker closed", target)
+	}
+}
+
+func TestReady_HidesSupersededTarget(t *testing.T) {
+	c := mustOpen(t)
+	ctx := context.Background()
+	winner := linkTestSeed(t, c, "agent-infra-sp11", "winner")
+	loser := linkTestSeed(t, c, "agent-infra-sp22", "loser")
+
+	if err := c.Link(ctx, winner, loser, EdgeSupersedes); err != nil {
+		t.Fatalf("Link: %v", err)
+	}
+
+	got, err := c.Ready(ctx)
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	if containsTask(got, loser) {
+		t.Errorf("Ready included superseded loser %s", loser)
+	}
+}
+
+func TestReady_HidesDuplicatedTarget(t *testing.T) {
+	c := mustOpen(t)
+	ctx := context.Background()
+	canonical := linkTestSeed(t, c, "agent-infra-dp11", "canonical")
+	dup := linkTestSeed(t, c, "agent-infra-dp22", "duplicate")
+
+	if err := c.Link(ctx, canonical, dup, EdgeDuplicates); err != nil {
+		t.Fatalf("Link: %v", err)
+	}
+
+	got, err := c.Ready(ctx)
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	if containsTask(got, dup) {
+		t.Errorf("Ready included duplicate %s", dup)
+	}
+}
+
+func TestReady_HidesParentWithOpenChild(t *testing.T) {
+	c := mustOpen(t)
+	parent := linkTestSeed(t, c, "agent-infra-pc11", "parent")
+	child := seedChild(t, c, "agent-infra-pc22", "child", parent)
+
+	got, err := c.Ready(context.Background())
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	if containsTask(got, parent) {
+		t.Errorf("Ready included parent %s while child %s is open", parent, child)
+	}
+	// Child should still be visible.
+	if !containsTask(got, child) {
+		t.Errorf("Ready dropped child %s (should be workable)", child)
+	}
+}
+
+func TestReady_UnhidesParentWhenAllChildrenClosed(t *testing.T) {
+	c := mustOpen(t)
+	parent := linkTestSeed(t, c, "agent-infra-pc33", "parent")
+	child := seedChild(t, c, "agent-infra-pc44", "child", parent)
+	linkTestClose(t, c, child)
+
+	got, err := c.Ready(context.Background())
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	if !containsTask(got, parent) {
+		t.Errorf("Ready did not include parent %s after child closed", parent)
+	}
+}
+
+func TestReady_DiscoveredFromDoesNotFilter(t *testing.T) {
+	// discovered-from is audit-only (ADR 0014): it must NOT hide its target.
+	c := mustOpen(t)
+	ctx := context.Background()
+	seed := linkTestSeed(t, c, "agent-infra-df11", "seed-parent")
+	discovery := linkTestSeed(t, c, "agent-infra-df22", "discovered")
+
+	if err := c.Link(ctx, discovery, seed, EdgeDiscoveredFrom); err != nil {
+		t.Fatalf("Link: %v", err)
+	}
+
+	got, err := c.Ready(ctx)
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	if !containsTask(got, seed) {
+		t.Errorf("Ready hid seed task with incoming discovered-from; gate must be audit-only")
+	}
+	if !containsTask(got, discovery) {
+		t.Errorf("Ready hid discovery task; outgoing discovered-from must not self-hide")
+	}
+}
