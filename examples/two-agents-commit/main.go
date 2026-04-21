@@ -47,25 +47,23 @@ const (
 	stepTimeout = 10 * time.Second
 
 	// Shared code paths across steps. Absolute per Invariant 4 (coord.
-	// OpenTask requires filepath.IsAbs). These paths reach fossil at
-	// commit time; libfossil's checkout-extract guard rejects absolute
-	// paths as traversal attempts, so a coord.Checkout call on an
-	// absolute-path rev will fail. Commit swallows its Extract errors
-	// (see internal/fossil/fossil.go Commit tail) so commits succeed and
-	// OpenFile works — that's the reason this harness reads prior revs
-	// via OpenFile rather than calling Checkout. See agent-infra-oar.
+	// OpenTask requires filepath.IsAbs). Fossil normalizes these to
+	// repo-relative internally (see internal/fossil.normalizePath) so
+	// libfossil's checkout-extract guard stays satisfied while the
+	// coord-layer API continues to require absolute paths.
 	pathA      = "/src/a.go"
 	pathShared = "/src/shared.go"
 	pathBPriv  = "/src/b_priv.go"
 )
 
 // forkBranchRE matches the Invariant 22 fork-branch naming convention
-// (twoac-a-<task_id>-<unix_nano>). The forker is agent-a because step-2
-// left a's checkout stale — the absolute-path Extract failure inside
-// fossil.Commit keeps a's Manager pointing at step-1's rev despite
-// step-2's commit advancing trunk. Any subsequent commit by a on a
-// trunk-advanced repo therefore forks, which is exactly the race
-// ADR 0010 §4 is meant to surface.
+// (twoac-a-<task_id>-<unix_nano>). The forker is agent-a because the
+// fork sequence below leaves agent-a's checkout parent behind the
+// shared trunk tip: after step-2 agent-a's checkout is at step-2's rev,
+// then agent-b's b-private commit advances trunk, and agent-a's next
+// commit therefore has step-2 as its parent rather than the current
+// trunk tip — a sibling-leaf situation that WouldFork detects per
+// ADR 0010 §4.
 var forkBranchRE = regexp.MustCompile(`^twoac-a-.+-\d+$`)
 
 // newConfig builds a coord.Config per role. FossilRepoPath is SHARED so
@@ -326,13 +324,15 @@ func runSteps123(ctx context.Context, ps *parentSetup) error {
 // step-5's subscribe sits between step-4's taskID handoff and its
 // actual commit. Returns the fork branch name for step-6.
 //
-// Role choice: agent-a is the forker. Steps 1-3 left agent-a's checkout
-// stale at step-1's rev (step-2's Extract silently failed due to the
-// absolute-path guard; step-2's commit itself landed at the blob level).
-// When agent-b advances trunk via a b-private commit and agent-a then
-// commits to /src/shared.go, agent-a's WouldFork fires. Agent-b cannot
-// be induced to fork within this harness without a third writer — its
-// checkout is always current once it commits.
+// Role choice: agent-a is the forker. After step-2 agent-a's checkout
+// sits at step-2's rev (the most recent commit on trunk at that point).
+// In step-4's phase A, agent-b commits b-private on a fresh task,
+// advancing trunk past agent-a's checkout parent. When agent-a then
+// commits to /src/shared.go in phase B, agent-a's WouldFork fires
+// because its parent (step-2) is no longer a trunk leaf — agent-b's
+// b-private rev is. Agent-b cannot be induced to fork within this
+// harness without a third writer: its checkout is always current
+// relative to trunk once it commits.
 func runStep45(ctx context.Context, ps *parentSetup) (string, error) {
 	// Phase A: agent-b advances trunk via a private commit.
 	if err := ps.c.Post(ctx, threadCtrl, []byte("trig:step-4:b-setup")); err != nil {
@@ -630,13 +630,14 @@ func stepCommitOpenFile(ctx context.Context, c *coord.Coord, role string, st *ag
 	return c.Post(ctx, threadCtrl, []byte("result:step-1:PASS"))
 }
 
-// stepCheckoutNav: agent-a commits v2, then reads prior rev1 bytes back
-// via OpenFile to demonstrate version-navigation on the blob store. The
-// spec originally called for c.Checkout(ctx, rev1); we substitute
-// OpenFile because libfossil's checkout-extract guard rejects the
-// absolute paths Invariant 4 requires for OpenTask (tracked as
-// agent-infra-oar). OpenFile exercises the same read-a-prior-rev
-// capability against the repo's blob store, which ignores path shape.
+// stepCheckoutNav: agent-a commits v2, then navigates to rev1 and rev2
+// via coord.Checkout, reading each prior rev's bytes back through
+// OpenFile to demonstrate version-navigation. Checkout(rev1) moves the
+// on-disk working copy backward to v1; Checkout(rev2) advances it to
+// the new tip. OpenFile is used for the read-back because it queries
+// the blob store directly (no checkout-dir accessor is needed at the
+// coord layer), but the two Checkout calls exercise the codepath that
+// previously failed under agent-infra-oar.
 func stepCheckoutNav(ctx context.Context, c *coord.Coord, role string, st *agentState) error {
 	if role != "agent-a" {
 		return nil
@@ -650,6 +651,9 @@ func stepCheckoutNav(ctx context.Context, c *coord.Coord, role string, st *agent
 		return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:commit: "+err.Error()))
 	}
 	body1 := []byte("package main // v1\n")
+	if err := c.Checkout(ctx, rev1); err != nil {
+		return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:checkout rev1: "+err.Error()))
+	}
 	gotV1, err := c.OpenFile(ctx, rev1, pathA)
 	if err != nil {
 		return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:openfile rev1: "+err.Error()))
@@ -658,6 +662,9 @@ func stepCheckoutNav(ctx context.Context, c *coord.Coord, role string, st *agent
 		return c.Post(ctx, threadCtrl, []byte(
 			fmt.Sprintf("result:step-2:FAIL:rev1 got %q want %q", gotV1, body1),
 		))
+	}
+	if err := c.Checkout(ctx, rev2); err != nil {
+		return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:checkout rev2: "+err.Error()))
 	}
 	gotV2, err := c.OpenFile(ctx, rev2, pathA)
 	if err != nil {

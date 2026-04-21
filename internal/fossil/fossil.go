@@ -215,7 +215,7 @@ func (m *Manager) Commit(
 	for _, f := range files {
 		assert.NotEmpty(f.Path, "fossil.Commit: file.Path is empty")
 		toCommit = append(toCommit, libfossil.FileToCommit{
-			Name:    f.Path,
+			Name:    normalizePath(f.Path),
 			Content: f.Content,
 		})
 	}
@@ -238,11 +238,10 @@ func (m *Manager) Commit(
 	// If a checkout is attached, best-effort sync on-disk state forward
 	// to the new tip. Extract (not Update) because the checkout's
 	// vfile has no pending changes — we committed at the repo layer.
-	// The commit itself is already durable at this point; Extract
-	// failures (e.g. paths that violate Fossil's path-traversal guard)
-	// only leave the working copy stale and are not propagated. Callers
-	// that need disk-sync semantics call Checkout(ctx, rev) directly
-	// and observe any error there.
+	// The commit itself is already durable at this point, so Extract
+	// failures are swallowed and only leave the working copy stale.
+	// Callers that need disk-sync semantics call Checkout(ctx, rev)
+	// directly and observe any error there.
 	if m.checkout != nil {
 		_ = m.checkout.Extract(
 			rid, libfossil.ExtractOpts{Force: true},
@@ -292,7 +291,7 @@ func (m *Manager) OpenFile(
 	if err != nil {
 		return nil, err
 	}
-	data, err := m.repo.ReadFile(rid, path)
+	data, err := m.repo.ReadFile(rid, normalizePath(path))
 	if err != nil {
 		if errors.Is(err, libfossil.ErrFileNotFound) {
 			return nil, fmt.Errorf(
@@ -327,7 +326,7 @@ func (m *Manager) Diff(
 	if err != nil {
 		return nil, err
 	}
-	entries, err := m.repo.Diff(ridA, ridB, path)
+	entries, err := m.repo.Diff(ridA, ridB, normalizePath(path))
 	if err != nil {
 		return nil, fmt.Errorf("fossil.Diff: %w", err)
 	}
@@ -418,6 +417,22 @@ func (m *Manager) tipRID() (int64, string, error) {
 		return 0, "", err
 	}
 	return rid, uuid, nil
+}
+
+// normalizePath strips a single leading '/' so callers can pass
+// absolute paths (required by coord Invariant 4) while libfossil stores
+// repo-relative names and its checkout-extract guard (which rejects
+// anything resolving outside the checkout dir) stays satisfied. The
+// transform is byte-exact and single-slash on purpose: "/src/a.go" →
+// "src/a.go", "src/a.go" passes through, "//x" → "/x" (still fails the
+// guard — callers who want to trip that failure mode still can). We do
+// NOT filepath.Clean here because OpenFile must round-trip the same
+// bytes the caller passed to Commit.
+func normalizePath(p string) string {
+	if len(p) > 0 && p[0] == '/' {
+		return p[1:]
+	}
+	return p
 }
 
 // ridFromUUID resolves an opaque rev UUID to libfossil's internal

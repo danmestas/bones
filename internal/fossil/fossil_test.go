@@ -592,6 +592,95 @@ func TestWouldFork_TwoManagersSharedRepo(t *testing.T) {
 	}
 }
 
+// TestManager_AbsolutePaths_CheckoutSucceeds is the regression that
+// closes agent-infra-oar. Coord's OpenTask requires filepath.IsAbs for
+// every tracked path (Invariant 4), so every rev committed via coord
+// carries absolute File.Path values. libfossil's checkout-extract
+// guard rejects those as path-traversal attempts (filepath.Rel
+// between the checkout dir and /src/a.go resolves to "../.."). Commit
+// swallows its post-Extract error so the commit itself still lands;
+// Checkout — which propagates the Extract error directly — did not.
+// The fix is to normalize absolute paths to repo-relative inside
+// Commit/OpenFile/Diff so the stored paths never trip the guard while
+// the coord-layer API stays absolute.
+//
+// This test drives the full round trip: commit absolute paths, call
+// Checkout(ctx, rev), verify both files land on disk at the
+// normalized sub-paths, and verify OpenFile with the original absolute
+// path still returns the committed bytes.
+func TestManager_AbsolutePaths_CheckoutSucceeds(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+
+	bodyA := []byte("package src // a.go\n")
+	bodyB := []byte("package pkg // b.go\n")
+	rev, err := m.Commit(ctx, "absolute paths", []File{
+		{Path: "/src/a.go", Content: bodyA},
+		{Path: "/pkg/b.go", Content: bodyB},
+	}, "")
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if err := m.CreateCheckout(ctx); err != nil {
+		t.Fatalf("CreateCheckout: %v", err)
+	}
+	if err := m.Checkout(ctx, rev); err != nil {
+		t.Fatalf("Checkout: %v", err)
+	}
+
+	// On-disk verification: normalized paths map to <checkout>/src/a.go
+	// and <checkout>/pkg/b.go with matching bytes.
+	onDiskA, err := os.ReadFile(filepath.Join(m.dir, "src", "a.go"))
+	if err != nil {
+		t.Fatalf("read a.go: %v", err)
+	}
+	if !bytes.Equal(onDiskA, bodyA) {
+		t.Errorf("on-disk a.go = %q, want %q", onDiskA, bodyA)
+	}
+	onDiskB, err := os.ReadFile(filepath.Join(m.dir, "pkg", "b.go"))
+	if err != nil {
+		t.Fatalf("read b.go: %v", err)
+	}
+	if !bytes.Equal(onDiskB, bodyB) {
+		t.Errorf("on-disk b.go = %q, want %q", onDiskB, bodyB)
+	}
+
+	// API-level verification: OpenFile with the original absolute path
+	// still returns the committed bytes.
+	got, err := m.OpenFile(ctx, rev, "/src/a.go")
+	if err != nil {
+		t.Fatalf("OpenFile /src/a.go: %v", err)
+	}
+	if !bytes.Equal(got, bodyA) {
+		t.Errorf("OpenFile /src/a.go = %q, want %q", got, bodyA)
+	}
+}
+
+// TestManager_RelativePath_RoundTrip pins the single-slash contract:
+// non-absolute paths pass through unchanged, so a caller that committed
+// "src/c.go" must read it back with the same literal "src/c.go". This
+// guards against over-normalization (e.g. filepath.Clean or stripping
+// multiple leading slashes) that would break API compatibility for
+// callers who already pass repo-relative paths.
+func TestManager_RelativePath_RoundTrip(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+	body := []byte("relative\n")
+	rev, err := m.Commit(ctx, "relative path", []File{
+		{Path: "src/c.go", Content: body},
+	}, "")
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	got, err := m.OpenFile(ctx, rev, "src/c.go")
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Errorf("OpenFile src/c.go = %q, want %q", got, body)
+	}
+}
+
 // TestCommit_WithBranch_PlacesOnBranch proves that passing a non-empty
 // branch arg to Commit results in the new rev being placed on that
 // named branch (ADR 0010 §5 fork-on-conflict composition primitive).
