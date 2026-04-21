@@ -59,11 +59,11 @@ NATS via the parent-started leaf.
 2. Parent opens `coord.Coord` against the workspace's NATS URL with a
    stable `AgentID` like `parent`.
 3. Parent spawns agent-a and agent-b via `exec.Command(os.Args[0], ...)`,
-   passing `--workspace=<dir>`, `--role=agent-a|agent-b`, and
-   `--ready-thread=harness.bootstrap`.
-4. Parent subscribes `harness.bootstrap` and waits for both children to
-   post a `ready` message (2s timeout). This confirms both coords are
-   live before the scenario starts.
+   passing `--workspace=<dir>` and `--role=agent-a|agent-b`. Each child
+   subscribes `harness.ctrl` (the single orchestration thread) at startup.
+4. Parent subscribes `harness.ctrl` and waits for both children to post
+   `ready:agent-a` and `ready:agent-b` (2s timeout). This confirms both
+   coords are live before the scenario starts.
 5. Parent creates the shared task `T` via `coord.OpenTask` (no `Files`
    hold needed — Step 2 exercises `Claim` on an empty-files task).
 
@@ -72,39 +72,43 @@ NATS via the parent-started leaf.
 Each step has a fail-fast timed wait. A missed expectation prints
 `FAIL: step N (<name>): <reason>` to stderr, triggers cleanup, exits 1.
 
-**Step 1 — Post/Subscribe.** agent-b subscribes `harness.chat`. Parent
-signals `go` over `harness.bootstrap`. agent-a posts `"hello from a"`
+**Step 1 — Post/Subscribe.** Both agent-a and agent-b subscribe
+`harness.chat` at setup (their subscriptions persist for Steps 1 and 5).
+Parent publishes `trig:go` on `harness.ctrl`. agent-a posts `"hello from a"`
 to `harness.chat`. agent-b asserts: received that exact byte payload
 within 2s.
 
-**Step 2 — Claim/Release.** Parent signals `claim`. agent-a calls
+**Step 2 — Claim/Release.** Parent publishes `trig:claim`. agent-a calls
 `Claim(T, 10*time.Second)`, captures the release closure. agent-b calls
 `Claim(T, 10*time.Second)` and asserts: `errors.Is(err, coord.ErrHeldByAnother)`
 within 1s. agent-a invokes its release closure. agent-b retries claim
 and asserts: succeeds within 2s. agent-b releases.
 
 **Step 3 — Ask/Answer.** agent-b registers `Answer(func(ctx, q) (string, error))`
-that returns `strings.ToUpper(q)`. Parent signals `ask`. agent-a calls
-`Ask(ctx, "agent-b", "ping")`. Parent asserts: response is `"PING"` within
-2s (via a result-report message on `harness.results`).
+that returns `strings.ToUpper(q)`. Parent publishes `trig:ask`. agent-a
+calls `Ask(ctx, "agent-b", "ping")`. Parent asserts: response is `"PING"`
+within 2s (via a `result:` message on `harness.ctrl`).
 
 **Step 4 — Who / WatchPresence.** Parent calls `coord.Who(ctx)`. Asserts
 the returned slice contains agent IDs `parent`, `agent-a`, `agent-b`
 (no ordering requirement). Then parent starts `WatchPresence`, opens a
-fourth short-lived coord with `AgentID=probe`, waits 500ms, closes it.
-Asserts within 2s: observed a `PresenceChange` event showing `probe`
-joining, and a second showing `probe` leaving.
+fourth short-lived coord with `AgentID = "probe-" + uuid.NewString()[:8]`
+(unique per run — avoids name collision with any future harness code
+that might also use `probe`), waits 500ms, closes it. Asserts within 2s:
+observed a `PresenceChange` event showing the probe joining, and a
+second showing it leaving.
 
-**Step 5 — React.** Parent signals `react`. agent-a is still subscribed
-to `harness.chat` from Step 1. agent-a posts msg `M` to `harness.chat`,
-captures `M`'s message ID from the returned event. agent-a posts the id
-(bare string, no framing) to `harness.stepctl`, which agent-b has been
-subscribed to since Setup. agent-b receives the id, calls `React(ctx,
-"harness.chat", msgID, "👍")`. agent-a asserts: a `Reaction` event
-referencing `msgID` with reaction `"👍"` arrives within 2s.
+**Step 5 — React.** Parent publishes `trig:react`. agent-b is still
+subscribed to `harness.chat` from Step 1. agent-a posts msg `M` to
+`harness.chat`. agent-b receives the `ChatMessage` event on its existing
+subscription (no handoff needed — the ID is already on the wire). agent-b
+calls `React(ctx, "harness.chat", msgID, "👍")` using the ID from the
+event it just received. agent-a, also subscribed to `harness.chat`,
+asserts: a `Reaction` event referencing `msgID` with reaction `"👍"`
+arrives within 2s.
 
 **Step 6 — SubscribePattern.** agent-a subscribes pattern `room.*`.
-Parent signals `wildcard`. agent-b posts to `room.42` and `room.99`.
+Parent publishes `trig:wildcard`. agent-b posts to `room.42` and `room.99`.
 agent-a asserts: received two `ChatMessage` events, one per thread,
 within 2s total.
 
@@ -123,29 +127,32 @@ never called directly — ensures children are always reaped.
 
 ## Coordination: how children know when to act
 
-Children listen on `harness.bootstrap`. Parent publishes step-trigger
-strings (`ready`, `go`, `claim`, `ask`, `react`, `wildcard`, `done`) in
-order. Each child's main loop reads the next trigger and dispatches to
-the step function for its role. This keeps step ordering explicit without
-requiring a separate control channel — the primitives being tested are
-also the primitives used to coordinate testing them.
+One orchestration thread: `harness.ctrl`. All coordination traffic flows
+through it with a typed `kind:payload` prefix so producer/consumer stays
+unambiguous. The primitives being tested are also the primitives used to
+coordinate testing them.
 
-Exception: assertions run inside child processes (for Steps 1, 2, 5, 6
-where the child holds the subscription or claim result). Children report
-step pass/fail via a `harness.results` thread. Payload format is one
-line per report: `"step N: PASS"` on success, `"step N: FAIL: <reason>"`
-on failure. Parent aggregates and produces the authoritative exit code.
+Message kinds on `harness.ctrl`:
+
+- `ready:<role>` — child → parent, posted on startup after the child's
+  coord is open and its subscriptions are live. Parent waits for both
+  `ready:agent-a` and `ready:agent-b` before starting Step 1.
+- `trig:<step>` — parent → children. Values: `go`, `claim`, `ask`,
+  `react`, `wildcard`, `done`. Each child's main loop reads the next
+  trigger and dispatches to the step function for its role.
+- `result:step-<N>:PASS` or `result:step-<N>:FAIL:<reason>` — child →
+  parent. Emitted after each child-side assertion. Parent aggregates and
+  produces the authoritative exit code. Assertions run inside child
+  processes for Steps 1, 2, 5, 6 (where the child holds the subscription
+  or claim result); Steps 3 and 4 assert inside the parent.
 
 Summary of threads used by the harness:
 
-- `harness.bootstrap` — parent → children step triggers (`ready`, `go`,
-  `claim`, `ask`, `react`, `wildcard`, `done`). Children also post
-  `ready` on startup.
-- `harness.chat` — Step 1, 5 primary traffic. agent-b subscribes.
-- `harness.stepctl` — agent-a → agent-b inter-child coordination
-  (Step 5 msg-id handoff).
-- `harness.results` — children → parent pass/fail reports.
-- `room.42`, `room.99` — Step 6 wildcard targets.
+- `harness.ctrl` — all orchestration (ready, trig, result). Parent and
+  both children subscribe.
+- `harness.chat` — Steps 1 and 5 primary traffic. Both agents subscribe.
+- `room.42`, `room.99` — Step 6 wildcard targets. agent-a subscribes
+  via `SubscribePattern("room.*")`.
 
 ## File layout
 
