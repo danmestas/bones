@@ -45,9 +45,16 @@ children, and aggregates PASS/FAIL.
 
 Each role opens its own `coord.Coord` with a distinct `AgentID`. The parent
 also opens a coord to observe global state (the `Who` and `WatchPresence`
-checks in Step 4). All four coord instances — parent, agent-a, agent-b,
-and a short-lived `probe` opened inside Step 4 — speak to the same embedded
-NATS via the parent-started leaf.
+checks in Step 4). All four coord instances — `twoagent-parent`, `twoagent-a`,
+`twoagent-b`, and a short-lived probe opened inside Step 4 — speak to the
+same embedded NATS via the parent-started leaf.
+
+**AgentID convention.** `coord.projectPrefix()` splits each AgentID on its
+last hyphen and uses the prefix as the project scope: agents only see
+presence, chat, and tasks for peers that share their prefix. Every coord
+in this harness therefore uses an AgentID of the form `twoagent-<suffix>`,
+so all four land in the single `twoagent` project. The `--role=parent|agent-a|agent-b`
+flag stays human-readable; the AgentID is derived inside each role's main.
 
 ## Lifecycle
 
@@ -56,11 +63,12 @@ NATS via the parent-started leaf.
 1. `workspace.Init(ctx, tempDir)` — creates a throwaway `.agent-infra/`
    workspace, spawns leaf, waits for `/healthz`. `LEAF_BIN` env var
    required (matches existing integration-test convention).
-2. Parent opens `coord.Coord` against the workspace's NATS URL with a
-   stable `AgentID` like `parent`.
+2. Parent opens `coord.Coord` against the workspace's NATS URL with
+   `AgentID = "twoagent-parent"`.
 3. Parent spawns agent-a and agent-b via `exec.Command(os.Args[0], ...)`,
    passing `--workspace=<dir>` and `--role=agent-a|agent-b`. Each child
-   subscribes `harness.ctrl` (the single orchestration thread) at startup.
+   opens its own coord with `AgentID = "twoagent-a"` or `"twoagent-b"`
+   and subscribes `harness.ctrl` (the single orchestration thread) at startup.
 4. Parent subscribes `harness.ctrl` and waits for both children to post
    `ready:agent-a` and `ready:agent-b` (2s timeout). This confirms both
    coords are live before the scenario starts.
@@ -86,15 +94,15 @@ and asserts: succeeds within 2s. agent-b releases.
 
 **Step 3 — Ask/Answer.** agent-b registers `Answer(func(ctx, q) (string, error))`
 that returns `strings.ToUpper(q)`. Parent publishes `trig:ask`. agent-a
-calls `Ask(ctx, "agent-b", "ping")`. Parent asserts: response is `"PING"`
+calls `Ask(ctx, "twoagent-b", "ping")`. Parent asserts: response is `"PING"`
 within 2s (via a `result:` message on `harness.ctrl`).
 
 **Step 4 — Who / WatchPresence.** Parent calls `coord.Who(ctx)`. Asserts
-the returned slice contains agent IDs `parent`, `agent-a`, `agent-b`
-(no ordering requirement). Then parent starts `WatchPresence`, opens a
-fourth short-lived coord with `AgentID = "probe-" + uuid.NewString()[:8]`
+the returned slice contains agent IDs `twoagent-parent`, `twoagent-a`,
+`twoagent-b` (no ordering requirement). Then parent starts `WatchPresence`,
+opens a fourth short-lived coord with `AgentID = "twoagent-probe" + uuid.NewString()[:8]`
 (unique per run — avoids name collision with any future harness code
-that might also use `probe`), waits 500ms, closes it. Asserts within 2s:
+that might also use a probe), waits 500ms, closes it. Asserts within 2s:
 observed a `PresenceChange` event showing the probe joining, and a
 second showing it leaving.
 
