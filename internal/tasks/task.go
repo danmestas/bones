@@ -37,6 +37,26 @@ func validStatus(s Status) bool {
 	}
 }
 
+// EdgeType names a typed outgoing relationship from one task to another.
+// See ADR 0014. Unknown string values decoded from storage are preserved
+// as-is (invariant 26) so a future phase adding a new type stays
+// round-trip compatible with records this version writes.
+type EdgeType string
+
+const (
+	EdgeBlocks         EdgeType = "blocks"
+	EdgeDiscoveredFrom EdgeType = "discovered-from"
+	EdgeSupersedes     EdgeType = "supersedes"
+	EdgeDuplicates     EdgeType = "duplicates"
+)
+
+// Edge is an outgoing directed relationship carried on the source task.
+// Storage is outgoing-only (ADR 0014); reverse lookups require a scan.
+type Edge struct {
+	Type   EdgeType `json:"type"`
+	Target string   `json:"target"`
+}
+
 // Task is the value stored at each TaskID key in the KV bucket. The
 // struct is persisted as JSON; every timestamp is wall-clock UTC so
 // that two processes reading the same entry reach the same verdict
@@ -65,6 +85,11 @@ type Task struct {
 	// Parent is the optional parent TaskID — empty when this is a root
 	// task in a decomposition chain.
 	Parent string `json:"parent,omitempty"`
+
+	// Edges are outgoing typed relationships to other tasks. Invariant 25
+	// forbids duplicate (Type, Target) pairs; coord.Link enforces this on
+	// write. Additive in ADR 0014; nil in records written before that ADR.
+	Edges []Edge `json:"edges,omitempty"`
 
 	// Context is the caller-supplied free-form metadata. ADR 0005 caps
 	// the effective size against MaxValueSize in concert with the other
