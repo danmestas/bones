@@ -1,6 +1,9 @@
 package coord
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // ErrHeldByAnother reports that one or more requested file holds are
 // currently owned by a different agent.
@@ -87,6 +90,35 @@ var ErrBranchNotFound = errors.New("coord: branch not found")
 // ErrConflictForked reports that a coord.Commit landed on a
 // sibling-leaf branch because another agent's commit raced ours on the
 // same branch. The caller's work is preserved on the forked branch;
-// reconciliation is via coord.Merge. Real detection ships in 0p9.3;
-// this sentinel is declared now so the error surface is stable.
+// reconciliation is via coord.Merge. Callers match with
+// errors.Is(err, ErrConflictForked) to detect the case and use
+// errors.As with *ConflictForkedError to extract Branch and Rev.
+// ADR 0010 §4.
 var ErrConflictForked = errors.New("coord: commit forked from branch tip")
+
+// ConflictForkedError wraps ErrConflictForked with the forked branch
+// name and the rev of the now-placed commit. Use errors.Is(err,
+// ErrConflictForked) to detect the case and errors.As with
+// *ConflictForkedError to extract Branch and Rev. The commit landed
+// successfully on Branch; reconciliation with the original branch is
+// via coord.Merge. See ADR 0010 §4.
+type ConflictForkedError struct {
+	Branch string
+	Rev    string
+}
+
+// Error returns a human-readable description of the fork including the
+// branch name and the rev the commit landed on.
+func (e *ConflictForkedError) Error() string {
+	return fmt.Sprintf(
+		"coord.Commit: forked to branch %q at rev %s: %v",
+		e.Branch, e.Rev, ErrConflictForked,
+	)
+}
+
+// Is lets errors.Is(err, ErrConflictForked) match a ConflictForkedError.
+// Callers that only want the sentinel (no branch/rev) use errors.Is;
+// callers that want the details use errors.As with *ConflictForkedError.
+func (e *ConflictForkedError) Is(target error) bool {
+	return target == ErrConflictForked
+}

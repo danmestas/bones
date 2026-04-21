@@ -320,21 +320,21 @@ needed.
 
 ## Open questions
 
-**Concurrent commit timing.** Fossil autosync is tick-based.
-Coord's `Commit` needs to decide whether to return synchronously
-after the local write (earliest, but may return before the conflict
-is known) or after the next sync tick (latest guaranteed conflict
-visibility, but adds up to one tick of latency). Phase 5 ticket picks;
-the ADR leaves this to implementation because the choice depends on
-the observed sync-tick cadence in EdgeSync's deployed shape and does
-not affect the public API.
+**Concurrent commit timing.** RESOLVED in 0p9.3: synchronous
+pre-commit `Checkout.WouldFork()` check. No background goroutine, no
+sync tick. Deterministic for tests and for the caller — `Commit`
+returns after exactly one of (trunk-commit, forked-commit), never
+"maybe fork later". The libfossil primitive (`(*Checkout).WouldFork`)
+reads the leaf table on the current branch and reports whether a
+sibling leaf exists, which is what coord needs at commit time without
+waiting on autosync cadence.
 
-**Retry-suffix collisions.** `unix_nano` is monotonic on a single
-host but not guaranteed across hosts. Two agents on two machines
-whose clocks are skewed could in principle generate the same branch
-name on the same millisecond. Probability is vanishingly low and the
-hash of (agent_id, task_id, nanos) is a trivial fallback if needed.
-Phase 5 ticket confirms whether to add it or defer.
+**Retry-suffix collisions.** RESOLVED in 0p9.3: `unix_nano` alone per
+Invariant 22 exact format. Single-host assumption documented here;
+multi-host hardening (e.g. hashing `(agent_id, task_id, nanos)` with
+a tiebreaker) is deferred until a multi-host deployment shape makes
+clock-skew collision observable. The single-host assumption is
+consistent with Phase 5 leaf-daemon-per-host semantics.
 
 **Merge authorization.** Currently any agent can call `Merge`.
 Should a supervisor-only gate appear in Phase 5, or defer to Phase

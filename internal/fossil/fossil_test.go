@@ -35,7 +35,7 @@ func commit(
 	t *testing.T, m *Manager, msg string, files ...File,
 ) string {
 	t.Helper()
-	rev, err := m.Commit(context.Background(), msg, files)
+	rev, err := m.Commit(context.Background(), msg, files, "")
 	if err != nil {
 		t.Fatalf("Commit %q: %v", msg, err)
 	}
@@ -473,8 +473,154 @@ func TestCommit_AfterClose_Errors(t *testing.T) {
 	}
 	_, err := m.Commit(context.Background(), "after close", []File{
 		{Path: "x.txt", Content: []byte("x\n")},
-	})
+	}, "")
 	if !errors.Is(err, ErrClosed) {
 		t.Fatalf("got %v, want ErrClosed", err)
+	}
+}
+
+// TestWouldFork_NoCheckout proves WouldFork returns (false, nil) when
+// no checkout is attached. A fresh manager cannot fork since it has no
+// working-copy parent (ADR 0010 §4).
+func TestWouldFork_NoCheckout(t *testing.T) {
+	m := newTestManager(t)
+	fork, err := m.WouldFork(context.Background())
+	if err != nil {
+		t.Fatalf("WouldFork: %v", err)
+	}
+	if fork {
+		t.Fatalf("WouldFork on fresh manager: got true, want false")
+	}
+}
+
+// TestWouldFork_SingleLeaf proves WouldFork returns false when the
+// current branch has only one leaf (no sibling).
+func TestWouldFork_SingleLeaf(t *testing.T) {
+	m := newTestManager(t)
+	_ = commit(t, m, "init", File{Path: "x.txt", Content: []byte("1\n")})
+	if err := m.CreateCheckout(context.Background()); err != nil {
+		t.Fatalf("CreateCheckout: %v", err)
+	}
+	fork, err := m.WouldFork(context.Background())
+	if err != nil {
+		t.Fatalf("WouldFork: %v", err)
+	}
+	if fork {
+		t.Fatalf("WouldFork with single leaf: got true, want false")
+	}
+}
+
+// TestWouldFork_AfterClose proves WouldFork returns ErrClosed when
+// invoked on a torn-down Manager.
+func TestWouldFork_AfterClose(t *testing.T) {
+	m := newTestManager(t)
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	_, err := m.WouldFork(context.Background())
+	if !errors.Is(err, ErrClosed) {
+		t.Fatalf("WouldFork after close: got %v, want ErrClosed", err)
+	}
+}
+
+// TestWouldFork_TwoManagersSharedRepo pins the fork semantics used by
+// ADR 0010 §4: two Managers on the same shared repo with distinct
+// CheckoutRoots trade commits. After A commits and B commits in
+// sequence, A's checkout (attached at A1) must see the sibling leaf
+// B1 and report WouldFork=true — that's the condition coord.Commit
+// reads to decide between trunk and fork-branch placement.
+func TestWouldFork_TwoManagersSharedRepo(t *testing.T) {
+	tmp := t.TempDir()
+	shared := filepath.Join(tmp, "shared.fossil")
+	mkMgr := func(id string) *Manager {
+		m, err := Open(context.Background(), Config{
+			AgentID:      id,
+			RepoPath:     shared,
+			CheckoutRoot: filepath.Join(tmp, id+"-checkouts"),
+		})
+		if err != nil {
+			t.Fatalf("Open(%s): %v", id, err)
+		}
+		t.Cleanup(func() { _ = m.Close() })
+		return m
+	}
+	mA := mkMgr("A")
+	mB := mkMgr("B")
+	ctx := context.Background()
+
+	// A commits first; checkout not yet attached.
+	if _, err := mA.Commit(ctx, "a1", []File{
+		{Path: "a.go", Content: []byte("a1\n")},
+	}, ""); err != nil {
+		t.Fatalf("A commit 1: %v", err)
+	}
+	// Attach A's checkout so fork detection has a working-copy anchor.
+	if err := mA.CreateCheckout(ctx); err != nil {
+		t.Fatalf("A CreateCheckout: %v", err)
+	}
+	// Attach B's checkout after A's tip is visible.
+	if err := mB.CreateCheckout(ctx); err != nil {
+		t.Fatalf("B CreateCheckout: %v", err)
+	}
+	// Snapshot B's checkout at A's tip (the only rev so far).
+	// Leaves on trunk = [A1]; WouldFork on A = false.
+	forkA, err := mA.WouldFork(ctx)
+	if err != nil {
+		t.Fatalf("A WouldFork after A1: %v", err)
+	}
+	if forkA {
+		t.Fatalf("A WouldFork after A1: got true, want false")
+	}
+
+	// B commits; this should advance trunk past A1 (B's commit
+	// references A1 as parent since tipRID returns A1). Now A1
+	// becomes internal; B1 is the only leaf. No fork yet.
+	if _, err := mB.Commit(ctx, "b1", []File{
+		{Path: "b.go", Content: []byte("b1\n")},
+	}, ""); err != nil {
+		t.Fatalf("B commit 1: %v", err)
+	}
+	// A's WouldFork still sees A's checkout at A1. Leaves on trunk
+	// after B1 = [B1]. A1 is internal. A's rid != any leaf rid,
+	// so WouldFork returns true (sibling leaf B1 exists).
+	forkA, err = mA.WouldFork(ctx)
+	if err != nil {
+		t.Fatalf("A WouldFork after B1: %v", err)
+	}
+	if !forkA {
+		t.Fatalf("A WouldFork after B1: got false, want true")
+	}
+}
+
+// TestCommit_WithBranch_PlacesOnBranch proves that passing a non-empty
+// branch arg to Commit results in the new rev being placed on that
+// named branch (ADR 0010 §5 fork-on-conflict composition primitive).
+func TestCommit_WithBranch_PlacesOnBranch(t *testing.T) {
+	m := newTestManager(t)
+	// Land a baseline on trunk so the forked commit has a parent.
+	_ = commit(t, m, "base", File{Path: "x.txt", Content: []byte("1\n")})
+	if err := m.CreateCheckout(context.Background()); err != nil {
+		t.Fatalf("CreateCheckout: %v", err)
+	}
+	// Commit again with an explicit branch name.
+	branch := "agent-a-task1-12345"
+	rev, err := m.Commit(
+		context.Background(), "forked",
+		[]File{{Path: "x.txt", Content: []byte("2\n")}},
+		branch,
+	)
+	if err != nil {
+		t.Fatalf("Commit with branch: %v", err)
+	}
+	if rev == "" {
+		t.Fatal("Commit with branch: empty rev")
+	}
+	// Confirm the named branch resolves to the new tip.
+	tipRID, err := m.repo.BranchTip(branch)
+	if err != nil {
+		t.Fatalf("BranchTip %q: %v", branch, err)
+	}
+	if tipRID == 0 {
+		t.Fatalf("BranchTip %q: got 0 rid", branch)
 	}
 }
