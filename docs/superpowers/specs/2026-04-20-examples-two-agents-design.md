@@ -86,13 +86,23 @@ Parent publishes `trig:go` on `harness.ctrl`. agent-a posts `"hello from a"`
 to `harness.chat`. agent-b asserts: received that exact byte payload
 within 2s.
 
-**Step 2 — Claim/Release.** Parent publishes `trig:claim`. agent-a calls
-`Claim(T, 10*time.Second)`, captures the release closure. agent-b calls
-`Claim(T, 10*time.Second)` and asserts: `errors.Is(err, coord.ErrTaskAlreadyClaimed)`
-within 1s. (The task-CAS layer fires before the file-hold layer, so the
-CAS sentinel — not `ErrHeldByAnother` — is the correct assertion for a
-same-task second claim.) agent-a invokes its release closure. agent-b
-retries claim and asserts: succeeds within 2s. agent-b releases.
+**Step 2 — Claim/Release.** Parent publishes `trig:claim:<taskID>`. Both
+agents receive the trigger simultaneously, so the step uses two `handoff:*`
+messages on `harness.ctrl` to sequence the claims deterministically:
+
+1. agent-a calls `Claim(T, 10*time.Second)`, captures the release closure,
+   posts `handoff:a-claimed`, then holds briefly (1500ms) before releasing.
+2. agent-b waits for `handoff:a-claimed` (3s timeout) before its own
+   `Claim(T, 10*time.Second)`, and asserts `errors.Is(err, coord.ErrTaskAlreadyClaimed)`.
+   (The task-CAS layer fires before the file-hold layer, so the CAS
+   sentinel — not `ErrHeldByAnother` — is the correct assertion for a
+   same-task second claim.)
+3. agent-a invokes its release closure and posts `handoff:released`.
+4. agent-b waits for `handoff:released` (3s timeout), retries claim, asserts:
+   succeeds, releases, posts `result:step-2:PASS`.
+
+Without the `handoff:a-claimed` gate, either agent could win the CAS race
+and the assertion target would be non-deterministic.
 
 **Step 3 — Ask/Answer.** agent-b registers `Answer(func(ctx, q) (string, error))`
 that returns `strings.ToUpper(q)`. Parent publishes `trig:ask`. agent-a

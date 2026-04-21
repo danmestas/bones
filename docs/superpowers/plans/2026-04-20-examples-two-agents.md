@@ -575,7 +575,7 @@ git commit -m "examples/two-agents: step 1 (post/subscribe)"
 
 ### Task 4: Step 2 — Claim/Release
 
-Parent creates task `T` with a dummy file. agent-a claims; agent-b attempts claim, asserts `ErrTaskAlreadyClaimed`; agent-a releases; agent-b claims (succeeds); agent-b releases.
+Parent creates task `T` with a dummy file. agent-a claims and posts `handoff:a-claimed`; agent-b (which was waiting for that handoff) attempts claim, asserts `ErrTaskAlreadyClaimed`; agent-a releases and posts `handoff:released`; agent-b retries claim (succeeds) and releases. The two `handoff:*` messages serialize the otherwise-racy `Claim` calls.
 
 **Files:**
 - Modify: `examples/two-agents/main.go`
@@ -609,31 +609,45 @@ The triggers for Steps 2+ carry the task ID as `trig:claim:<taskID>`. Update Ste
 Modify the switch to match on prefix:
 
 ```go
-func dispatchStep(ctx context.Context, c *coord.Coord, role, trig string, chatEvents <-chan coord.Event) error {
+func dispatchStep(ctx context.Context, c *coord.Coord, role, trig string, ctrlEvents, chatEvents <-chan coord.Event) error {
 	switch {
 	case trig == "trig:go":
 		return stepPostSubscribe(ctx, c, role, chatEvents)
 	case strings.HasPrefix(trig, "trig:claim:"):
 		taskID := coord.TaskID(strings.TrimPrefix(trig, "trig:claim:"))
-		return stepClaimRelease(ctx, c, role, taskID)
+		return stepClaimRelease(ctx, c, role, taskID, ctrlEvents)
 	}
 	return fmt.Errorf("unknown trigger: %s", trig)
 }
 ```
 
+(Both `ctrlEvents` and `chatEvents` are the per-agent subscriptions opened in `runAgent`; reusing them inside steps avoids a race where a fresh `Subscribe` could miss a handoff that was already published — `coord.Subscribe` drops pre-subscribe events; see `coord/subscribe.go:112`. The `runAgent` call site becomes `dispatchStep(ctx, c, role, body, ctrlEvents, chatEvents)`.)
+
 - [ ] **Step 3: Implement `stepClaimRelease`**
 
 ```go
-// stepClaimRelease: agent-a claims; agent-b asserts ErrTaskAlreadyClaimed; release/retry/release.
-// Agent-a posts handoff:released on harness.ctrl so agent-b retries only after release.
-func stepClaimRelease(ctx context.Context, c *coord.Coord, role string, taskID coord.TaskID) error {
+// stepClaimRelease: agent-a claims first, posts handoff:a-claimed, holds briefly,
+// releases, posts handoff:released. agent-b waits for handoff:a-claimed before its
+// own Claim (so the CAS loss is deterministic), asserts ErrTaskAlreadyClaimed,
+// waits for handoff:released, retries, releases, PASS.
+//
+// Both agents receive trig:claim simultaneously, so without the handoff:a-claimed
+// gate either agent could win the CAS race. ctrlEvents is the existing subscription
+// from runAgent — reused here to avoid a race window where a fresh Subscribe could
+// miss an already-published handoff (coord.Subscribe drops pre-subscribe events;
+// see coord/subscribe.go:112).
+func stepClaimRelease(ctx context.Context, c *coord.Coord, role string, taskID coord.TaskID, ctrlEvents <-chan coord.Event) error {
 	switch role {
 	case "agent-a":
 		release, err := c.Claim(ctx, taskID, 10*time.Second)
 		if err != nil {
 			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:a claim: "+err.Error()))
 		}
-		// Give agent-b 1s to attempt its (failing) claim; then release.
+		if err := c.Post(ctx, threadCtrl, []byte("handoff:a-claimed")); err != nil {
+			_ = release()
+			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:a post claimed: "+err.Error()))
+		}
+		// Hold long enough for agent-b to attempt and fail its claim.
 		time.Sleep(1500 * time.Millisecond)
 		if err := release(); err != nil {
 			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:a release: "+err.Error()))
@@ -641,25 +655,23 @@ func stepClaimRelease(ctx context.Context, c *coord.Coord, role string, taskID c
 		return c.Post(ctx, threadCtrl, []byte("handoff:released"))
 
 	case "agent-b":
-		// First claim must fail with ErrTaskAlreadyClaimed within 1s of trig:claim.
-		// (Task-CAS layer fires before file-hold layer — see coord/claim_test.go:142.)
+		if _, waitErr := waitFor(ctx, ctrlEvents, 3*time.Second, func(e coord.Event) bool {
+			cm, ok := e.(coord.ChatMessage)
+			return ok && cm.Body() == "handoff:a-claimed"
+		}); waitErr != nil {
+			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:b wait a-claimed: "+waitErr.Error()))
+		}
 		_, err := c.Claim(ctx, taskID, 10*time.Second)
 		if !errors.Is(err, coord.ErrTaskAlreadyClaimed) {
 			return c.Post(ctx, threadCtrl, []byte(fmt.Sprintf(
 				"result:step-2:FAIL:b first claim: want ErrTaskAlreadyClaimed got %v", err)))
 		}
-		// Wait for agent-a to release, then retry.
-		ctrlSub, closeCtrl, subErr := c.Subscribe(ctx, threadCtrl)
-		if subErr != nil {
-			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:b subscribe ctrl: "+subErr.Error()))
-		}
-		defer closeCtrl()
-		_, waitErr := waitFor(ctx, ctrlSub, 3*time.Second, func(e coord.Event) bool {
+		_, waitErr := waitFor(ctx, ctrlEvents, 3*time.Second, func(e coord.Event) bool {
 			cm, ok := e.(coord.ChatMessage)
 			return ok && cm.Body() == "handoff:released"
 		})
 		if waitErr != nil {
-			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:b wait handoff: "+waitErr.Error()))
+			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:b wait released: "+waitErr.Error()))
 		}
 		release, err := c.Claim(ctx, taskID, 10*time.Second)
 		if err != nil {

@@ -317,34 +317,46 @@ func runAgent(ctx context.Context, role string) int {
 		if body == "trig:done" {
 			return 0
 		}
-		if err := dispatchStep(ctx, c, role, body, chatEvents); err != nil {
+		if err := dispatchStep(ctx, c, role, body, ctrlEvents, chatEvents); err != nil {
 			fmt.Fprintf(os.Stderr, "FAIL: %s: %s: %v\n", role, body, err)
 			return 1
 		}
 	}
 }
 
-func dispatchStep(ctx context.Context, c *coord.Coord, role, trig string, chatEvents <-chan coord.Event) error {
+func dispatchStep(ctx context.Context, c *coord.Coord, role, trig string, ctrlEvents, chatEvents <-chan coord.Event) error {
 	switch {
 	case trig == "trig:go":
 		return stepPostSubscribe(ctx, c, role, chatEvents)
 	case strings.HasPrefix(trig, "trig:claim:"):
 		taskID := coord.TaskID(strings.TrimPrefix(trig, "trig:claim:"))
-		return stepClaimRelease(ctx, c, role, taskID)
+		return stepClaimRelease(ctx, c, role, taskID, ctrlEvents)
 	}
 	return fmt.Errorf("unknown trigger: %s", trig)
 }
 
-// stepClaimRelease: agent-a claims; agent-b asserts ErrHeldByAnother; release/retry/release.
-// Agent-a posts handoff:released on harness.ctrl so agent-b retries only after release.
-func stepClaimRelease(ctx context.Context, c *coord.Coord, role string, taskID coord.TaskID) error {
+// stepClaimRelease: agent-a claims first, posts handoff:a-claimed, holds briefly,
+// releases, posts handoff:released. agent-b waits for handoff:a-claimed before its
+// own Claim (so the CAS loss is deterministic), asserts ErrTaskAlreadyClaimed,
+// waits for handoff:released, retries, releases, PASS.
+//
+// Both agents receive trig:claim simultaneously, so without the handoff:a-claimed
+// gate either agent could win the CAS race. ctrlEvents is the existing subscription
+// from runAgent — reused here to avoid a race window where a fresh Subscribe could
+// miss an already-published handoff (coord.Subscribe drops pre-subscribe events;
+// see coord/subscribe.go:112).
+func stepClaimRelease(ctx context.Context, c *coord.Coord, role string, taskID coord.TaskID, ctrlEvents <-chan coord.Event) error {
 	switch role {
 	case "agent-a":
 		release, err := c.Claim(ctx, taskID, 10*time.Second)
 		if err != nil {
 			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:a claim: "+err.Error()))
 		}
-		// Give agent-b 1s to attempt its (failing) claim; then release.
+		if err := c.Post(ctx, threadCtrl, []byte("handoff:a-claimed")); err != nil {
+			_ = release()
+			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:a post claimed: "+err.Error()))
+		}
+		// Hold long enough for agent-b to attempt and fail its claim.
 		time.Sleep(1500 * time.Millisecond)
 		if err := release(); err != nil {
 			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:a release: "+err.Error()))
@@ -352,22 +364,23 @@ func stepClaimRelease(ctx context.Context, c *coord.Coord, role string, taskID c
 		return c.Post(ctx, threadCtrl, []byte("handoff:released"))
 
 	case "agent-b":
+		if _, waitErr := waitFor(ctx, ctrlEvents, 3*time.Second, func(e coord.Event) bool {
+			cm, ok := e.(coord.ChatMessage)
+			return ok && cm.Body() == "handoff:a-claimed"
+		}); waitErr != nil {
+			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:b wait a-claimed: "+waitErr.Error()))
+		}
 		_, err := c.Claim(ctx, taskID, 10*time.Second)
 		if !errors.Is(err, coord.ErrTaskAlreadyClaimed) {
 			return c.Post(ctx, threadCtrl, []byte(fmt.Sprintf(
 				"result:step-2:FAIL:b first claim: want ErrTaskAlreadyClaimed got %v", err)))
 		}
-		ctrlSub, closeCtrl, subErr := c.Subscribe(ctx, threadCtrl)
-		if subErr != nil {
-			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:b subscribe ctrl: "+subErr.Error()))
-		}
-		defer closeCtrl()
-		_, waitErr := waitFor(ctx, ctrlSub, 3*time.Second, func(e coord.Event) bool {
+		_, waitErr := waitFor(ctx, ctrlEvents, 3*time.Second, func(e coord.Event) bool {
 			cm, ok := e.(coord.ChatMessage)
 			return ok && cm.Body() == "handoff:released"
 		})
 		if waitErr != nil {
-			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:b wait handoff: "+waitErr.Error()))
+			return c.Post(ctx, threadCtrl, []byte("result:step-2:FAIL:b wait released: "+waitErr.Error()))
 		}
 		release, err := c.Claim(ctx, taskID, 10*time.Second)
 		if err != nil {
