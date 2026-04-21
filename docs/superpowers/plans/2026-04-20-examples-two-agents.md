@@ -60,11 +60,11 @@ Reaction:        From() / Thread() / Target() / Body() / Timestamp()
 PresenceChange:  AgentID() / Project() / Up() / Timestamp()
 ```
 
-**Sentinels the harness touches:** `coord.ErrHeldByAnother`, `coord.ErrAskTimeout`.
+**Sentinels the harness touches:** `coord.ErrTaskAlreadyClaimed` (Step 2), `coord.ErrAskTimeout` (Step 3). `ErrHeldByAnother` surfaces only when the file-hold layer collides; a same-task second `Claim` hits the CAS sentinel first — see `coord/claim_test.go:142`.
 
 **Config field reference** (`coord/coord_test.go:24-43` has a working `validConfig` pattern — crib it). Copy the 15 fields; per-coord unique field is `ChatFossilRepoPath` (each role gets its own tempdir).
 
-**Spec correction**: design doc says Step 2 exercises Claim "on an empty-files task," but `OpenTask` requires at least one absolute file path. Pass `[]string{"/dev/null"}` as a dummy — the claim test only cares that the second agent hits `ErrHeldByAnother`, not what the file is.
+**Spec correction**: design doc says Step 2 exercises Claim "on an empty-files task," but `OpenTask` requires at least one absolute file path. Pass `[]string{"/dev/null"}` as a dummy — the claim test only cares that the second agent hits `ErrTaskAlreadyClaimed`, not what the file is.
 
 ---
 
@@ -575,7 +575,7 @@ git commit -m "examples/two-agents: step 1 (post/subscribe)"
 
 ### Task 4: Step 2 — Claim/Release
 
-Parent creates task `T` with a dummy file. agent-a claims; agent-b attempts claim, asserts `ErrHeldByAnother`; agent-a releases; agent-b claims (succeeds); agent-b releases.
+Parent creates task `T` with a dummy file. agent-a claims; agent-b attempts claim, asserts `ErrTaskAlreadyClaimed`; agent-a releases; agent-b claims (succeeds); agent-b releases.
 
 **Files:**
 - Modify: `examples/two-agents/main.go`
@@ -624,7 +624,7 @@ func dispatchStep(ctx context.Context, c *coord.Coord, role, trig string, chatEv
 - [ ] **Step 3: Implement `stepClaimRelease`**
 
 ```go
-// stepClaimRelease: agent-a claims; agent-b asserts ErrHeldByAnother; release/retry/release.
+// stepClaimRelease: agent-a claims; agent-b asserts ErrTaskAlreadyClaimed; release/retry/release.
 // Agent-a posts handoff:released on harness.ctrl so agent-b retries only after release.
 func stepClaimRelease(ctx context.Context, c *coord.Coord, role string, taskID coord.TaskID) error {
 	switch role {
@@ -641,11 +641,12 @@ func stepClaimRelease(ctx context.Context, c *coord.Coord, role string, taskID c
 		return c.Post(ctx, threadCtrl, []byte("handoff:released"))
 
 	case "agent-b":
-		// First claim must fail with ErrHeldByAnother within 1s of trig:claim.
+		// First claim must fail with ErrTaskAlreadyClaimed within 1s of trig:claim.
+		// (Task-CAS layer fires before file-hold layer — see coord/claim_test.go:142.)
 		_, err := c.Claim(ctx, taskID, 10*time.Second)
-		if !errors.Is(err, coord.ErrHeldByAnother) {
+		if !errors.Is(err, coord.ErrTaskAlreadyClaimed) {
 			return c.Post(ctx, threadCtrl, []byte(fmt.Sprintf(
-				"result:step-2:FAIL:b first claim: want ErrHeldByAnother got %v", err)))
+				"result:step-2:FAIL:b first claim: want ErrTaskAlreadyClaimed got %v", err)))
 		}
 		// Wait for agent-a to release, then retry.
 		ctrlSub, closeCtrl, subErr := c.Subscribe(ctx, threadCtrl)
@@ -1179,7 +1180,7 @@ On any assertion failure: prints `FAIL: step N (<name>): <reason>` to stderr, re
 ## What each step asserts
 
 1. **Post/Subscribe** — agent-a posts on `harness.chat`; agent-b observes the exact body.
-2. **Claim/Release** — agent-a claims a task, agent-b sees `coord.ErrHeldByAnother`, agent-a releases, agent-b retries and succeeds.
+2. **Claim/Release** — agent-a claims a task, agent-b sees `coord.ErrTaskAlreadyClaimed`, agent-a releases, agent-b retries and succeeds.
 3. **Ask/Answer** — agent-a `Ask(twoagent-b, "ping")`; response is `"PING"`.
 4. **Who / WatchPresence** — parent sees all three live agents; opens a probe coord, observes join + leave on `WatchPresence`.
 5. **React** — agent-a posts; agent-b reacts with `👍`; agent-a observes the `Reaction` event with matching `Target()`.
