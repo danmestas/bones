@@ -26,10 +26,6 @@ Without typed edges, agent-infra cannot express:
 - **Dedup / supersession** — two agents opening near-duplicate tasks can't
   mark one as the canonical and the other as superseded without chat
   convention; Ready surfaces both.
-- **External gates** — "this task waits on a timer / PR / external system" is
-  not recordable. (Beads' gate primitive is a separate non-goal per
-  CAPABILITIES.md §6; we want the edge type even if we don't ship gate
-  evaluation.)
 
 The question is five-layered: **taxonomy** (which edge types from beads' 13
 are load-bearing for us?), **storage** (where on the record do edges live?),
@@ -39,7 +35,7 @@ existing scalar `Parent` field).
 
 ## Decision
 
-### Taxonomy: five types
+### Taxonomy: four types
 
 Adopted:
 
@@ -47,7 +43,6 @@ Adopted:
 |---|---|---|
 | `blocks` | `A blocks B` — stored as outgoing edge on A | yes (target hidden while blocker is non-closed) |
 | `discovered-from` | `T discovered-from P` — audit only | no |
-| `waits-for` | `T waits-for <external>` — external gate marker | no (stored; not evaluated) |
 | `supersedes` | `A supersedes B` — B is obsolete | yes (B hidden) |
 | `duplicates` | `A duplicates B` — B is duplicate-of A | yes (B hidden) |
 
@@ -57,6 +52,13 @@ Deferred / rejected:
   record (ADR 0005). Unifying into edges costs a migrator and a
   direction-convention debate (outgoing-only storage would force edges to
   point child→parent, reversed from beads). Kept as a scalar.
+- `waits-for` — dropped from v1. With our `{type, target: TaskID}` shape
+  and no gate primitive (CAPABILITIES.md §6 marks gates non-goal), the edge
+  would target another task — which is just `blocks` in reverse. Without a
+  payload (URL, deadline, condition) or a gate-evaluator to consume it,
+  shipping the type now stores a shape we can't use. Re-add if/when a gate
+  system or payload model arrives; adding a new `EdgeType` constant later
+  is source-compatible.
 - `authored-by`, `assigned-to`, `approved-by`, `attests` — governance-flavored.
   Require an ACL model that lands in Phase 8 (ADR 0012 reservation). Not useful
   without one.
@@ -76,7 +78,6 @@ type EdgeType string
 const (
     EdgeBlocks         EdgeType = "blocks"
     EdgeDiscoveredFrom EdgeType = "discovered-from"
-    EdgeWaitsFor       EdgeType = "waits-for"
     EdgeSupersedes     EdgeType = "supersedes"
     EdgeDuplicates     EdgeType = "duplicates"
 )
@@ -118,8 +119,16 @@ shape scans twice:
    `Config.MaxReadyReturn` (existing behavior).
 
 Cost is O(N + E) where E is total edges across all tasks. `discovered-from`
-and `waits-for` are stored but **not** read in either pass — consumers who
-want gate evaluation walk edges themselves on their own cadence.
+is stored but **not** read in either pass — it is audit metadata, not a
+ready-blocker.
+
+The `Ready()` docstring must enumerate every filter gate it applies, so
+readers can answer "why is task T not in the result?" without reading
+implementation. The current gates are: `status == open`, `claimed_by == ""`,
+no `Parent` with non-closed child, no incoming `blocks` from a non-closed
+task, no incoming `supersedes` from a non-closed task, no incoming
+`duplicates` from a non-closed task. The implementation PR must update the
+docstring accordingly.
 
 Parent-filter semantic: a parent P is hidden from `Ready()` while any task
 T has `T.Parent == P.ID` and `T.Status != closed`. Matches beads' "parent
@@ -139,7 +148,7 @@ func (c *Coord) Link(
 
 Contract:
 
-1. `edgeType` must be one of the five defined constants, else
+1. `edgeType` must be one of the four defined constants, else
    `ErrInvalidEdgeType`.
 2. Both `from` and `to` must exist in the tasks bucket, else
    `ErrTaskNotFound`. The `to` task may be in any status, including closed —
@@ -149,10 +158,11 @@ Contract:
    the parent (the discovering agent isn't the parent's claimer).
 4. Idempotent on `(from, to, type)` — a duplicate Link is a silent no-op, no
    CAS write. Makes callers' retry logic simpler.
-5. Soft cap at `MaxEdgesPerTask = 64` per task; hitting the cap returns
-   `ErrTooManyEdges`. Prevents pathological growth; 64 is an order of
-   magnitude beyond any realistic task's connection count and still leaves
-   room for ADR 0005's `MaxValueSize` bound.
+5. No explicit edge-count cap. ADR 0005's `MaxValueSize` already bounds
+   the encoded record; exceeding it surfaces as the existing size error
+   on CAS-put. One size constraint, one failure mode. At ~40 bytes per
+   edge, a single task would need >25000 edges to brush against a 1MiB
+   value cap — well past any realistic agent workflow.
 
 CAS-update-retry: the `Link` path loads `from`, checks for an existing edge,
 appends if absent, and CAS-puts. On CAS-lose (another writer beat us), retry
@@ -174,19 +184,19 @@ care about the edge graph can walk it via the normal task read path.
 
 ## Consequences
 
-**New invariants (25, 26, 27).** Added to `docs/invariants.md` in the
+**New invariants (25, 26).** Added to `docs/invariants.md` in the
 implementation PR.
 
 - **Invariant 25:** `Task.Edges` never contains duplicate `(type, target)`
   pairs. Enforced by Link's idempotent check on write. Readers that see
   a corrupted duplicate (somehow) dedupe on read; the duplicate is tolerated.
-- **Invariant 26:** `Edge.Type` is one of the five defined `EdgeType`
-  constants. Link rejects invalid types with `ErrInvalidEdgeType`. Decoders
-  that observe unknown types (forward-compat for a future Phase that adds
-  a type) preserve them in-memory but log a warning.
-- **Invariant 27:** `len(Task.Edges) ≤ MaxEdgesPerTask` (64). Enforced by
-  Link with `ErrTooManyEdges`. Readers don't enforce; a corrupted record
-  exceeding the cap is still readable.
+- **Invariant 26:** On write, `Edge.Type` must be one of the four defined
+  `EdgeType` constants — Link rejects invalid types with
+  `ErrInvalidEdgeType`. On read, decoders silently preserve unknown types
+  (forward-compat for a future Phase that adds a type); callers that
+  switch on `EdgeType` see unknown types fall through the default arm.
+  No warning is logged — silent preservation beats a surprising side
+  effect future readers have to track down.
 
 **Existing tests.** `coord/ready_test.go` gains cases for each filter type;
 `coord/integration_test.go` gains an end-to-end Link + Ready round-trip.
@@ -233,14 +243,7 @@ direction is *removing* a type, which we don't plan to do.
    with a new sentinel. Scoped out for now; the honest story is "edges on
    closed tasks are historical record, not active constraint."
 
-2. **Should `waits-for` edges carry an opaque payload (deadline, URL)?**
-   Beads' gate primitive encodes this. Our `Edge` struct is just
-   `{type, target}`. A future ticket could add `Payload string` or
-   `Payload map[string]string` if a concrete gate-evaluator use case
-   arrives. Deferred — shipping the edge shape first lets downstream
-   inform the payload design.
-
-3. **Cascade semantics for `supersedes`.** If A supersedes B and B
+2. **Cascade semantics for `supersedes`.** If A supersedes B and B
    supersedes C, should A also be treated as superseding C? The ADR does
    not chain — each edge is one hop. A Ready filter on C only fires if B
    has a `supersedes C` edge and B is non-closed. If B is closed, C
@@ -248,8 +251,16 @@ direction is *removing* a type, which we don't plan to do.
    target at the cost of missing chained-supersession. Deferred; likely
    not worth the complexity.
 
-4. **Should `discovered-from` edges auto-close with the discovering
+3. **Should `discovered-from` edges auto-close with the discovering
    task?** No — edges are independent of task lifecycle. If you close the
    discovering task, the `discovered-from` edge remains as audit data on
    its record. Matches the "fossil timeline is the audit trail" posture
    from ADR 0010.
+
+4. **Reverse-lookup helper.** Today there's no public API to ask "what
+   edges point at task T?" — outgoing-only storage means callers would
+   scan all tasks. `Ready()` and the future `Blocked()` build the
+   reverse index internally. If an external consumer needs reverse
+   lookup (e.g., "show me everything discovered-from P"), an additive
+   method like `coord.EdgesInto(ctx, taskID, type)` can land later.
+   Scoped out of this ADR; no concrete use case yet.
