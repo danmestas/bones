@@ -122,3 +122,9 @@ func (e *ConflictForkedError) Error() string {
 func (e *ConflictForkedError) Is(target error) bool {
 	return target == ErrConflictForked
 }
+
+// ErrMergeConflict reports that coord.Merge produced unresolved three-way
+// conflicts and no merge commit was created. Callers can match with
+// errors.Is(err, ErrMergeConflict). Per-file conflict detail is not
+// surfaced in Phase 5; future phases may add a typed error. See ADR 0010 §5.
+var ErrMergeConflict = errors.New("coord: merge has conflicts")

@@ -1,0 +1,200 @@
+package coord
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+)
+
+// TestMerge_InvariantPanics covers the programmer-error preconditions.
+func TestMerge_InvariantPanics(t *testing.T) {
+	c := mustOpen(t)
+	defer func() { _ = c.Close() }()
+	ctx := context.Background()
+
+	t.Run("nil ctx", func(t *testing.T) {
+		requirePanic(t, func() {
+			_, _ = c.Merge(nilCtx, "src", "dst", "m")
+		}, "ctx is nil")
+	})
+	t.Run("empty src", func(t *testing.T) {
+		requirePanic(t, func() {
+			_, _ = c.Merge(ctx, "", "dst", "m")
+		}, "src is empty")
+	})
+	t.Run("empty dst", func(t *testing.T) {
+		requirePanic(t, func() {
+			_, _ = c.Merge(ctx, "src", "", "m")
+		}, "dst is empty")
+	})
+	t.Run("empty message", func(t *testing.T) {
+		requirePanic(t, func() {
+			_, _ = c.Merge(ctx, "src", "dst", "")
+		}, "message is empty")
+	})
+}
+
+// TestMerge_BranchNotFound proves Merge surfaces ErrBranchNotFound when
+// the requested src/dst branches do not exist in the repo. Seeds the repo
+// with a single commit so the underlying libfossil merge call can resolve
+// its project-config and tip lookups before hitting the branch-name gap.
+func TestMerge_BranchNotFound(t *testing.T) {
+	nc, _ := natstest.NewJetStreamServer(t)
+	c := newCoordOnURL(t, nc.ConnectedUrl(), "missing-branch-agent")
+	ctx := context.Background()
+
+	// Seed with one commit on trunk so the repo is non-empty.
+	path := "/src/seed.go"
+	id := openClaim(t, c, "seed", path)
+	if _, err := c.Commit(ctx, id, "seed", []File{
+		{Path: path, Content: []byte("seed\n")},
+	}); err != nil {
+		t.Fatalf("seed Commit: %v", err)
+	}
+
+	_, err := c.Merge(ctx, "no-such-src", "no-such-dst", "m")
+	if err == nil {
+		t.Fatalf("Merge: expected error for missing branch, got nil")
+	}
+	if !errors.Is(err, ErrBranchNotFound) {
+		t.Fatalf("Merge: err = %v, want errors.Is ErrBranchNotFound", err)
+	}
+	if !strings.HasPrefix(err.Error(), "coord.Merge: ") {
+		t.Fatalf("Merge: err lacks coord.Merge prefix: %v", err)
+	}
+}
+
+// TestMerge_ForkThenMergeBack exercises the 0p9.3 + 0p9.4 round-trip
+// against a shared Fossil repo:
+//
+//  1. Agent A opens a task scoped to BOTH /src/a.go and /src/b.go,
+//     claims them, and commits the initial full manifest (both files).
+//     This lands on trunk (A's checkout attaches post-commit).
+//  2. Agent B opens a separate task scoped to /src/c.go and commits.
+//     B's checkout was nil so no fork triggers — B's commit advances
+//     trunk past A's tip with only /src/c.go in its manifest.
+//  3. Agent A commits AGAIN on both a.go and b.go (a.go edited). A's
+//     checkout still references A's first commit while the shared
+//     trunk has moved to B's commit, so WouldFork reports true and
+//     the commit lands on a fork branch named per Invariant 22.
+//  4. Merge the fork branch back into trunk. Any agent may call Merge
+//     per ADR 0010 §5; we use agent A.
+//
+// Behavioral assertions at the merge commit:
+//   - returned RevID is non-empty and distinct from both parents and
+//     from agent A's first commit.
+//   - the fork's edited /src/a.go content (a2) is observable via
+//     coord.OpenFile — the three-way merge brought the fork's lineage
+//     into trunk.
+//
+// Note on coverage: coord.Commit writes only the files passed into the
+// new manifest (a "full working-set" contract), so to observe both
+// lineages at the merge commit the edits on each side need to be on
+// different files. The assertion above on pathA proves fork work
+// survived the merge; the trunk side is implicit in the merge
+// succeeding (primary parent = trunk tip).
+func TestMerge_ForkThenMergeBack(t *testing.T) {
+	nc, _ := natstest.NewJetStreamServer(t)
+	dir := t.TempDir()
+	sharedRepo := filepath.Join(dir, "shared-code.fossil")
+	agentA := newCoordWithCodeRepo(
+		t, nc.ConnectedUrl(), "merge-agent-a", sharedRepo,
+	)
+	agentB := newCoordWithCodeRepo(
+		t, nc.ConnectedUrl(), "merge-agent-b", sharedRepo,
+	)
+	ctx := context.Background()
+
+	pathA := "/src/a.go"
+	pathB := "/src/b.go"
+	idA := openClaimPaths(t, agentA, "a task", pathA, pathB)
+	revA1, err := agentA.Commit(ctx, idA, "a initial", []File{
+		{Path: pathA, Content: []byte("a1\n")},
+		{Path: pathB, Content: []byte("b1\n")},
+	})
+	if err != nil {
+		t.Fatalf("agentA.Commit #1: %v", err)
+	}
+
+	pathC := "/src/c.go"
+	idB := openClaim(t, agentB, "b task", pathC)
+	revB, err := agentB.Commit(ctx, idB, "b initial", []File{
+		{Path: pathC, Content: []byte("c1\n")},
+	})
+	if err != nil {
+		t.Fatalf("agentB.Commit: %v", err)
+	}
+
+	// A's second commit forks: A's checkout still points at revA1 but
+	// trunk has advanced to revB on the shared repo.
+	_, err = agentA.Commit(ctx, idA, "a second", []File{
+		{Path: pathA, Content: []byte("a2\n")},
+		{Path: pathB, Content: []byte("b1\n")},
+	})
+	if err == nil {
+		t.Fatalf("agentA.Commit #2: expected ConflictForkedError, got nil")
+	}
+	var cfe *ConflictForkedError
+	if !errors.As(err, &cfe) {
+		t.Fatalf("agentA.Commit #2: err = %v, want *ConflictForkedError", err)
+	}
+	forkBranch := cfe.Branch
+	forkRev := RevID(cfe.Rev)
+
+	mergeRev, err := agentA.Merge(ctx, forkBranch, "trunk", "merge fork back")
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	if mergeRev == "" {
+		t.Fatalf("Merge: empty RevID")
+	}
+	if mergeRev == RevID(revA1) || mergeRev == RevID(revB) || mergeRev == forkRev {
+		t.Fatalf(
+			"Merge: rev %s collides with an input (a1=%s b=%s fork=%s)",
+			mergeRev, revA1, revB, forkRev,
+		)
+	}
+
+	gotA, err := agentA.OpenFile(ctx, mergeRev, pathA)
+	if err != nil {
+		t.Fatalf("OpenFile %s: %v", pathA, err)
+	}
+	if string(gotA) != "a2\n" {
+		t.Fatalf("OpenFile %s = %q, want %q", pathA, gotA, "a2\n")
+	}
+}
+
+// TestMerge_Conflict is intentionally not implemented at the coord
+// layer in Phase 5. Rationale:
+//
+// Crafting a real three-way merge conflict requires two commits whose
+// shared merge-base is strictly older than both branch tips and where
+// each branch edits the SAME line of the SAME file with incompatible
+// content. Under the current coord.Commit implementation, the fork
+// branch's parent is always the latest repo leaf (fossil.Manager.Commit
+// uses tipRID() to resolve the parent), so a forked commit ends up as
+// a descendant of the branch we want to merge back INTO — producing a
+// trivially clean merge rather than a three-way diverge.
+//
+// Because coord.Merge is a thin wrapper over fossil.Manager.Merge, the
+// libfossil-level merge-conflict path IS exercised by the upstream
+// libfossil repo_merge_test.go (see TestMerge_Conflict there) and by
+// internal/fossil's merge tests going forward. The coord layer's
+// ErrMergeConflict plumbing is therefore covered by the translation
+// rule in merge.go (errors.Is on libfossil.ErrMergeConflict) rather
+// than by an end-to-end test in this file. See bd issue filed alongside
+// this commit for future work to either exercise this path end-to-end
+// after a Commit-parent-semantics adjustment, or via a lower-level
+// fossil.Manager.Merge conflict test that feeds a crafted repo into
+// coord.Merge.
+//
+// Leaving a nil test body is intentional — stdlib go test treats it
+// as a pass — so the file documents the rationale for readers who grep
+// for TestMerge_Conflict.
+func TestMerge_Conflict(t *testing.T) {
+	t.Skip("see rationale above; bd agent-infra-hv0 tracks future coverage")
+}

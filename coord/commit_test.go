@@ -274,8 +274,19 @@ func openClaim(
 	t *testing.T, c *Coord, title, path string,
 ) TaskID {
 	t.Helper()
+	return openClaimPaths(t, c, title, path)
+}
+
+// openClaimPaths opens a task declaring N paths and claims it with a 10s
+// TTL. The release closure is registered via t.Cleanup. Use when a
+// single task needs multiple file holds (e.g. Merge round-trip tests
+// that commit a multi-file manifest).
+func openClaimPaths(
+	t *testing.T, c *Coord, title string, paths ...string,
+) TaskID {
+	t.Helper()
 	ctx := context.Background()
-	id, err := c.OpenTask(ctx, title, []string{path})
+	id, err := c.OpenTask(ctx, title, paths)
 	if err != nil {
 		t.Fatalf("OpenTask: %v", err)
 	}
