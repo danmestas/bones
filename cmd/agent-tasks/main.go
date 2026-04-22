@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -35,6 +36,9 @@ const usage = `Usage:
   agent-tasks link   <from-id> <to-id> --type=blocks|supersedes|duplicates|discovered-from
                      [--json]
   agent-tasks prime  [--json]
+  agent-tasks stale [--days=N] [--json]
+  agent-tasks orphans [--json]
+  agent-tasks preflight [--days=N] [--json]
   agent-tasks autoclaim [--enabled=true|false] [--idle=true|false] [--claim-ttl=1m]
   agent-tasks dispatch parent --task-id=<id> [--worker-bin=<path>]
   agent-tasks dispatch worker --task-id=<id> --task-thread=<thread> --worker-agent-id=<id>
@@ -72,7 +76,7 @@ func run(args []string) int {
 
 	info, err := workspace.Join(ctx, cwd)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agent-tasks: join: %v\n", err)
+		reportJoinError(err)
 		return workspace.ExitCode(err)
 	}
 
@@ -101,9 +105,30 @@ func setupTelemetry(ctx context.Context) func(context.Context) error {
 	shutdown, err := telemetry.Setup(ctx, tcfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-tasks: telemetry setup: %v\n", err)
+		// Intentional no-op shutdown: task execution should continue even
+		// when telemetry bootstrap fails.
 		return func(context.Context) error { return nil }
 	}
 	return shutdown
+}
+
+func reportJoinError(err error) {
+	switch {
+	case errors.Is(err, workspace.ErrAlreadyInitialized):
+		fmt.Fprintln(os.Stderr,
+			"agent-tasks: workspace already initialized; run `agent-init join` instead")
+	case errors.Is(err, workspace.ErrNoWorkspace):
+		fmt.Fprintln(os.Stderr,
+			"agent-tasks: no agent-infra workspace found; run `agent-init init` first")
+	case errors.Is(err, workspace.ErrLeafUnreachable):
+		fmt.Fprintln(os.Stderr,
+			"agent-tasks: leaf daemon not reachable; its PID file may be stale")
+	case errors.Is(err, workspace.ErrLeafStartTimeout):
+		fmt.Fprintln(os.Stderr,
+			"agent-tasks: leaf failed to start within timeout")
+	default:
+		fmt.Fprintf(os.Stderr, "agent-tasks: join: %v\n", err)
+	}
 }
 
 func parseOTelHeaders(s string) map[string]string {
