@@ -137,6 +137,18 @@ func splitFiles(s string) []string {
 	return strings.Split(s, ",")
 }
 
+func parseRFC3339Flag(name, value string) (*time.Time, error) {
+	if value == "" {
+		return nil, nil
+	}
+	ts, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s %q: %w", name, value, err)
+	}
+	utc := ts.UTC()
+	return &utc, nil
+}
+
 func init() {
 	handlers["create"] = createCmd
 }
@@ -146,13 +158,15 @@ func createCmd(ctx context.Context, info workspace.Info, args []string) error {
 		fs := flag.NewFlagSet("create", flag.ContinueOnError)
 		fs.SetOutput(os.Stderr)
 		var (
-			files    string
-			parent   string
-			ctxPairs contextFlag
-			asJSON   bool
+			files      string
+			parent     string
+			deferUntil string
+			ctxPairs   contextFlag
+			asJSON     bool
 		)
 		fs.StringVar(&files, "files", "", "comma-separated file list")
 		fs.StringVar(&parent, "parent", "", "parent task id")
+		fs.StringVar(&deferUntil, "defer-until", "", "RFC3339 time")
 		fs.Var(&ctxPairs, "context", "key=value (repeatable)")
 		fs.BoolVar(&asJSON, "json", false, "emit JSON")
 		if err := fs.Parse(args); err != nil {
@@ -169,6 +183,10 @@ func createCmd(ctx context.Context, info workspace.Info, args []string) error {
 		}
 		defer func() { _ = mgr.Close() }()
 
+		parsedDeferUntil, err := parseRFC3339Flag("defer-until", deferUntil)
+		if err != nil {
+			return err
+		}
 		now := time.Now().UTC()
 		t := tasks.Task{
 			ID:            uuid.NewString(),
@@ -176,6 +194,7 @@ func createCmd(ctx context.Context, info workspace.Info, args []string) error {
 			Status:        tasks.StatusOpen,
 			Files:         splitFiles(files),
 			Parent:        parent,
+			DeferUntil:    parsedDeferUntil,
 			Context:       applyContext(nil, []string(ctxPairs)),
 			CreatedAt:     now,
 			UpdatedAt:     now,
@@ -281,18 +300,20 @@ func updateCmd(ctx context.Context, info workspace.Info, args []string) error {
 		fs := flag.NewFlagSet("update", flag.ContinueOnError)
 		fs.SetOutput(os.Stderr)
 		var (
-			statusStr string
-			title     string
-			files     string
-			parent    string
-			ctxPairs  contextFlag
-			claimedBy string
-			asJSON    bool
+			statusStr  string
+			title      string
+			files      string
+			parent     string
+			deferUntil string
+			ctxPairs   contextFlag
+			claimedBy  string
+			asJSON     bool
 		)
 		fs.StringVar(&statusStr, "status", "", "open|claimed|closed")
 		fs.StringVar(&title, "title", "", "new title")
 		fs.StringVar(&files, "files", "", "comma-separated file list (replaces existing)")
 		fs.StringVar(&parent, "parent", "", "parent task id")
+		fs.StringVar(&deferUntil, "defer-until", "", "RFC3339 time (empty clears)")
 		fs.Var(&ctxPairs, "context", "key=value (repeatable; merges with existing)")
 		// --claimed-by and --status are coupled (invariant 11); setting one alone infers the other.
 		fs.StringVar(&claimedBy, "claimed-by", "", "agent id to claim as")
@@ -320,9 +341,13 @@ func updateCmd(ctx context.Context, info workspace.Info, args []string) error {
 		}
 		defer func() { _ = mgr.Close() }()
 
+		parsedDeferUntil, err := parseRFC3339Flag("defer-until", deferUntil)
+		if err != nil {
+			return err
+		}
 		var updated tasks.Task
 		mutate := buildUpdateMutator(fs, title, statusUpdate,
-			files, parent, ctxPairs, claimedBy, &updated)
+			files, parent, parsedDeferUntil, ctxPairs, claimedBy, &updated)
 		err = mgr.Update(ctx, id, mutate)
 		if err != nil {
 			return err
@@ -339,11 +364,12 @@ func updateCmd(ctx context.Context, info workspace.Info, args []string) error {
 // only the flags explicitly set. Includes invariant-11 status coupling when
 // --claimed-by is set without --status.
 func buildUpdateMutator(fs *flag.FlagSet, title string, statusUpdate tasks.Status,
-	files, parent string, ctxPairs contextFlag, claimedBy string,
-	out *tasks.Task) func(tasks.Task) (tasks.Task, error) {
+	files, parent string, deferUntil *time.Time, ctxPairs contextFlag,
+	claimedBy string, out *tasks.Task) func(tasks.Task) (tasks.Task, error) {
 	titleSet := flagSet(fs, "title")
 	filesSet := flagSet(fs, "files")
 	parentSet := flagSet(fs, "parent")
+	deferUntilSet := flagSet(fs, "defer-until")
 	claimedBySet := flagSet(fs, "claimed-by")
 	return func(t tasks.Task) (tasks.Task, error) {
 		if statusUpdate != "" {
@@ -357,6 +383,9 @@ func buildUpdateMutator(fs *flag.FlagSet, title string, statusUpdate tasks.Statu
 		}
 		if parentSet {
 			t.Parent = parent
+		}
+		if deferUntilSet {
+			t.DeferUntil = deferUntil
 		}
 		if claimedBySet {
 			t.ClaimedBy = claimedBy
