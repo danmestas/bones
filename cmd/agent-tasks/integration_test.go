@@ -633,6 +633,65 @@ func TestCLI_AutoClaim(t *testing.T) {
 	})
 }
 
+func TestCLI_Dispatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	dir := newWorkspace(t)
+
+	seed := func(title string) string {
+		out, _, code := runCmd(t, binPath, dir, "create", title)
+		if code != 0 {
+			t.Fatalf("seed create %q failed code=%d", title, code)
+		}
+		return firstLine(out)
+	}
+
+	t.Run("requires_mode", func(t *testing.T) {
+		_, stderr, code := runCmd(t, binPath, dir, "dispatch")
+		if code != 1 {
+			t.Fatalf("exit=%d, want 1", code)
+		}
+		if !strings.Contains(stderr, "parent|worker") {
+			t.Fatalf("stderr=%q", stderr)
+		}
+	})
+
+	t.Run("worker_posts_progress", func(t *testing.T) {
+		stdout, stderr, code := runCmd(t, binPath, dir,
+			"dispatch", "worker",
+			"--task-id=agent-infra-placeholder",
+			"--task-thread=agent-infra-placeholder",
+			"--worker-agent-id=parent-agent/agent-infra-placeholder",
+		)
+		if code != 0 {
+			t.Fatalf("worker exit=%d stderr=%s", code, stderr)
+		}
+		if !strings.Contains(stdout, "posted progress") {
+			t.Fatalf("stdout=%q", stdout)
+		}
+	})
+
+	t.Run("parent_spawns_worker_for_claimed_task", func(t *testing.T) {
+		id := seed("dispatch task")
+		_, _, code := runCmd(t, binPath, dir, "claim", id)
+		if code != 0 {
+			t.Fatalf("claim failed: %d", code)
+		}
+		stdout, stderr, code := runCmd(t, binPath, dir,
+			"dispatch", "parent",
+			"--task-id="+id,
+			"--worker-bin="+binPath,
+		)
+		if code != 0 {
+			t.Fatalf("parent dispatch exit=%d stderr=%s", code, stderr)
+		}
+		if !strings.Contains(stdout, "spawned") {
+			t.Fatalf("stdout=%q", stdout)
+		}
+	})
+}
+
 func TestCLI_Link(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skip in -short: integration test")
