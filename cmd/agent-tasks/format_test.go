@@ -89,14 +89,16 @@ func TestFormatListLine(t *testing.T) {
 func TestFormatShowBlock(t *testing.T) {
 	created := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
 	updated := created.Add(time.Hour)
+	deferUntil := updated.Add(time.Hour)
 	tsk := tasks.Task{
-		ID:        "abc123",
-		Title:     "hello",
-		Status:    tasks.StatusOpen,
-		Files:     []string{"a.go", "b.go"},
-		Context:   map[string]string{"k1": "v1", "k2": "v2"},
-		CreatedAt: created,
-		UpdatedAt: updated,
+		ID:         "abc123",
+		Title:      "hello",
+		Status:     tasks.StatusOpen,
+		Files:      []string{"a.go", "b.go"},
+		Context:    map[string]string{"k1": "v1", "k2": "v2"},
+		CreatedAt:  created,
+		UpdatedAt:  updated,
+		DeferUntil: &deferUntil,
 	}
 	got := formatShowBlock(tsk)
 	mustContain := []string{
@@ -108,6 +110,7 @@ func TestFormatShowBlock(t *testing.T) {
 		"context.k2=v2",
 		"created_at=2026-04-20T10:00:00Z",
 		"updated_at=2026-04-20T11:00:00Z",
+		"defer_until=2026-04-20T12:00:00Z",
 	}
 	for _, sub := range mustContain {
 		if !strings.Contains(got, sub) {

@@ -110,6 +110,31 @@ func TestReady_FiltersOpenUnclaimed(t *testing.T) {
 
 // TestReady_SortOldestFirst seeds three open tasks with distinct
 // CreatedAt values and asserts Ready returns them in ascending order.
+func TestReady_HidesFutureDeferredTasks(t *testing.T) {
+	c := mustOpen(t)
+	now := time.Now().UTC()
+	future := readyBaseline("agent-infra-def1111", now)
+	futureAt := now.Add(time.Hour)
+	future.DeferUntil = &futureAt
+	seedTask(t, c, future)
+
+	past := readyBaseline("agent-infra-def2222", now)
+	pastAt := now.Add(-time.Hour)
+	past.DeferUntil = &pastAt
+	seedTask(t, c, past)
+
+	got, err := c.Ready(context.Background())
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	if containsTask(got, TaskID(future.ID)) {
+		t.Fatalf("Ready included future-deferred task %s", future.ID)
+	}
+	if !containsTask(got, TaskID(past.ID)) {
+		t.Fatalf("Ready omitted past-deferred task %s", past.ID)
+	}
+}
+
 func TestReady_SortOldestFirst(t *testing.T) {
 	c := mustOpen(t)
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)

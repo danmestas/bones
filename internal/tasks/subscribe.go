@@ -114,6 +114,7 @@ func translate(
 		if err != nil {
 			return Event{}, false
 		}
+		t, _ = migrateDecodedTask(t)
 		if _, ok := seen[key]; ok {
 			return Event{
 				ID: key, Kind: EventUpdated, Task: t,

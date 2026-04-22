@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/danmestas/agent-infra/internal/assert"
 	"github.com/danmestas/agent-infra/internal/tasks"
@@ -106,6 +107,9 @@ func filterReady(records []tasks.Task, b readyBlockers) []Task {
 			continue
 		}
 		if _, ok := b.hasOpenChild[r.ID]; ok {
+			continue
+		}
+		if r.DeferUntil != nil && r.DeferUntil.After(time.Now().UTC()) {
 			continue
 		}
 		out = append(out, taskFromRecord(r))
