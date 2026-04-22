@@ -68,7 +68,7 @@ func readyCmd(ctx context.Context, info workspace.Info, args []string) error {
 		}
 
 		if asJSON {
-			return emitJSON(os.Stdout, tasks)
+			return emitJSON(os.Stdout, coordTasksToJSON(tasks))
 		}
 		for _, t := range tasks {
 			fmt.Println(formatReadyLine(t))

@@ -23,6 +23,7 @@ func toExitCode(err error) int {
 	case errors.Is(err, tasks.ErrValueTooLarge):
 		return 9
 	}
+	// Coupled to workspace.ExitCode's invariant that unknown errors map to 1.
 	if code := workspace.ExitCode(err); code != 1 {
 		return code
 	}
