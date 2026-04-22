@@ -686,11 +686,12 @@ func TestCLI_Dispatch(t *testing.T) {
 			"--worker-bin="+binPath,
 			"--worker-result=success",
 			"--worker-summary=done",
+			"--worker-claim-handoff=true",
 		)
 		if code != 0 {
 			t.Fatalf("parent dispatch exit=%d stderr=%s", code, stderr)
 		}
-		if !strings.Contains(stdout, "closed") {
+		if !strings.Contains(stdout, "worker-closed") {
 			t.Fatalf("stdout=%q", stdout)
 		}
 		show, _, _ := runCmd(t, binPath, dir, "show", id)
