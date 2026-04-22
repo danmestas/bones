@@ -3,6 +3,7 @@ package coord
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -21,6 +22,7 @@ type CompactOptions struct {
 	Limit      int
 	Now        func() time.Time
 	Summarizer Summarizer
+	Prune      bool
 }
 
 type CompactInput struct {
@@ -40,6 +42,7 @@ type CompactedTask struct {
 	Path         string
 	Rev          RevID
 	CompactLevel uint8
+	Pruned       bool
 }
 
 type CompactResult struct {
@@ -68,7 +71,9 @@ func (c *Coord) Compact(
 	}
 	result := CompactResult{Tasks: make([]CompactedTask, 0, len(eligible))}
 	for _, rec := range eligible {
-		compacted, err := c.compactOne(ctx, rec, nowFn(), opts.Summarizer)
+		compacted, err := c.compactOne(
+			ctx, rec, nowFn(), opts.Summarizer, opts.Prune,
+		)
 		if err != nil {
 			return result, err
 		}
@@ -106,6 +111,7 @@ func (c *Coord) compactOne(
 	rec tasks.Task,
 	now time.Time,
 	summarizer Summarizer,
+	prune bool,
 ) (CompactedTask, error) {
 	input := compactInput(rec)
 	summary, err := summarizer.Summarize(ctx, input)
@@ -138,12 +144,37 @@ func (c *Coord) compactOne(
 	if err != nil {
 		return CompactedTask{}, fmt.Errorf("coord.Compact: update %s: %w", rec.ID, err)
 	}
+	if prune {
+		if err := c.archiveAndPurgeCompactedTask(ctx, rec.ID); err != nil {
+			return CompactedTask{}, err
+		}
+	}
 	return CompactedTask{
 		TaskID:       TaskID(rec.ID),
 		Path:         path,
 		Rev:          RevID(rev),
 		CompactLevel: level,
+		Pruned:       prune,
 	}, nil
+}
+
+func (c *Coord) archiveAndPurgeCompactedTask(
+	ctx context.Context,
+	id string,
+) error {
+	archived, _, err := c.sub.tasks.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("coord.Compact: archive load %s: %w", id, err)
+	}
+	if err := c.sub.archive.Create(ctx, archived); err != nil {
+		if !errors.Is(err, tasks.ErrAlreadyExists) {
+			return fmt.Errorf("coord.Compact: archive create %s: %w", id, err)
+		}
+	}
+	if err := c.sub.tasks.Purge(ctx, id); err != nil {
+		return fmt.Errorf("coord.Compact: purge %s: %w", id, err)
+	}
+	return nil
 }
 
 func compactInput(rec tasks.Task) CompactInput {

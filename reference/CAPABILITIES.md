@@ -118,7 +118,7 @@ conflict resolution is one round trip with a deterministic winner
 
 | Beads | agent-infra plan | Status | Notes |
 |---|---|---|---|
-| Multi-tier AI compaction (summarize old closed issues via Haiku) | `coord.Compact(ctx, opts)` does on-demand batch compaction of eligible closed tasks via a caller-supplied summarizer, writes summaries to deterministic Fossil artifacts, and stamps compaction metadata on the task record | implemented (core) / follow-up for default provider | ADR 0016 pins on-demand batch for v1 and keeps provider choice pluggable; follow-up `agent-infra-6sh` tracks default provider binding, cadence, and pruning. |
+| Multi-tier AI compaction (summarize old closed issues via Haiku) | `coord.Compact(ctx, opts)` does on-demand batch compaction of eligible closed tasks via a caller-supplied summarizer, writes summaries to deterministic Fossil artifacts, can archive compacted closed tasks into a cold KV bucket, and can prune them from the hot tasks bucket | implemented (core + prune/archive) / follow-up for default provider | ADR 0016 pins on-demand batch for v1 and keeps provider choice pluggable; follow-up `agent-infra-zx3` tracks default provider binding and cadence wrappers. |
 | `original_size`, `compact_level`, `compacted_at` metadata | Same scheme on the task record | implemented | Landed with ADR 0016 / ticket `znr`. |
 | Compaction audit trail | Fossil timeline *is* the audit trail — no separate log needed | implemented | Summary artifacts are Fossil commits; task metadata updates are KV revisions. |
 

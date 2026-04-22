@@ -28,6 +28,10 @@ const holdsBucket = "agent-infra-holds"
 // records per ADR 0005. Also substrate-internal per ADR 0003.
 const tasksBucket = "agent-infra-tasks"
 
+// archiveBucket is the cold JetStream KV bucket name coord uses for
+// pruned closed-task snapshots after compaction.
+const archiveBucket = "agent-infra-task-archive"
+
 // presenceBucket is the JetStream KV bucket name coord uses to back
 // the presence substrate per ADR 0009. Entry TTL is 3x
 // Config.HeartbeatInterval and is set at bucket-creation time by
@@ -124,6 +128,16 @@ func openSubstrate(
 	}); err != nil {
 		s.close()
 		return nil, fmt.Errorf("coord.Open: tasks: %w", err)
+	}
+	if s.archive, err = tasks.Open(ctx, tasks.Config{
+		NATSURL:          cfg.NATSURL,
+		BucketName:       archiveBucket,
+		HistoryDepth:     cfg.TaskHistoryDepth,
+		MaxValueSize:     int32(cfg.MaxTaskValueSize),
+		OperationTimeout: cfg.OperationTimeout,
+	}); err != nil {
+		s.close()
+		return nil, fmt.Errorf("coord.Open: archive tasks: %w", err)
 	}
 	if s.chat, err = chat.Open(ctx, chat.Config{
 		AgentID:        cfg.AgentID,

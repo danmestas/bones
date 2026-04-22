@@ -32,6 +32,7 @@ type substrate struct {
 	nc       *nats.Conn
 	holds    *holds.Manager
 	tasks    *tasks.Manager
+	archive  *tasks.Manager
 	chat     *chat.Manager
 	presence *presence.Manager
 	fossil   *fossil.Manager
@@ -57,6 +58,9 @@ func (s *substrate) close() {
 	}
 	if s.chat != nil {
 		_ = s.chat.Close()
+	}
+	if s.archive != nil {
+		_ = s.archive.Close()
 	}
 	if s.tasks != nil {
 		_ = s.tasks.Close()

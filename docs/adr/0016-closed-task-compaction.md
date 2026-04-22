@@ -116,8 +116,10 @@ V1 compacts tasks that are:
 - older than `CompactOptions.MinAge`
 - not yet compacted (`compact_level == 0`)
 
-Repeated compaction levels, pruning from KV, and “uncompact” workflows are
-explicitly deferred.
+Repeated compaction levels and “uncompact” workflows are explicitly deferred.
+A follow-up archive+prune pass may copy compacted closed tasks into a cold KV
+bucket and remove them from the hot tasks bucket once the summary artifact and
+archive snapshot have both been written.
 
 ## Consequences
 
@@ -127,5 +129,7 @@ explicitly deferred.
 - `coord.Compact` becomes the core reusable primitive; cadence stays outside
   `coord`.
 - Summary payloads live in Fossil artifacts, not on task records.
+- Compacted closed tasks may be archived into a cold KV bucket and pruned from
+  the hot tasks bucket, shrinking future Ready/List/Prime scans.
 - Anthropic/Haiku integration is a follow-up concern, not a prerequisite for
   landing the core compaction pipeline.
