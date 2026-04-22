@@ -37,7 +37,7 @@ func primeCmd(ctx context.Context, info workspace.Info, args []string) error {
 		}
 
 		if asJSON {
-			return emitJSON(os.Stdout, result)
+			return emitJSON(os.Stdout, primeToJSON(result))
 		}
 		fmt.Print(formatPrime(result))
 		return nil
