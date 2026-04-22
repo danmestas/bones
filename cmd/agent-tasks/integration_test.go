@@ -66,7 +66,9 @@ func runCmd(t *testing.T, bin, dir string, args ...string) (stdout, stderr strin
 	return runCmdEnv(t, bin, dir, append(os.Environ(), "LEAF_BIN="+leafBinary()), args...)
 }
 
-func runCmdEnv(t *testing.T, bin, dir string, env []string, args ...string) (stdout, stderr string, exitCode int) {
+func runCmdEnv(
+	t *testing.T, bin, dir string, env []string, args ...string,
+) (stdout, stderr string, exitCode int) {
 	t.Helper()
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = dir

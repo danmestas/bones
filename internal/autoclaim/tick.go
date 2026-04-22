@@ -62,6 +62,8 @@ func Tick(ctx context.Context, c *coord.Coord, opts Options) (Result, error) {
 	return Result{Action: ActionClaimed, TaskID: task.ID()}, nil
 }
 
-func postClaimNotice(ctx context.Context, c *coord.Coord, taskID coord.TaskID, agentID string) error {
+func postClaimNotice(
+	ctx context.Context, c *coord.Coord, taskID coord.TaskID, agentID string,
+) error {
 	return c.Post(ctx, string(taskID), []byte("claimed by "+agentID))
 }
