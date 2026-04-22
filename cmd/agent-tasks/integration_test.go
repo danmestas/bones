@@ -63,9 +63,16 @@ func requireBinaries(t *testing.T) {
 
 func runCmd(t *testing.T, bin, dir string, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
+	return runCmdEnv(t, bin, dir, append(os.Environ(), "LEAF_BIN="+leafBinary()), args...)
+}
+
+func runCmdEnv(
+	t *testing.T, bin, dir string, env []string, args ...string,
+) (stdout, stderr string, exitCode int) {
+	t.Helper()
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "LEAF_BIN="+leafBinary())
+	cmd.Env = env
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
@@ -569,6 +576,59 @@ func TestCLI_Ready(t *testing.T) {
 		}
 		if !strings.Contains(stdout, `"id":"`+id+`"`) {
 			t.Errorf("json missing id: %q", stdout)
+		}
+	})
+}
+
+func TestCLI_AutoClaim(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	dir := newWorkspace(t)
+
+	seed := func(title string) string {
+		out, _, code := runCmd(t, binPath, dir, "create", title)
+		if code != 0 {
+			t.Fatalf("seed create %q failed code=%d", title, code)
+		}
+		return firstLine(out)
+	}
+
+	t.Run("disabled_by_env", func(t *testing.T) {
+		stdout, stderr, code := runCmdEnv(t, binPath, dir,
+			append(os.Environ(), "LEAF_BIN="+leafBinary(), "AGENT_INFRA_AUTOCLAIM=0"),
+			"autoclaim")
+		if code != 0 {
+			t.Fatalf("autoclaim exit=%d stderr=%s", code, stderr)
+		}
+		if !strings.Contains(stdout, "action=disabled") {
+			t.Fatalf("stdout=%q, want disabled result", stdout)
+		}
+	})
+
+	t.Run("claims_one_ready_task", func(t *testing.T) {
+		id := seed("auto task")
+		stdout, stderr, code := runCmd(t, binPath, dir, "autoclaim", "--idle=true")
+		if code != 0 {
+			t.Fatalf("autoclaim exit=%d stderr=%s", code, stderr)
+		}
+		if !strings.Contains(stdout, "action=claimed") {
+			t.Fatalf("stdout=%q, want claimed action", stdout)
+		}
+		show, _, _ := runCmd(t, binPath, dir, "show", id)
+		if !strings.Contains(show, "status=claimed") {
+			t.Fatalf("show=%q, want claimed status", show)
+		}
+	})
+
+	t.Run("busy_noop", func(t *testing.T) {
+		seed("busy task")
+		stdout, stderr, code := runCmd(t, binPath, dir, "autoclaim", "--idle=false")
+		if code != 0 {
+			t.Fatalf("autoclaim exit=%d stderr=%s", code, stderr)
+		}
+		if !strings.Contains(stdout, "action=busy") {
+			t.Fatalf("stdout=%q, want busy action", stdout)
 		}
 	})
 }
