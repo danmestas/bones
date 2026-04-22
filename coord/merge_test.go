@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/danmestas/libfossil"
 
 	"github.com/danmestas/agent-infra/internal/testutil/natstest"
 )
@@ -168,33 +171,62 @@ func TestMerge_ForkThenMergeBack(t *testing.T) {
 	}
 }
 
-// TestMerge_Conflict is intentionally not implemented at the coord
-// layer in Phase 5. Rationale:
-//
-// Crafting a real three-way merge conflict requires two commits whose
-// shared merge-base is strictly older than both branch tips and where
-// each branch edits the SAME line of the SAME file with incompatible
-// content. Under the current coord.Commit implementation, the fork
-// branch's parent is always the latest repo leaf (fossil.Manager.Commit
-// uses tipRID() to resolve the parent), so a forked commit ends up as
-// a descendant of the branch we want to merge back INTO — producing a
-// trivially clean merge rather than a three-way diverge.
-//
-// Because coord.Merge is a thin wrapper over fossil.Manager.Merge, the
-// libfossil-level merge-conflict path IS exercised by the upstream
-// libfossil repo_merge_test.go (see TestMerge_Conflict there) and by
-// internal/fossil's merge tests going forward. The coord layer's
-// ErrMergeConflict plumbing is therefore covered by the translation
-// rule in merge.go (errors.Is on libfossil.ErrMergeConflict) rather
-// than by an end-to-end test in this file. See bd issue filed alongside
-// this commit for future work to either exercise this path end-to-end
-// after a Commit-parent-semantics adjustment, or via a lower-level
-// fossil.Manager.Merge conflict test that feeds a crafted repo into
-// coord.Merge.
-//
-// Leaving a nil test body is intentional — stdlib go test treats it
-// as a pass — so the file documents the rationale for readers who grep
-// for TestMerge_Conflict.
+// TestMerge_Conflict seeds a truly divergent repo shape directly at the
+// libfossil layer, then asserts coord.Merge surfaces ErrMergeConflict.
 func TestMerge_Conflict(t *testing.T) {
-	t.Skip("see rationale above; bd agent-infra-hv0 tracks future coverage")
+	nc, _ := natstest.NewJetStreamServer(t)
+	dir := t.TempDir()
+	sharedRepo := filepath.Join(dir, "shared-code.fossil")
+	repo, err := libfossil.Create(sharedRepo, libfossil.CreateOpts{User: "seed"})
+	if err != nil {
+		t.Fatalf("libfossil.Create: %v", err)
+	}
+	defer func() { _ = repo.Close() }()
+
+	baseRID, _, err := repo.Commit(libfossil.CommitOpts{
+		Files: []libfossil.FileToCommit{{
+			Name: "shared.txt", Content: []byte("line1\nline2\n"),
+		}},
+		Comment:  "initial",
+		User:     "seed",
+		Time:     time.Now().UTC(),
+		ParentID: 0,
+	})
+	if err != nil {
+		t.Fatalf("base commit: %v", err)
+	}
+	_, _, err = repo.Commit(libfossil.CommitOpts{
+		Files: []libfossil.FileToCommit{{
+			Name: "shared.txt", Content: []byte("FEATURE\nline2\n"),
+		}},
+		Comment:  "feature edits",
+		User:     "seed",
+		Time:     time.Now().UTC(),
+		ParentID: baseRID,
+		Tags:     []libfossil.TagSpec{{Name: "branch", Value: "feature"}},
+	})
+	if err != nil {
+		t.Fatalf("feature commit: %v", err)
+	}
+	_, _, err = repo.Commit(libfossil.CommitOpts{
+		Files: []libfossil.FileToCommit{{
+			Name: "shared.txt", Content: []byte("TRUNK\nline2\n"),
+		}},
+		Comment:  "trunk edits",
+		User:     "seed",
+		Time:     time.Now().UTC(),
+		ParentID: baseRID,
+	})
+	if err != nil {
+		t.Fatalf("trunk commit: %v", err)
+	}
+
+	c := newCoordWithCodeRepo(t, nc.ConnectedUrl(), "merge-conflict-agent", sharedRepo)
+	_, err = c.Merge(context.Background(), "feature", "trunk", "merge feature")
+	if err == nil {
+		t.Fatal("Merge: expected conflict error, got nil")
+	}
+	if !errors.Is(err, ErrMergeConflict) {
+		t.Fatalf("Merge: err=%v, want ErrMergeConflict", err)
+	}
 }
