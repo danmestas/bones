@@ -64,6 +64,9 @@ func formatShowBlock(t tasks.Task) string {
 
 	write("created_at", formatTime(t.CreatedAt))
 	write("updated_at", formatTime(t.UpdatedAt))
+	if t.DeferUntil != nil {
+		write("defer_until", formatTime(*t.DeferUntil))
+	}
 	if t.ClosedAt != nil {
 		write("closed_at", formatTime(*t.ClosedAt))
 	}

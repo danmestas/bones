@@ -447,6 +447,33 @@ func TestTask_ClaimEpoch_DecodeMissing(t *testing.T) {
 	}
 }
 
+func TestGet_MigratesLegacySchemaVersionOnRead(t *testing.T) {
+	m, _, cleanup := openTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+	id := "agent-infra-legacy01"
+	legacy := []byte(`{"id":"` + id + `","title":"legacy","status":"open",` +
+		`"files":["/a"],"created_at":"2026-01-01T00:00:00Z",` +
+		`"updated_at":"2026-01-01T00:00:00Z","schema_version":1}`)
+	if _, err := m.KVForTest().Create(ctx, id, legacy); err != nil {
+		t.Fatalf("raw Create: %v", err)
+	}
+	got, _, err := m.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.SchemaVersion != tasks.SchemaVersion {
+		t.Fatalf("SchemaVersion=%d, want %d", got.SchemaVersion, tasks.SchemaVersion)
+	}
+	reloaded, _, err := m.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get reloaded: %v", err)
+	}
+	if reloaded.SchemaVersion != tasks.SchemaVersion {
+		t.Fatalf("reloaded SchemaVersion=%d, want %d", reloaded.SchemaVersion, tasks.SchemaVersion)
+	}
+}
+
 func TestTask_ClaimEpoch_EncodeRoundTrip(t *testing.T) {
 	in := tasks.Task{
 		ID: "t1", Title: "x", Status: tasks.StatusClaimed,

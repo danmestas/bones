@@ -7,8 +7,8 @@ import (
 
 // SchemaVersion is the currently-written task record schema. Every
 // Create stamps this on the record so future migrations can fan out on
-// observed version. ADR 0005 pins the initial value at 1.
-const SchemaVersion = 1
+// observed version. v2 adds defer_until for scheduled readiness.
+const SchemaVersion = 2
 
 // Status is the task lifecycle state. ADR 0005 fixes the enum to
 // exactly these three values; invariant 13 (amended by ADR 0007)
@@ -101,6 +101,11 @@ type Task struct {
 
 	// UpdatedAt is the wall-clock time of the most recent write.
 	UpdatedAt time.Time `json:"updated_at"`
+
+	// DeferUntil hides the task from Ready until this UTC wall-clock
+	// instant. Nil means immediately eligible subject to the other
+	// readiness gates. Added in schema v2.
+	DeferUntil *time.Time `json:"defer_until,omitempty"`
 
 	// ClosedAt is the wall-clock time of transition into StatusClosed.
 	// Nil when Status != StatusClosed; pointer makes the zero value

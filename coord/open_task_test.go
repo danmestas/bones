@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/danmestas/agent-infra/internal/tasks"
 )
 
 // openTaskShape is the package-under-test regex reused by tests. Kept
@@ -51,8 +53,12 @@ func TestOpenTask_HappyPath(t *testing.T) {
 	if !reflect.DeepEqual(rec.Files, files) {
 		t.Fatalf("Files: got %v, want %v", rec.Files, files)
 	}
-	if rec.SchemaVersion != 1 {
-		t.Fatalf("SchemaVersion: got %d, want 1", rec.SchemaVersion)
+	if rec.SchemaVersion != tasks.SchemaVersion {
+		t.Fatalf(
+			"SchemaVersion: got %d, want %d",
+			rec.SchemaVersion,
+			tasks.SchemaVersion,
+		)
 	}
 	if rec.CreatedAt.IsZero() || rec.UpdatedAt.IsZero() {
 		t.Fatalf("timestamps not stamped: %+v", rec)

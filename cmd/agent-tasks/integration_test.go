@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // binPath resolves the agent-tasks binary (absolute) so cmd.Dir changes don't break it.
@@ -174,6 +175,23 @@ func TestCLI_Create(t *testing.T) {
 		}
 		if !strings.Contains(stdout, `"id":`) || !strings.Contains(stdout, `"title":"json task"`) {
 			t.Errorf("json output missing fields: %q", stdout)
+		}
+	})
+
+	t.Run("defer_until", func(t *testing.T) {
+		deferUntil := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+		stdout, stderr, code := runCmd(t, binPath, dir,
+			"create", "--defer-until", deferUntil, "deferred task")
+		if code != 0 {
+			t.Fatalf("create exit=%d stderr=%s", code, stderr)
+		}
+		id := firstLine(stdout)
+		show, _, code := runCmd(t, binPath, dir, "show", id)
+		if code != 0 {
+			t.Fatalf("show exit=%d", code)
+		}
+		if !strings.Contains(show, "defer_until="+deferUntil) {
+			t.Fatalf("show=%q missing defer_until", show)
 		}
 	})
 }
@@ -374,6 +392,20 @@ func TestCLI_Update(t *testing.T) {
 		}
 	})
 
+	t.Run("defer_until", func(t *testing.T) {
+		id := seed("defer me")
+		deferUntil := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+		_, stderr, code := runCmd(t, binPath, dir,
+			"update", id, "--defer-until", deferUntil)
+		if code != 0 {
+			t.Fatalf("update --defer-until failed code=%d stderr=%s", code, stderr)
+		}
+		stdout, _, _ := runCmd(t, binPath, dir, "show", id)
+		if !strings.Contains(stdout, "defer_until="+deferUntil) {
+			t.Fatalf("show=%q missing defer_until", stdout)
+		}
+	})
+
 	t.Run("invalid_status_exits_1", func(t *testing.T) {
 		id := seed("bad status")
 		_, stderr, code := runCmd(t, binPath, dir, "update", id, "--status=bogus")
@@ -565,6 +597,23 @@ func TestCLI_Ready(t *testing.T) {
 		stdout, _, _ := runCmd(t, binPath, dir, "ready")
 		if strings.Contains(stdout, id) {
 			t.Errorf("claimed task should be hidden; got:\n%s", stdout)
+		}
+	})
+
+	t.Run("hides_future_deferred_tasks", func(t *testing.T) {
+		deferUntil := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+		stdout, stderr, code := runCmd(t, binPath, dir,
+			"create", "--defer-until", deferUntil, "deferred ready")
+		if code != 0 {
+			t.Fatalf("create exit=%d stderr=%s", code, stderr)
+		}
+		id := firstLine(stdout)
+		ready, _, code := runCmd(t, binPath, dir, "ready")
+		if code != 0 {
+			t.Fatalf("ready exit=%d", code)
+		}
+		if strings.Contains(ready, id) {
+			t.Fatalf("future-deferred task should be hidden; got:\n%s", ready)
 		}
 	})
 
