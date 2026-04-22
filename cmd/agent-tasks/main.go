@@ -35,6 +35,7 @@ const usage = `Usage:
   agent-tasks link   <from-id> <to-id> --type=blocks|supersedes|duplicates|discovered-from
                      [--json]
   agent-tasks prime  [--json]
+  agent-tasks autoclaim [--enabled=true|false] [--idle=true|false] [--claim-ttl=1m]
 `
 
 func main() {
