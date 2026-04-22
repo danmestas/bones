@@ -1,0 +1,109 @@
+package dispatch
+
+import (
+	"context"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+	"unsafe"
+
+	"github.com/danmestas/agent-infra/coord"
+	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+	"github.com/nats-io/nats.go"
+)
+
+func newCoordOnURLWithHeartbeat(
+	t *testing.T, url, agentID string, hb time.Duration,
+) *coord.Coord {
+	t.Helper()
+	fileID := strings.ReplaceAll(agentID, "/", "_")
+	cfg := coord.Config{
+		AgentID:            agentID,
+		HoldTTLDefault:     30 * time.Second,
+		HoldTTLMax:         5 * time.Minute,
+		MaxHoldsPerClaim:   32,
+		MaxSubscribers:     32,
+		MaxTaskFiles:       32,
+		MaxReadyReturn:     256,
+		MaxTaskValueSize:   8 * 1024,
+		TaskHistoryDepth:   8,
+		OperationTimeout:   10 * time.Second,
+		HeartbeatInterval:  hb,
+		NATSReconnectWait:  2 * time.Second,
+		NATSMaxReconnects:  5,
+		NATSURL:            url,
+		ChatFossilRepoPath: filepath.Join(t.TempDir(), fileID+"-chat.fossil"),
+		FossilRepoPath:     filepath.Join(t.TempDir(), fileID+"-code.fossil"),
+		CheckoutRoot:       filepath.Join(t.TempDir(), fileID+"-checkouts"),
+	}
+	c, err := coord.Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Open(%s): %v", agentID, err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
+func killAgentHeartbeat(t *testing.T, c *coord.Coord) {
+	t.Helper()
+	cv := reflect.ValueOf(c).Elem()
+	subField := cv.FieldByName("sub")
+	subPtr := reflect.NewAt(subField.Type(), unsafe.Pointer(subField.UnsafeAddr())).Elem()
+	ncField := subPtr.Elem().FieldByName("nc")
+	nc := reflect.NewAt(
+		ncField.Type(), unsafe.Pointer(ncField.UnsafeAddr()),
+	).Elem().Interface().(*nats.Conn)
+	nc.Close()
+}
+
+func TestWaitWorkerAbsent_ReturnsWhenWorkerDropsFromPresence(t *testing.T) {
+	nc, _ := natstest.NewJetStreamServer(t)
+	parent := newCoordOnURLWithHeartbeat(
+		t, nc.ConnectedUrl(), "parent-agent", 200*time.Millisecond,
+	)
+	worker := newCoordOnURLWithHeartbeat(
+		t, nc.ConnectedUrl(), "parent-agent/task-1", 200*time.Millisecond,
+	)
+	ctx := context.Background()
+
+	killAgentHeartbeat(t, worker)
+	if err := WaitWorkerAbsent(
+		ctx, parent, "parent-agent/task-1", 3*time.Second,
+	); err != nil {
+		t.Fatalf("WaitWorkerAbsent: %v", err)
+	}
+}
+
+func TestReclaimClaimedTaskAfterWorkerDeath(t *testing.T) {
+	nc, _ := natstest.NewJetStreamServer(t)
+	parent := newCoordOnURLWithHeartbeat(
+		t, nc.ConnectedUrl(), "parent-agent", 200*time.Millisecond,
+	)
+	worker := newCoordOnURLWithHeartbeat(
+		t, nc.ConnectedUrl(), "parent-agent/task-1", 200*time.Millisecond,
+	)
+	ctx := context.Background()
+
+	id, err := parent.OpenTask(ctx, "dispatch me", []string{"/repo/a.go"})
+	if err != nil {
+		t.Fatalf("OpenTask: %v", err)
+	}
+	rel, err := worker.Claim(ctx, id, time.Minute)
+	if err != nil {
+		t.Fatalf("worker Claim: %v", err)
+	}
+	_ = rel
+	killAgentHeartbeat(t, worker)
+	if err := WaitWorkerAbsent(
+		ctx, parent, "parent-agent/task-1", 3*time.Second,
+	); err != nil {
+		t.Fatalf("WaitWorkerAbsent: %v", err)
+	}
+	relParent, err := ReclaimClaim(ctx, parent, id, time.Minute)
+	if err != nil {
+		t.Fatalf("ReclaimClaim: %v", err)
+	}
+	defer func() { _ = relParent() }()
+}
