@@ -663,6 +663,8 @@ func TestCLI_Dispatch(t *testing.T) {
 			"--task-id=agent-infra-placeholder",
 			"--task-thread=agent-infra-placeholder",
 			"--worker-agent-id=parent-agent/agent-infra-placeholder",
+			"--result=success",
+			"--summary=done",
 		)
 		if code != 0 {
 			t.Fatalf("worker exit=%d stderr=%s", code, stderr)
@@ -682,12 +684,18 @@ func TestCLI_Dispatch(t *testing.T) {
 			"dispatch", "parent",
 			"--task-id="+id,
 			"--worker-bin="+binPath,
+			"--worker-result=success",
+			"--worker-summary=done",
 		)
 		if code != 0 {
 			t.Fatalf("parent dispatch exit=%d stderr=%s", code, stderr)
 		}
-		if !strings.Contains(stdout, "spawned") {
+		if !strings.Contains(stdout, "closed") {
 			t.Fatalf("stdout=%q", stdout)
+		}
+		show, _, _ := runCmd(t, binPath, dir, "show", id)
+		if !strings.Contains(show, "status=closed") {
+			t.Fatalf("show=%q, want closed status", show)
 		}
 	})
 }
