@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -390,10 +391,11 @@ func validateForCreate(t Task) error {
 // validateTransition enforces invariants 11 and 13 on an Update's
 // proposed next value against the current record. Metadata updates
 // that leave status unchanged are permitted for non-terminal states
-// (open, claimed); closed is the audit-trail sink and rejects even
-// self-edges so the closed snapshot stays immutable. The claimed→open
-// reverse edge is permitted per ADR 0007 to give coord.Claim's release
-// closure its un-claim step.
+// (open, claimed). closed remains terminal for general edits, with one
+// narrow exception: compaction metadata may be stamped on a closed
+// record without reopening it. The claimed→open reverse edge is
+// permitted per ADR 0007 to give coord.Claim's release closure its
+// un-claim step.
 func validateTransition(current, next Task) error {
 	if !validStatus(next.Status) {
 		return fmt.Errorf(
@@ -404,7 +406,7 @@ func validateTransition(current, next Task) error {
 	if err := checkInvariant11(next); err != nil {
 		return fmt.Errorf("tasks.Update: %w", err)
 	}
-	if !legalEdge(current.Status, next.Status) {
+	if !legalTransition(current, next) {
 		return fmt.Errorf(
 			"tasks.Update: %s→%s: %w",
 			current.Status, next.Status, ErrInvalidTransition,
@@ -425,35 +427,44 @@ func checkInvariant11(t Task) error {
 	return nil
 }
 
-// legalEdge reports whether the (current → next) status transition is
-// acceptable. The ADR 0005 DAG covers the three forward edges
-// open→claimed, open→closed, claimed→closed; ADR 0007 adds the
-// release-side un-claim edge claimed→open so coord.Claim's release
-// closure can return the task to the open pool (invariant 16).
-// Metadata updates that do not change status are allowed from open and
-// claimed (same-status writes land in the KV bucket as new revisions,
-// which the watcher surfaces as EventUpdated). closed→anything is
-// forbidden so a closed task's record is frozen — invariant 13's
-// audit-trail rationale rests on closed being terminal in both status
-// and content; open→claimed→open is reversible only for as long as the
-// task has not yet been closed.
-func legalEdge(current, next Status) bool {
-	if current == StatusClosed {
-		return false
+// legalTransition reports whether the current record may transition to
+// next. Status edges follow ADR 0005/0007's DAG. closed→closed remains
+// forbidden for ordinary edits, but compaction metadata is allowed to
+// advance on a closed record without reopening it.
+func legalTransition(current, next Task) bool {
+	if current.Status == StatusClosed {
+		return next.Status == StatusClosed &&
+			closedCompactionOnlyUpdate(current, next)
 	}
-	if current == next {
+	if current.Status == next.Status {
 		return true
 	}
 	switch {
-	case current == StatusOpen && next == StatusClaimed:
+	case current.Status == StatusOpen && next.Status == StatusClaimed:
 		return true
-	case current == StatusOpen && next == StatusClosed:
+	case current.Status == StatusOpen && next.Status == StatusClosed:
 		return true
-	case current == StatusClaimed && next == StatusClosed:
+	case current.Status == StatusClaimed && next.Status == StatusClosed:
 		return true
-	case current == StatusClaimed && next == StatusOpen:
+	case current.Status == StatusClaimed && next.Status == StatusOpen:
 		return true
 	default:
 		return false
 	}
+}
+
+func closedCompactionOnlyUpdate(current, next Task) bool {
+	strippedCurrent := current
+	strippedNext := next
+	strippedCurrent.UpdatedAt = time.Time{}
+	strippedNext.UpdatedAt = time.Time{}
+	strippedCurrent.SchemaVersion = 0
+	strippedNext.SchemaVersion = 0
+	strippedCurrent.OriginalSize = 0
+	strippedNext.OriginalSize = 0
+	strippedCurrent.CompactLevel = 0
+	strippedNext.CompactLevel = 0
+	strippedCurrent.CompactedAt = nil
+	strippedNext.CompactedAt = nil
+	return reflect.DeepEqual(strippedCurrent, strippedNext)
 }
