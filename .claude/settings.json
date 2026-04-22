@@ -25,6 +25,10 @@
           {
             "command": "agent-tasks prime",
             "type": "command"
+          },
+          {
+            "command": "agent-tasks autoclaim --idle=true",
+            "type": "command"
           }
         ],
         "matcher": ""
