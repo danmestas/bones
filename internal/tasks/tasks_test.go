@@ -274,6 +274,49 @@ func TestUpdate_ClosedIsTerminal_RejectsSelfEdge(t *testing.T) {
 	}
 }
 
+func TestUpdate_ClosedCompactionMetadata_AllowsSelfEdge(t *testing.T) {
+	m, _, cleanup := openTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+	id := "agent-infra-closed02"
+
+	if err := m.Create(ctx, newTask(id)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	now := time.Now().UTC()
+	err := m.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
+		t.Status = tasks.StatusClosed
+		t.ClosedAt = &now
+		t.ClosedBy = "agent-a"
+		t.ClosedReason = "done"
+		return t, nil
+	})
+	if err != nil {
+		t.Fatalf("Update to closed: %v", err)
+	}
+	compactedAt := now.Add(time.Hour)
+	err = m.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
+		t.OriginalSize = 123
+		t.CompactLevel = 1
+		t.CompactedAt = &compactedAt
+		t.UpdatedAt = compactedAt
+		return t, nil
+	})
+	if err != nil {
+		t.Fatalf("Update compaction metadata: %v", err)
+	}
+	got, _, err := m.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.OriginalSize != 123 || got.CompactLevel != 1 {
+		t.Fatalf("got metadata=%+v", got)
+	}
+	if got.CompactedAt == nil || !got.CompactedAt.Equal(compactedAt) {
+		t.Fatalf("CompactedAt=%v, want %v", got.CompactedAt, compactedAt)
+	}
+}
+
 func TestUpdate_ValueTooLarge_Rejected(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()

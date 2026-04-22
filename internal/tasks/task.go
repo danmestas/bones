@@ -7,8 +7,8 @@ import (
 
 // SchemaVersion is the currently-written task record schema. Every
 // Create stamps this on the record so future migrations can fan out on
-// observed version. v2 adds defer_until for scheduled readiness.
-const SchemaVersion = 2
+// observed version. v3 adds closed-task compaction metadata.
+const SchemaVersion = 3
 
 // Status is the task lifecycle state. ADR 0005 fixes the enum to
 // exactly these three values; invariant 13 (amended by ADR 0007)
@@ -124,6 +124,18 @@ type Task struct {
 	// writes after a Reclaim. Zero on records that never had a claim
 	// (legacy records decode to zero; first Claim bumps to 1). ADR 0013.
 	ClaimEpoch uint64 `json:"claim_epoch,omitempty"`
+
+	// OriginalSize is the pre-compaction canonical source size for the
+	// latest compaction level. Zero means the task has not been compacted.
+	OriginalSize uint64 `json:"original_size,omitempty"`
+
+	// CompactLevel is the number of compaction passes applied to this
+	// task. Zero means un-compacted. Added in schema v3.
+	CompactLevel uint8 `json:"compact_level,omitempty"`
+
+	// CompactedAt is the wall-clock time of the latest compaction pass.
+	// Nil means the task has not been compacted. Added in schema v3.
+	CompactedAt *time.Time `json:"compacted_at,omitempty"`
 
 	// SchemaVersion stamps the schema this record was written against.
 	SchemaVersion int `json:"schema_version"`
