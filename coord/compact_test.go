@@ -2,6 +2,7 @@ package coord
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -103,6 +104,55 @@ func TestCompact_InvariantPanics(t *testing.T) {
 			_, _ = c.Compact(context.Background(), CompactOptions{Limit: 1})
 		}, "Summarizer is nil")
 	})
+}
+
+func TestCompact_PruneArchivesAndRemovesHotRecord(t *testing.T) {
+	c := mustOpen(t)
+	ctx := context.Background()
+	closedAt := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
+	rec := tasks.Task{
+		ID:            "agent-infra-cpprune1",
+		Title:         "prunable task",
+		Status:        tasks.StatusClosed,
+		Files:         []string{"/seed/a.go"},
+		CreatedAt:     closedAt.Add(-time.Hour),
+		UpdatedAt:     closedAt,
+		ClosedAt:      &closedAt,
+		ClosedBy:      "agent-prior",
+		ClosedReason:  "done",
+		SchemaVersion: tasks.SchemaVersion,
+	}
+	seedTask(t, c, rec)
+	s := &stubSummarizer{summary: "summary"}
+	now := closedAt.Add(48 * time.Hour)
+
+	result, err := c.Compact(ctx, CompactOptions{
+		MinAge:     24 * time.Hour,
+		Limit:      10,
+		Now:        func() time.Time { return now },
+		Summarizer: s,
+		Prune:      true,
+	})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if len(result.Tasks) != 1 || !result.Tasks[0].Pruned {
+		t.Fatalf("result=%+v, want one pruned task", result.Tasks)
+	}
+	_, _, err = c.sub.tasks.Get(ctx, rec.ID)
+	if !errors.Is(err, tasks.ErrNotFound) {
+		t.Fatalf("hot Get: got %v, want ErrNotFound", err)
+	}
+	archived, _, err := c.sub.archive.Get(ctx, rec.ID)
+	if err != nil {
+		t.Fatalf("archive Get: %v", err)
+	}
+	if archived.CompactLevel != 1 {
+		t.Fatalf("archive CompactLevel=%d, want 1", archived.CompactLevel)
+	}
+	if archived.CompactedAt == nil || !archived.CompactedAt.Equal(now) {
+		t.Fatalf("archive CompactedAt=%v, want %v", archived.CompactedAt, now)
+	}
 }
 
 func TestCompact_SkipsIneligibleTasks(t *testing.T) {

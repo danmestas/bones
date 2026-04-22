@@ -402,6 +402,31 @@ func TestList_EmptyBucket_ReturnsNil(t *testing.T) {
 	}
 }
 
+func TestPurge_RemovesRecord(t *testing.T) {
+	m, _, cleanup := openTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+	id := "agent-infra-purge001"
+
+	if err := m.Create(ctx, newTask(id)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := m.Purge(ctx, id); err != nil {
+		t.Fatalf("Purge: %v", err)
+	}
+	_, _, err := m.Get(ctx, id)
+	if !errors.Is(err, tasks.ErrNotFound) {
+		t.Fatalf("Get after Purge: got %v, want ErrNotFound", err)
+	}
+	got, err := m.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("List after Purge: got %d records, want 0", len(got))
+	}
+}
+
 func TestCreate_InvalidStatus_Rejected(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()

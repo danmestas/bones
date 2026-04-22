@@ -294,6 +294,23 @@ func (m *Manager) List(ctx context.Context) ([]Task, error) {
 	return out, nil
 }
 
+// Purge permanently removes a task key from the bucket so future Get/List
+// calls do not observe it. Returns ErrNotFound when the key is absent.
+func (m *Manager) Purge(ctx context.Context, id string) error {
+	assert.NotNil(ctx, "tasks.Purge: ctx is nil")
+	assert.NotEmpty(id, "tasks.Purge: id is empty")
+	if m.done.Load() {
+		return ErrClosed
+	}
+	if err := m.kv.Purge(ctx, id); err != nil {
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("tasks.Purge: %w", err)
+	}
+	return nil
+}
+
 // readOne fetches a single entry and decodes it. Returns (nil, nil) for
 // delete markers or undecodable values so List can skip them quietly.
 // The separate return path for errors.Is(err, ErrNotFound) handles the
