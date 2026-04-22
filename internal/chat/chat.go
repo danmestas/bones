@@ -426,7 +426,9 @@ func (m *Manager) ListThreads(ctx context.Context) ([]ThreadSummary, error) {
 // agentID has sent at least one message. Threads are sorted by last activity
 // (most recent first). Errors reading individual threads are logged and
 // skipped so one bad thread does not fail the whole snapshot.
-func (m *Manager) ThreadsForAgent(ctx context.Context, agentID string, maxThreads int) ([]ThreadSummary, error) {
+func (m *Manager) ThreadsForAgent(
+	ctx context.Context, agentID string, maxThreads int,
+) ([]ThreadSummary, error) {
 	assert.NotNil(ctx, "chat.ThreadsForAgent: ctx is nil")
 	assert.NotEmpty(agentID, "chat.ThreadsForAgent: agentID is empty")
 	if m.closed.Load() {

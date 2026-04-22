@@ -212,7 +212,12 @@ func TestTick_ClaimSuccess_PostsNoticeToTaskThread(t *testing.T) {
 	}
 	defer func() { _ = closeSub() }()
 
-	res, err := Tick(ctx, c, Options{Enabled: true, Idle: true, ClaimTTL: time.Minute, AgentID: "agent-autoclaim"})
+	res, err := Tick(ctx, c, Options{
+		Enabled:  true,
+		Idle:     true,
+		ClaimTTL: time.Minute,
+		AgentID:  "agent-autoclaim",
+	})
 	if err != nil {
 		t.Fatalf("Tick: %v", err)
 	}
