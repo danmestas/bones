@@ -21,6 +21,7 @@ func TestToExitCode(t *testing.T) {
 		{"generic", errors.New("boom"), 1},
 		{"workspace_already_init", workspace.ErrAlreadyInitialized, 2},
 		{"workspace_no_workspace", workspace.ErrNoWorkspace, 3},
+		{"wrapped_workspace_no_workspace", fmtWrap(workspace.ErrNoWorkspace), 3},
 		{"workspace_leaf_unreachable", workspace.ErrLeafUnreachable, 4},
 		{"workspace_leaf_timeout", workspace.ErrLeafStartTimeout, 5},
 		{"tasks_not_found", tasks.ErrNotFound, 6},
@@ -116,6 +117,14 @@ func TestFormatShowBlock(t *testing.T) {
 		if !strings.Contains(got, sub) {
 			t.Errorf("formatShowBlock missing %q; got:\n%s", sub, got)
 		}
+	}
+	idxID := strings.Index(got, "id=abc123")
+	idxTitle := strings.Index(got, "title=hello")
+	idxStatus := strings.Index(got, "status=open")
+	idxCtx1 := strings.Index(got, "context.k1=v1")
+	idxCtx2 := strings.Index(got, "context.k2=v2")
+	if idxID >= idxTitle || idxTitle >= idxStatus || idxCtx1 >= idxCtx2 {
+		t.Errorf("formatShowBlock ordering regression; got:\n%s", got)
 	}
 	mustNotContain := []string{
 		"claimed_by=",

@@ -750,6 +750,30 @@ func TestCLI_Dispatch(t *testing.T) {
 	})
 }
 
+func TestCLI_Prime(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	dir := newWorkspace(t)
+
+	out, _, code := runCmd(t, binPath, dir, "create", "prime task")
+	if code != 0 {
+		t.Fatalf("seed create failed code=%d", code)
+	}
+	id := firstLine(out)
+
+	t.Run("json", func(t *testing.T) {
+		stdout, stderr, code := runCmd(t, binPath, dir, "prime", "--json")
+		if code != 0 {
+			t.Fatalf("prime --json exit=%d stderr=%s", code, stderr)
+		}
+		if !strings.Contains(stdout, `"open_tasks"`) ||
+			!strings.Contains(stdout, `"id":"`+id+`"`) {
+			t.Errorf("prime json missing expected task: %q", stdout)
+		}
+	})
+}
+
 func TestCLI_Link(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skip in -short: integration test")
