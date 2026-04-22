@@ -36,6 +36,13 @@ func TestIntegration_LinkAndReady_RoundTrip(t *testing.T) {
 	assertVisible(t, got, []TaskID{blocker, winner, canonical, discovery, seed, child})
 	assertHidden(t, got, []TaskID{blocked, loser, dup, parent})
 
+	blockedNow, err := c.Blocked(ctx)
+	if err != nil {
+		t.Fatalf("Blocked phase 1: %v", err)
+	}
+	assertVisible(t, blockedNow, []TaskID{blocked})
+	assertHidden(t, blockedNow, []TaskID{blocker, loser, dup, parent})
+
 	// Close the gating tasks; targets re-emerge.
 	linkTestClose(t, c, blocker)
 	linkTestClose(t, c, winner)
@@ -47,6 +54,12 @@ func TestIntegration_LinkAndReady_RoundTrip(t *testing.T) {
 		t.Fatalf("Ready phase 2: %v", err)
 	}
 	assertVisible(t, got, []TaskID{blocked, loser, dup, parent, discovery, seed})
+
+	blockedNow, err = c.Blocked(ctx)
+	if err != nil {
+		t.Fatalf("Blocked phase 2: %v", err)
+	}
+	assertHidden(t, blockedNow, []TaskID{blocked})
 }
 
 func mustLink(t *testing.T, c *Coord, from, to TaskID, edgeType EdgeType) {
