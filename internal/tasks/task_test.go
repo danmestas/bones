@@ -81,3 +81,31 @@ func TestTask_UnknownEdgeTypePreserved(t *testing.T) {
 			rec.Edges[0].Type)
 	}
 }
+
+func TestTask_DeferUntilJSONRoundTrip(t *testing.T) {
+	now := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
+	rec := tasks.Task{
+		ID:            "agent-infra-du88",
+		Title:         "deferred",
+		Status:        tasks.StatusOpen,
+		Files:         []string{"d.go"},
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		DeferUntil:    &now,
+		SchemaVersion: tasks.SchemaVersion,
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"defer_until":"2026-04-22T12:00:00Z"`) {
+		t.Fatalf("missing defer_until in %s", data)
+	}
+	var decoded tasks.Task
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.DeferUntil == nil || !decoded.DeferUntil.Equal(now) {
+		t.Fatalf("DeferUntil=%v, want %v", decoded.DeferUntil, now)
+	}
+}

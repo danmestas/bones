@@ -197,6 +197,7 @@ func (m *Manager) Get(
 	if err != nil {
 		return Task{}, 0, fmt.Errorf("tasks.Get: decode: %w", err)
 	}
+	t, _ = m.migrateOnRead(ctx, t, entry.Revision())
 	return t, entry.Revision(), nil
 }
 
@@ -313,7 +314,38 @@ func (m *Manager) readOne(
 	if err != nil {
 		return nil, nil
 	}
+	t, _ = m.migrateOnRead(ctx, t, entry.Revision())
 	return &t, nil
+}
+
+func (m *Manager) migrateOnRead(
+	ctx context.Context,
+	t Task,
+	revision uint64,
+) (Task, error) {
+	migrated, changed := migrateDecodedTask(t)
+	if !changed {
+		return t, nil
+	}
+	payload, err := m.encodeBounded(migrated, "tasks.migrateOnRead")
+	if err != nil {
+		return migrated, err
+	}
+	if _, err := m.kv.Update(ctx, migrated.ID, payload, revision); err != nil {
+		if jskv.IsConflict(err) || errors.Is(err, jetstream.ErrKeyNotFound) {
+			return migrated, nil
+		}
+		return migrated, fmt.Errorf("tasks.migrateOnRead: %w", err)
+	}
+	return migrated, nil
+}
+
+func migrateDecodedTask(t Task) (Task, bool) {
+	if t.SchemaVersion >= SchemaVersion {
+		return t, false
+	}
+	t.SchemaVersion = SchemaVersion
+	return t, true
 }
 
 // encodeBounded marshals t and rejects the write if the encoded value
