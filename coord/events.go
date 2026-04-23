@@ -1,6 +1,7 @@
 package coord
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 // encoding is a substrate detail per ADR 0003 — callers React and
 // receive Reaction, they never observe the wire format.
 const reactionBodyPrefix = "REACT:"
+const mediaBodyPrefix = "MEDIA:"
 
 // Event is the type of value delivered on coord.Subscribe's channel.
 // Phase 3 ships ChatMessage as the only concrete type; later phases
@@ -92,6 +94,9 @@ func (m ChatMessage) ReplyTo() string { return m.replyTo }
 // colon) surfaces as an ordinary ChatMessage, so garbage on the wire
 // degrades to a visible chat post rather than being silently dropped.
 func eventFromMessage(msg notify.Message) Event {
+	if m, ok := mediaFromMessage(msg); ok {
+		return m
+	}
 	if r, ok := reactionFromMessage(msg); ok {
 		return r
 	}
@@ -178,6 +183,56 @@ func reactionFromMessage(msg notify.Message) (Reaction, bool) {
 // failing assertion here means we lost the sealed-interface seal and
 // external packages could construct Reaction values directly.
 var _ Event = Reaction{}
+
+type MediaMessage struct {
+	from      string
+	thread    string
+	rev       RevID
+	path      string
+	mimeType  string
+	size      int
+	timestamp time.Time
+}
+
+func (MediaMessage) eventTag()              {}
+func (m MediaMessage) From() string         { return m.from }
+func (m MediaMessage) Thread() string       { return m.thread }
+func (m MediaMessage) Rev() RevID           { return m.rev }
+func (m MediaMessage) Path() string         { return m.path }
+func (m MediaMessage) MIMEType() string     { return m.mimeType }
+func (m MediaMessage) Size() int            { return m.size }
+func (m MediaMessage) Timestamp() time.Time { return m.timestamp }
+
+type mediaEnvelope struct {
+	Rev      string `json:"rev"`
+	Path     string `json:"path"`
+	MIMEType string `json:"mime_type"`
+	Size     int    `json:"size"`
+}
+
+func mediaFromMessage(msg notify.Message) (MediaMessage, bool) {
+	if !strings.HasPrefix(msg.Body, mediaBodyPrefix) {
+		return MediaMessage{}, false
+	}
+	var env mediaEnvelope
+	if err := json.Unmarshal([]byte(msg.Body[len(mediaBodyPrefix):]), &env); err != nil {
+		return MediaMessage{}, false
+	}
+	if env.Rev == "" || env.Path == "" || env.MIMEType == "" || env.Size <= 0 {
+		return MediaMessage{}, false
+	}
+	return MediaMessage{
+		from:      msg.From,
+		thread:    msg.ThreadShort(),
+		rev:       RevID(env.Rev),
+		path:      env.Path,
+		mimeType:  env.MIMEType,
+		size:      env.Size,
+		timestamp: msg.Timestamp,
+	}, true
+}
+
+var _ Event = MediaMessage{}
 
 // PresenceChange is the Event fired on coord.WatchPresence when an
 // agent appears in or disappears from the presence substrate. Up is
