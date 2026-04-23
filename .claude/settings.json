@@ -4,10 +4,6 @@
       {
         "hooks": [
           {
-            "command": "bd prime",
-            "type": "command"
-          },
-          {
             "command": "agent-tasks prime",
             "type": "command"
           }
@@ -18,10 +14,6 @@
     "SessionStart": [
       {
         "hooks": [
-          {
-            "command": "bd prime",
-            "type": "command"
-          },
           {
             "command": "agent-tasks prime",
             "type": "command"
