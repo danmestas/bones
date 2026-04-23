@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dmestas/edgesync/leaf/agent/notify"
+	"github.com/danmestas/EdgeSync/leaf/agent/notify"
 )
 
 // reactionBodyPrefix is the in-band tag that marks a notify.Message as

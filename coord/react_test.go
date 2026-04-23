@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dmestas/edgesync/leaf/agent/notify"
+	"github.com/danmestas/EdgeSync/leaf/agent/notify"
 
 	"github.com/danmestas/agent-infra/internal/testutil/natstest"
 )

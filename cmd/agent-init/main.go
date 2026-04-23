@@ -17,8 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/danmestas/EdgeSync/leaf/telemetry"
 	"github.com/danmestas/agent-infra/internal/workspace"
-	"github.com/dmestas/edgesync/leaf/telemetry"
 )
 
 const usage = `Usage:

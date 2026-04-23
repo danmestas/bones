@@ -17,8 +17,8 @@ import (
 	// libfossil.Create / libfossil.Open can open the repo's SQLite
 	// backing store. Blank imports for side effects are the libfossil
 	// convention; without it, Create panics with "no driver registered".
+	"github.com/danmestas/EdgeSync/leaf/agent/notify"
 	_ "github.com/danmestas/libfossil/db/driver/modernc"
-	"github.com/dmestas/edgesync/leaf/agent/notify"
 	"github.com/nats-io/nats.go"
 
 	"github.com/danmestas/agent-infra/internal/assert"
