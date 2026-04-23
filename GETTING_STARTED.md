@@ -28,24 +28,28 @@ provide natively.
 - `README.md` drafted with full plan, open questions, phase breakdown
 - `reference/beads/` cloned — the audit target
 - No Go code yet. No `go.mod`, no `go.work`. Phase 0 scaffolding only.
-- User has just run `bd init` and set up `mgrep` in this repo before
-  handing off to you. So task tracking lives in beads (`bd` CLI) now.
+- `mgrep` is set up for in-repo + web search.
+
+> **Note**: this doc was written during Phase 0 and has not been fully
+> updated as later phases landed. For the current state, read ADRs
+> 0001–0017 under `docs/adr/` and `reference/CAPABILITIES.md`. Beads
+> was used briefly as the installed task tracker during Phase 6
+> planning and removed on 2026-04-23 — see
+> [ADR 0017](./docs/adr/0017-beads-removal.md). Task tracking now
+> lives in ADRs and the git log.
 
 **Active phase**: Phase 0 — scaffolding. See README.md "Initial plan" for
 the full sequence through Phase 8.
 
-## 3. The beads dual role (important — don't confuse these)
+## 3. Beads as audit target
 
-Beads appears in this repo in **two distinct roles**:
-
-| Role | Location | Purpose |
-|---|---|---|
-| **Task tracker (installed)** | `bd` CLI on `$PATH` | Tracks *our* work on this project. User ran `bd init` here. Use `bd create`, `bd ready`, etc. to manage tasks. |
-| **Reference / audit target** | `reference/beads/` | Source checkout of the beads project itself. We study its design here; we don't run it from here. |
-
-These are the same tool wearing two hats. When in doubt:
-- "Use `bd`" → the installed CLI (task tracking)
-- "Look at beads" / "study beads" → `reference/beads/` (source study)
+A read-only clone of the beads project lives at `reference/beads/` as
+the design audit target (see `reference/CAPABILITIES.md` for the
+beads-feature → agent-infra-equivalent mapping). Beads was briefly used
+as this repo's installed task tracker during Phase 6 planning and was
+removed on 2026-04-23 — see
+[ADR 0017](./docs/adr/0017-beads-removal.md). Only the audit-target
+role remains.
 
 ## 4. How to search and find things
 
@@ -102,13 +106,9 @@ README.md §Development setup.
 raw beads content stays out of your working context. You can do step 2
 and step 4 yourself with the subagent summaries.
 
-Track this as beads tasks with `bd`:
-
-```bash
-bd create --type task "Read beads agent config (AGENTS.md, CLAUDE.md, claude-plugin)"
-bd create --type task "Read beads internal/ packages and data model"
-bd create --type task "Draft reference/CAPABILITIES.md"
-```
+(Phase 0 is complete as of 2026-04-23 — `reference/CAPABILITIES.md`
+has been drafted and revised through Phase 5. These steps are retained
+as the historical Phase 0 plan.)
 
 ## 7. Relevant user preferences (from global memory)
 

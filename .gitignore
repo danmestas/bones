@@ -8,11 +8,6 @@ bin/
 /two-agents-chaos
 /.nats-store/
 
-# Beads / Dolt files (added by bd init)
-.dolt/
-*.db
-.beads-credential-key
-
 # Read-only reference clones — nested git repos; see README §Future git init note.
 # Ignore subdirectories only so our own docs (e.g. reference/CAPABILITIES.md) stay tracked.
 reference/*/
