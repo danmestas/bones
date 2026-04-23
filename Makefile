@@ -79,7 +79,7 @@ todo-check:
 		-not -path './.git/*' \
 		-exec grep -HnE 'TODO' {} + 2>/dev/null || true); \
 	if [ -n "$$matches" ]; then \
-		echo "TODO found in non-test .go files — file a beads issue (bd create) instead:" >&2; \
+		echo "TODO found in non-test .go files — file an ADR or roadmap note instead:" >&2; \
 		echo "$$matches" >&2; \
 		exit 1; \
 	fi

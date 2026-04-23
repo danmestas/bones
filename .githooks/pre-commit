@@ -62,7 +62,7 @@ for file in "${staged[@]}"; do
   fi
 
   # TODO check: production code only. Test files may document pending
-  # behavior inline; everything else must live as a beads issue.
+  # behavior inline; everything else must be tracked as an ADR or roadmap note.
   case "$file" in
     *_test.go) : ;;  # exempt
     *)
@@ -84,8 +84,8 @@ fi
 if [ "$todo_violations" -gt 0 ]; then
   echo "" >&2
   echo "agent-infra pre-commit: $todo_violations TODO marker(s) in production code." >&2
-  echo "File a beads issue instead: bd create --title '...' --description '...'" >&2
-  echo "See project CLAUDE.md §Beads Issue Tracker." >&2
+  echo "File an ADR or a note under docs/ instead." >&2
+  echo "See project CLAUDE.md §Task tracking." >&2
 fi
 
 if [ "$fmt_violations" -gt 0 ] || [ "$todo_violations" -gt 0 ]; then

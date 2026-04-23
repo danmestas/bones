@@ -1,5 +1,13 @@
 # CAPABILITIES — beads → agent-infra side-by-side
 
+> **Status as of 2026-04-23**: beads is no longer installed as this
+> repo's task tracker — see [ADR 0017](../docs/adr/0017-beads-removal.md).
+> The `reference/beads/` clone is retained as the design audit target,
+> and this doc remains the canonical side-by-side mapping. Ticket IDs
+> referenced below (`dcd`, `znr`, `rbu`, etc.) were beads issue IDs;
+> most of that work has landed — see the ADRs cited in each row — and
+> the remainder is captured in ADR 0017's remaining-work roadmap.
+
 *Last updated 2026-04-21 — revised after Phase 5 (fossil code artifacts)
 landed per ADR 0010 and ADR 0013 (claim reclamation). Phases 1–5 are
 shipped; Phase 6 (beads capability closure) is the next scope, with
