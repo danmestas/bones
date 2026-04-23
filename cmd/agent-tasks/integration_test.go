@@ -3,6 +3,8 @@ package main_test
 import (
 	"bytes"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -748,6 +750,49 @@ func TestCLI_Dispatch(t *testing.T) {
 			t.Fatalf("show=%q, want closed status", show)
 		}
 	})
+}
+
+func TestCLI_Compact(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	dir := newWorkspace(t)
+
+	out, _, code := runCmd(t, binPath, dir, "create", "compact task")
+	if code != 0 {
+		t.Fatalf("create failed code=%d", code)
+	}
+	id := firstLine(out)
+	_, stderr, code := runCmd(t, binPath, dir, "close", id, "--reason=done")
+	if code != 0 {
+		t.Fatalf("close exit=%d stderr=%s", code, stderr)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"summary from api"}]}`))
+	}))
+	defer server.Close()
+	env := append(os.Environ(),
+		"LEAF_BIN="+leafBinary(),
+		"ANTHROPIC_API_KEY=test-key",
+		"AGENT_INFRA_COMPACT_BASE_URL="+server.URL,
+		"AGENT_INFRA_COMPACT_MODEL=claude-3-5-haiku-latest",
+	)
+
+	stdout, stderr, code := runCmdEnv(t, binPath, dir, env,
+		"compact", "--min-age=0s", "--limit=10", "--prune=true", "--json")
+	if code != 0 {
+		t.Fatalf("compact exit=%d stderr=%s", code, stderr)
+	}
+	if !strings.Contains(stdout, `"task_id":"`+id+`"`) ||
+		!strings.Contains(stdout, `"pruned":true`) {
+		t.Fatalf("stdout=%q", stdout)
+	}
+	_, stderr, code = runCmd(t, binPath, dir, "show", id)
+	if code != 6 {
+		t.Fatalf("show pruned exit=%d stderr=%q", code, stderr)
+	}
 }
 
 func TestCLI_Prime(t *testing.T) {

@@ -39,6 +39,7 @@ const usage = `Usage:
   agent-tasks stale [--days=N] [--json]
   agent-tasks orphans [--json]
   agent-tasks preflight [--days=N] [--json]
+  agent-tasks compact [--min-age=24h] [--limit=20] [--prune=true|false] [--every=24h] [--json]
   agent-tasks autoclaim [--enabled=true|false] [--idle=true|false] [--claim-ttl=1m]
   agent-tasks dispatch parent --task-id=<id> [--worker-bin=<path>]
   agent-tasks dispatch worker --task-id=<id> --task-thread=<thread> --worker-agent-id=<id>
