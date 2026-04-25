@@ -827,3 +827,36 @@ func TestManager_Tip_AfterCommitReturnsUUID(t *testing.T) {
 		t.Fatalf("Tip after commit: got %q (len=%d), want >=40-char SHA", uuid, len(uuid))
 	}
 }
+
+func TestManager_Update_NoCheckoutErrors(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	mgr, err := Open(ctx, Config{
+		AgentID: "u-no-co", RepoPath: filepath.Join(dir, "r.fossil"),
+		CheckoutRoot: filepath.Join(dir, "wt"),
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer mgr.Close()
+	// No CreateCheckout call — m.checkout is nil. Update must surface ErrNoCheckout.
+	if err := mgr.Update(ctx); !errors.Is(err, ErrNoCheckout) {
+		t.Fatalf("Update without checkout: got %v, want ErrNoCheckout", err)
+	}
+}
+
+func TestManager_Update_AfterCloseErrors(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	mgr, err := Open(ctx, Config{
+		AgentID: "u-closed", RepoPath: filepath.Join(dir, "r.fossil"),
+		CheckoutRoot: filepath.Join(dir, "wt"),
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	mgr.Close()
+	if err := mgr.Update(ctx); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Update after close: got %v, want ErrClosed", err)
+	}
+}
