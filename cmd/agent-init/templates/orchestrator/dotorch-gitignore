@@ -1,0 +1,4 @@
+pids/
+hub.fossil
+hub.fossil-*
+*.log
