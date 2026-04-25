@@ -2,6 +2,8 @@ package coord
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -87,7 +89,12 @@ func (s *tipSubscriber) Start(ctx context.Context) error {
 		Storage:  nats.FileStorage,
 		MaxAge:   0,
 	})
-	durable := fmt.Sprintf("coord-tip-%d", nowNano())
+	// Durable name combines wall-clock and crypto/rand so concurrent
+	// coord.Open calls in the same nanosecond do not collide on the
+	// JetStream consumer name (each consumer is bound to one subscription).
+	var randBuf [4]byte
+	_, _ = rand.Read(randBuf[:])
+	durable := fmt.Sprintf("coord-tip-%d-%s", nowNano(), hex.EncodeToString(randBuf[:]))
 	sub, err := js.Subscribe(tipChangedSubject, func(m *nats.Msg) {
 		s.handle(ctx, m)
 	}, nats.Durable(durable), nats.DeliverNew(), nats.AckExplicit())
