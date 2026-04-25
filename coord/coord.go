@@ -54,6 +54,7 @@ const presenceBucket = "agent-infra-presence"
 type Coord struct {
 	cfg    Config
 	sub    *substrate
+	tipSub *tipSubscriber
 	mu     sync.Mutex // protects closed
 	closed bool
 
@@ -92,7 +93,24 @@ func Open(ctx context.Context, cfg Config) (*Coord, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Coord{cfg: cfg, sub: sub}, nil
+	c := &Coord{cfg: cfg, sub: sub}
+	if cfg.EnableTipBroadcast && cfg.HubURL != "" {
+		c.tipSub = &tipSubscriber{
+			nc:     c.sub.nc,
+			hubURL: cfg.HubURL,
+			pullFn: func(ctx context.Context, hubURL string) error {
+				return c.sub.fossil.Pull(ctx, hubURL)
+			},
+			localFn: func(ctx context.Context) (string, error) {
+				return c.sub.fossil.Tip(ctx)
+			},
+		}
+		if err := c.tipSub.Start(ctx); err != nil {
+			c.sub.close()
+			return nil, fmt.Errorf("coord.Open: tipSubscriber: %w", err)
+		}
+	}
+	return c, nil
 }
 
 // openSubstrate assembles the substrate aggregate for a fresh Coord.
@@ -206,6 +224,9 @@ func (c *Coord) Close() error {
 		return nil
 	}
 	c.closed = true
+	if c.tipSub != nil {
+		c.tipSub.Close()
+	}
 	c.sub.close()
 	return nil
 }
