@@ -861,3 +861,63 @@ func TestManager_Update_AfterCloseErrors(t *testing.T) {
 		t.Fatalf("Update after close: got %v, want ErrClosed", err)
 	}
 }
+
+// TestManager_Push_Roundtrip stands up an in-process libfossil HTTP
+// server backed by a fresh repo and pushes from a leaf Manager to it.
+// The leaf has no commits beyond /create, so the push is a no-op
+// roundtrip — but it exercises the full xfer push path end-to-end.
+func TestManager_Push_Roundtrip(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	srvPath := filepath.Join(dir, "server.fossil")
+	srvRepo, err := libfossil.Create(srvPath, libfossil.CreateOpts{})
+	if err != nil {
+		t.Fatalf("libfossil.Create: %v", err)
+	}
+	defer func() { _ = srvRepo.Close() }()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		resp, err := srvRepo.HandleSync(r.Context(), body)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		_, _ = w.Write(resp)
+	}))
+	defer srv.Close()
+
+	leafPath := filepath.Join(dir, "leaf.fossil")
+	mgr, err := Open(ctx, Config{
+		AgentID: "push-leaf", RepoPath: leafPath, CheckoutRoot: filepath.Join(dir, "wt"),
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+	// Push on a fresh leaf with no commits — must not error.
+	if err := mgr.Push(ctx, srv.URL); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+}
+
+// TestManager_Push_AfterCloseErrors proves Push returns ErrClosed when
+// the Manager has already been closed.
+func TestManager_Push_AfterCloseErrors(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	mgr, err := Open(ctx, Config{
+		AgentID: "p-closed", RepoPath: filepath.Join(dir, "r.fossil"),
+		CheckoutRoot: filepath.Join(dir, "wt"),
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	_ = mgr.Close()
+	if err := mgr.Push(ctx, "http://127.0.0.1:1/x"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("expected ErrClosed, got %v", err)
+	}
+}
