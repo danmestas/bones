@@ -250,6 +250,56 @@ func (m *Manager) Commit(
 	return uuid, nil
 }
 
+// Pull fetches commits from the hub at hubURL and applies them to this
+// Manager's repo. Repo-only — never touches the working tree. Idempotent
+// on a repo already at hub's tip.
+func (m *Manager) Pull(ctx context.Context, hubURL string) error {
+	assert.NotNil(ctx, "fossil.Pull: ctx is nil")
+	assert.NotEmpty(hubURL, "fossil.Pull: hubURL is empty")
+	if m.done.Load() {
+		return ErrClosed
+	}
+	if _, err := m.repo.Pull(ctx, hubURL, libfossil.PullOpts{}); err != nil {
+		return fmt.Errorf("fossil.Pull: %w", err)
+	}
+	return nil
+}
+
+// Update merges repo-level changes into the attached working tree. Must be
+// called after Pull and after CreateCheckout. Returns ErrNoCheckout if the
+// checkout has not been created yet (Update needs a worktree to merge into).
+// TargetRID=0 means "update to current branch tip", which is what coord
+// uses for the retry-on-fork path.
+func (m *Manager) Update(ctx context.Context) error {
+	assert.NotNil(ctx, "fossil.Update: ctx is nil")
+	if m.done.Load() {
+		return ErrClosed
+	}
+	if m.checkout == nil {
+		return ErrNoCheckout
+	}
+	if err := m.checkout.Update(libfossil.UpdateOpts{TargetRID: 0}); err != nil {
+		return fmt.Errorf("fossil.Update: %w", err)
+	}
+	return nil
+}
+
+// Tip returns the manifest UUID at the head of the current branch's leaf
+// commit, or "" if the repo has no checkins yet. Wraps the existing
+// private tipRID helper. Used by the tip-broadcast subscriber to compare
+// the broadcast manifest hash against local state for idempotency.
+func (m *Manager) Tip(ctx context.Context) (string, error) {
+	assert.NotNil(ctx, "fossil.Tip: ctx is nil")
+	if m.done.Load() {
+		return "", ErrClosed
+	}
+	_, uuid, err := m.tipRID()
+	if err != nil {
+		return "", fmt.Errorf("fossil.Tip: %w", err)
+	}
+	return uuid, nil
+}
+
 // WouldFork reports whether the next commit on the current branch
 // would create a sibling leaf — i.e., another leaf already exists on
 // this branch, so committing here would fork.
