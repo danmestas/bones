@@ -53,9 +53,12 @@ func TestSyncOnBroadcast_SkippedSpan(t *testing.T) {
 	nc, _ := natstest.NewJetStreamServer(t)
 
 	sub := &tipSubscriber{
-		nc:      nc,
-		hubURL:  "http://hub.example/",
-		pullFn:  func(ctx context.Context, url string) error { t.Fatal("should not pull"); return nil },
+		nc:     nc,
+		hubURL: "http://hub.example/",
+		pullFn: func(ctx context.Context, url string) error {
+			t.Fatal("should not pull")
+			return nil
+		},
 		localFn: func(ctx context.Context) (string, error) { return "same", nil },
 	}
 	defer sub.Close()

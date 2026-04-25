@@ -730,7 +730,7 @@ func TestManager_Pull_Roundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("libfossil.Create: %v", err)
 	}
-	defer srvRepo.Close()
+	defer func() { _ = srvRepo.Close() }()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -753,7 +753,7 @@ func TestManager_Pull_Roundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 	if err := mgr.Pull(ctx, srv.URL); err != nil {
 		t.Fatalf("Manager.Pull: %v", err)
 	}
@@ -771,7 +771,7 @@ func TestManager_Pull_AfterCloseErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	mgr.Close()
+	_ = mgr.Close()
 	if err := mgr.Pull(ctx, "http://127.0.0.1:1/x"); !errors.Is(err, ErrClosed) {
 		t.Fatalf("expected ErrClosed, got %v", err)
 	}
@@ -789,7 +789,7 @@ func TestManager_Tip_EmptyRepoReturnsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 	uuid, err := mgr.Tip(ctx)
 	if err != nil {
 		t.Fatalf("Tip: %v", err)
@@ -811,12 +811,13 @@ func TestManager_Tip_AfterCommitReturnsUUID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 	// Commit before CreateCheckout: CreateCheckout requires a tip
 	// commit, but Commit does not require a checkout (per package
 	// docstring). Tip just reads repo state, so the checkout is
 	// irrelevant here.
-	if _, err := mgr.Commit(ctx, "seed", []File{{Path: "/a.txt", Content: []byte("a")}}, ""); err != nil {
+	files := []File{{Path: "/a.txt", Content: []byte("a")}}
+	if _, err := mgr.Commit(ctx, "seed", files, ""); err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
 	uuid, err := mgr.Tip(ctx)
@@ -838,7 +839,7 @@ func TestManager_Update_NoCheckoutErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 	// No CreateCheckout call — m.checkout is nil. Update must surface ErrNoCheckout.
 	if err := mgr.Update(ctx); !errors.Is(err, ErrNoCheckout) {
 		t.Fatalf("Update without checkout: got %v, want ErrNoCheckout", err)
@@ -855,7 +856,7 @@ func TestManager_Update_AfterCloseErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	mgr.Close()
+	_ = mgr.Close()
 	if err := mgr.Update(ctx); !errors.Is(err, ErrClosed) {
 		t.Fatalf("Update after close: got %v, want ErrClosed", err)
 	}

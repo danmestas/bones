@@ -3,6 +3,7 @@ package coord
 import (
 	"context"
 	"encoding/json"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,7 +21,7 @@ func TestPublishTipChanged_PayloadShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	defer sub.Unsubscribe()
+	defer func() { _ = sub.Unsubscribe() }()
 	go func() {
 		m, _ := sub.NextMsg(2 * time.Second)
 		got <- m
@@ -48,11 +49,11 @@ func TestSubscriber_PullsOnBroadcast(t *testing.T) {
 	ctx := context.Background()
 	nc, _ := natstest.NewJetStreamServer(t)
 
-	calls := 0
+	var calls atomic.Int64
 	sub := &tipSubscriber{
 		nc:      nc,
 		hubURL:  "http://hub.example/",
-		pullFn:  func(ctx context.Context, url string) error { calls++; return nil },
+		pullFn:  func(ctx context.Context, url string) error { calls.Add(1); return nil },
 		localFn: func(ctx context.Context) (string, error) { return "old-hash", nil },
 	}
 	defer sub.Close()
@@ -63,11 +64,11 @@ func TestSubscriber_PullsOnBroadcast(t *testing.T) {
 		t.Fatalf("publishTipChanged: %v", err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && calls == 0 {
+	for time.Now().Before(deadline) && calls.Load() == 0 {
 		time.Sleep(20 * time.Millisecond)
 	}
-	if calls != 1 {
-		t.Fatalf("expected 1 pull call, got %d", calls)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("expected 1 pull call, got %d", got)
 	}
 }
 
@@ -75,11 +76,11 @@ func TestSubscriber_IdempotentOnSameHash(t *testing.T) {
 	ctx := context.Background()
 	nc, _ := natstest.NewJetStreamServer(t)
 
-	calls := 0
+	var calls atomic.Int64
 	sub := &tipSubscriber{
 		nc:      nc,
 		hubURL:  "http://hub.example/",
-		pullFn:  func(ctx context.Context, url string) error { calls++; return nil },
+		pullFn:  func(ctx context.Context, url string) error { calls.Add(1); return nil },
 		localFn: func(ctx context.Context) (string, error) { return "same-hash", nil },
 	}
 	defer sub.Close()
@@ -90,7 +91,7 @@ func TestSubscriber_IdempotentOnSameHash(t *testing.T) {
 		t.Fatalf("publishTipChanged: %v", err)
 	}
 	time.Sleep(200 * time.Millisecond)
-	if calls != 0 {
-		t.Fatalf("expected 0 pull calls (idempotent on same hash), got %d", calls)
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("expected 0 pull calls (idempotent on same hash), got %d", got)
 	}
 }

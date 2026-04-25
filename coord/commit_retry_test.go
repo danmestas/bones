@@ -34,12 +34,12 @@ func TestCommit_RetriesAfterFork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open A: %v", err)
 	}
-	defer a.Close()
+	defer func() { _ = a.Close() }()
 	b, err := coord.Open(ctx, cfgB)
 	if err != nil {
 		t.Fatalf("Open B: %v", err)
 	}
-	defer b.Close()
+	defer func() { _ = b.Close() }()
 
 	taskID, _ := a.OpenTask(ctx, "shared", []string{"a/x.txt", "b/y.txt"})
 	relA, _ := a.Claim(ctx, taskID, 30*time.Second)
@@ -74,7 +74,7 @@ func TestCommit_DoubleForkSurfaces(t *testing.T) {
 	t.Skip("integration: enabled when Phase 3 publisher/subscriber lands")
 	ctx := context.Background()
 	c := openCoordWithAlwaysForkSubstrate(t)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	taskID, _ := c.OpenTask(ctx, "task-1", []string{"f.txt"})
 	rel, _ := c.Claim(ctx, taskID, 30*time.Second)

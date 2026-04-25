@@ -175,13 +175,26 @@ func (c Config) Validate() error {
 			"coord.Config: CheckoutRoot: must be non-empty",
 		)
 	}
-	if c.HubURL != "" {
-		if _, err := url.ParseRequestURI(c.HubURL); err != nil {
-			return fmt.Errorf("coord.Config: HubURL: %w", err)
-		}
-		if !strings.HasPrefix(c.HubURL, "http://") && !strings.HasPrefix(c.HubURL, "https://") {
-			return fmt.Errorf("coord.Config: HubURL: must start with http:// or https://")
-		}
+	if err := validateHubURL(c.HubURL); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateHubURL enforces the HubURL contract: empty is fine (local-only
+// mode); otherwise the value must parse as a valid URI and use http(s).
+func validateHubURL(hubURL string) error {
+	if hubURL == "" {
+		return nil
+	}
+	if _, err := url.ParseRequestURI(hubURL); err != nil {
+		return fmt.Errorf("coord.Config: HubURL: %w", err)
+	}
+	if !strings.HasPrefix(hubURL, "http://") &&
+		!strings.HasPrefix(hubURL, "https://") {
+		return fmt.Errorf(
+			"coord.Config: HubURL: must start with http:// or https://",
+		)
 	}
 	return nil
 }
