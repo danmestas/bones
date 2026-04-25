@@ -194,22 +194,20 @@ func TestCheckout_AfterCommit_WithAbsolutePaths(t *testing.T) {
 	}
 }
 
-// TestCommit_ForkOnConflict_ChatNotify proves ADR 0010 §4-5 end-to-end
-// against a shared Fossil repo. Flow:
+// Behavior change: Phase 2 of hub-leaf-orchestrator replaced fork-branch
+// with pull+update+retry. ErrConflictForked now surfaces only on
+// double-fork and never carries a Branch. The previous
+// TestCommit_ForkOnConflict_ChatNotify exercised fork-branch creation
+// and the chat notify on `task-<id>`; both behaviors are gone.
+// Coverage of the new contract lives in commit_retry_test.go and is
+// gated until Phase 3 publisher/subscriber lands.
 //
-//  1. Agent A commits on /src/a.go. A's Manager had no checkout
-//     attached yet, so fork detection is bypassed (ADR 0010 §4);
-//     the commit lands on trunk and A's checkout attaches.
-//  2. Agent B commits on /src/b.go. B is also fresh (checkout nil),
-//     so its commit advances trunk past A's tip.
-//  3. A commits AGAIN on /src/a.go — A's checkout still references
-//     A's first-commit tip, but shared-repo trunk has since moved
-//     forward to B's commit. A.WouldFork() reports true, the commit
-//     is placed on the fork branch per Invariant 22, and the error
-//     satisfies errors.Is(err, ErrConflictForked) and
-//     errors.As(*ConflictForkedError). A chat subscription on A's
-//     task thread observes the fork notify body.
-func TestCommit_ForkOnConflict_ChatNotify(t *testing.T) {
+// TestCommit_ForkUnrecoverable_NoHub asserts the local-only fallback:
+// when HubURL is empty and WouldFork fires, Commit returns
+// ErrConflictForked with empty Branch and empty Rev and no commit
+// lands. This holds today against a shared local repo, so it is not
+// gated like the integration tests.
+func TestCommit_ForkUnrecoverable_NoHub(t *testing.T) {
 	nc, _ := natstest.NewJetStreamServer(t)
 	dir := t.TempDir()
 	sharedRepo := filepath.Join(dir, "shared-code.fossil")
@@ -221,7 +219,7 @@ func TestCommit_ForkOnConflict_ChatNotify(t *testing.T) {
 	)
 	ctx := context.Background()
 
-	// Step 1: A opens/claims/commits on pathA.
+	// Step 1: A's first commit (no prior checkout — WouldFork=false).
 	pathA := "/src/a.go"
 	idA := openClaim(t, agentA, "a task", pathA)
 	if _, err := agentA.Commit(ctx, idA, "a initial", []File{
@@ -230,9 +228,7 @@ func TestCommit_ForkOnConflict_ChatNotify(t *testing.T) {
 		t.Fatalf("agentA.Commit #1: %v", err)
 	}
 
-	// Step 2: B opens/claims/commits on pathB. B's checkout is nil
-	// at first commit (WouldFork=false by ADR 0010 §4); B's commit
-	// advances trunk on the shared repo.
+	// Step 2: B's first commit advances shared trunk past A's tip.
 	pathB := "/src/b.go"
 	idB := openClaim(t, agentB, "b task", pathB)
 	if _, err := agentB.Commit(ctx, idB, "b initial", []File{
@@ -241,19 +237,10 @@ func TestCommit_ForkOnConflict_ChatNotify(t *testing.T) {
 		t.Fatalf("agentB.Commit: %v", err)
 	}
 
-	// Step 3: Subscribe to A's task thread BEFORE the forked commit.
-	threadA := "task-" + string(idA)
-	events, closeSub, err := agentA.Subscribe(ctx, threadA)
-	if err != nil {
-		t.Fatalf("agentA.Subscribe: %v", err)
-	}
-	t.Cleanup(func() { _ = closeSub() })
-
-	// Step 4: A commits again on pathA. A's checkout is at A's first
-	// commit, but the shared-repo trunk has since been advanced by B.
-	// This is a sibling-leaf situation from A's view → WouldFork=true
-	// → fork fires with ConflictForkedError.
-	_, err = agentA.Commit(ctx, idA, "a second", []File{
+	// Step 3: A's second commit sees a sibling leaf from its
+	// post-first-commit checkout. With HubURL empty, the retry path
+	// is skipped and the fork is treated as unrecoverable.
+	_, err := agentA.Commit(ctx, idA, "a second", []File{
 		{Path: pathA, Content: []byte("a2\n")},
 	})
 	if err == nil {
@@ -266,39 +253,11 @@ func TestCommit_ForkOnConflict_ChatNotify(t *testing.T) {
 	if !errors.As(err, &cfe) {
 		t.Fatalf("agentA.Commit #2: err = %v, want errors.As *ConflictForkedError", err)
 	}
-	if cfe.Rev == "" {
-		t.Fatalf("ConflictForkedError: Rev is empty")
+	if cfe.Branch != "" {
+		t.Fatalf("ConflictForkedError.Branch = %q, want empty", cfe.Branch)
 	}
-	// Per Invariant 22: branch = <agent>-<task>-<unix_nano>
-	wantPrefix := "fork-agent-a-" + string(idA) + "-"
-	if !strings.HasPrefix(cfe.Branch, wantPrefix) {
-		t.Fatalf(
-			"ConflictForkedError.Branch = %q, want prefix %q",
-			cfe.Branch, wantPrefix,
-		)
-	}
-
-	// Step 5: wait for the chat notify on task-<idA>.
-	deadline := time.NewTimer(3 * time.Second)
-	defer deadline.Stop()
-	want := "fork: agent=fork-agent-a branch=" + cfe.Branch +
-		" rev=" + cfe.Rev + " path=" + pathA
-	for {
-		select {
-		case evt := <-events:
-			cm, ok := evt.(ChatMessage)
-			if !ok {
-				continue
-			}
-			if cm.Body() == want {
-				return
-			}
-		case <-deadline.C:
-			t.Fatalf(
-				"timed out waiting for fork notify; want body %q",
-				want,
-			)
-		}
+	if cfe.Rev != "" {
+		t.Fatalf("ConflictForkedError.Rev = %q, want empty (no commit landed)", cfe.Rev)
 	}
 }
 
