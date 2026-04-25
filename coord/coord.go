@@ -111,7 +111,7 @@ func openSubstrate(
 	if err != nil {
 		return nil, fmt.Errorf("coord.Open: nats connect: %w", err)
 	}
-	s := &substrate{nc: nc}
+	s := &substrate{nc: nc, hubURL: cfg.HubURL}
 	if s.holds, err = holds.Open(ctx, nc, holds.Config{
 		Bucket:     holdsBucket,
 		HoldTTLMax: cfg.HoldTTLMax,
