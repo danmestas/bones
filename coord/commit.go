@@ -89,26 +89,9 @@ func (c *Coord) Commit(
 	)
 	defer span.End()
 
-	fork, err := c.sub.fossil.WouldFork(ctx)
+	fork, retried, err := c.resolveForkBeforeCommit(ctx)
 	if err != nil {
-		return "", fmt.Errorf("coord.Commit: %w", err)
-	}
-	retried := false
-	if fork && c.cfg.HubURL != "" {
-		retried = true
-		if err := c.sub.fossil.Pull(ctx, c.cfg.HubURL); err != nil {
-			return "", fmt.Errorf("coord.Commit: pull on fork: %w", err)
-		}
-		if err := c.sub.fossil.CreateCheckout(ctx); err != nil {
-			return "", fmt.Errorf("coord.Commit: checkout on fork: %w", err)
-		}
-		if err := c.sub.fossil.Update(ctx); err != nil {
-			return "", fmt.Errorf("coord.Commit: update on fork: %w", err)
-		}
-		fork, err = c.sub.fossil.WouldFork(ctx)
-		if err != nil {
-			return "", fmt.Errorf("coord.Commit: post-update wouldfork: %w", err)
-		}
+		return "", err
 	}
 	span.SetAttributes(
 		attribute.Bool("commit.fork_retried", retried),
@@ -132,6 +115,46 @@ func (c *Coord) Commit(
 		}
 	}
 	return RevID(uuid), nil
+}
+
+// resolveForkBeforeCommit performs the at-most-one-retry fork-recovery
+// dance: WouldFork → (if forked and HubURL set) Pull+Checkout+Update →
+// re-check WouldFork. Returns (forkAfterRetry, retried, error). When
+// HubURL is empty or no fork is detected, retried=false and the first
+// fork value is returned unchanged. All errors are wrapped with the
+// "coord.Commit: ..." prefix so callers can return them directly.
+func (c *Coord) resolveForkBeforeCommit(
+	ctx context.Context,
+) (bool, bool, error) {
+	fork, err := c.sub.fossil.WouldFork(ctx)
+	if err != nil {
+		return false, false, fmt.Errorf("coord.Commit: %w", err)
+	}
+	if !fork || c.cfg.HubURL == "" {
+		return fork, false, nil
+	}
+	if err := c.sub.fossil.Pull(ctx, c.cfg.HubURL); err != nil {
+		return false, true, fmt.Errorf(
+			"coord.Commit: pull on fork: %w", err,
+		)
+	}
+	if err := c.sub.fossil.CreateCheckout(ctx); err != nil {
+		return false, true, fmt.Errorf(
+			"coord.Commit: checkout on fork: %w", err,
+		)
+	}
+	if err := c.sub.fossil.Update(ctx); err != nil {
+		return false, true, fmt.Errorf(
+			"coord.Commit: update on fork: %w", err,
+		)
+	}
+	fork, err = c.sub.fossil.WouldFork(ctx)
+	if err != nil {
+		return false, true, fmt.Errorf(
+			"coord.Commit: post-update wouldfork: %w", err,
+		)
+	}
+	return fork, true, nil
 }
 
 // checkHolds enforces Invariant 20: every file in files must be held by
