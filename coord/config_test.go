@@ -180,3 +180,23 @@ func TestConfigValidate_Invalid(t *testing.T) {
 		})
 	}
 }
+
+func TestConfig_HubURLOptional(t *testing.T) {
+	cfg := validConfig(t)
+	cfg.HubURL = ""
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("empty HubURL should validate (broadcast disabled), got: %v", err)
+	}
+	cfg.HubURL = "http://127.0.0.1:8765/"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("non-empty HubURL should validate, got: %v", err)
+	}
+}
+
+func TestConfig_HubURLMustBeURLOrEmpty(t *testing.T) {
+	cfg := validConfig(t)
+	cfg.HubURL = "not a url"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected Validate to reject non-URL HubURL, got nil")
+	}
+}

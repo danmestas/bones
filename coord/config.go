@@ -2,6 +2,8 @@ package coord
 
 import (
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -92,6 +94,18 @@ type Config struct {
 	// working-copy checkouts live per ADR 0010. Coord writes to
 	// CheckoutRoot/<AgentID>/. In tests, pass t.TempDir().
 	CheckoutRoot string
+
+	// HubURL is the http base URL of the orchestrator's fossil server.
+	// When non-empty, coord enables hub-pull on tip.changed broadcasts
+	// and pull+update+retry on commit fork detection. When empty, coord
+	// behaves as in v0.x — local-only, no hub interaction.
+	HubURL string
+
+	// EnableTipBroadcast, when true and HubURL is non-empty, makes
+	// coord.Commit publish a tip.changed message on NATS after every
+	// successful commit, and makes coord.Open subscribe to it. Default
+	// (false) preserves the v0.x no-broadcast behavior.
+	EnableTipBroadcast bool
 }
 
 // Validate checks every Config field against its documented bounds and
@@ -160,6 +174,14 @@ func (c Config) Validate() error {
 		return fmt.Errorf(
 			"coord.Config: CheckoutRoot: must be non-empty",
 		)
+	}
+	if c.HubURL != "" {
+		if _, err := url.Parse(c.HubURL); err != nil {
+			return fmt.Errorf("coord.Config: HubURL: %w", err)
+		}
+		if !strings.HasPrefix(c.HubURL, "http://") && !strings.HasPrefix(c.HubURL, "https://") {
+			return fmt.Errorf("coord.Config: HubURL: must start with http:// or https://")
+		}
 	}
 	return nil
 }
