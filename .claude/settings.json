@@ -21,6 +21,23 @@
           {
             "command": "agent-tasks autoclaim --idle=true",
             "type": "command"
+          },
+          {
+            "command": "bash .orchestrator/scripts/hub-bootstrap.sh",
+            "type": "command",
+            "timeout": 10
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "bash .orchestrator/scripts/hub-shutdown.sh",
+            "type": "command",
+            "timeout": 10
           }
         ],
         "matcher": ""
