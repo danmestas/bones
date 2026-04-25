@@ -8,6 +8,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
 )
 
@@ -107,15 +108,50 @@ func (s *tipSubscriber) Close() {
 
 func (s *tipSubscriber) handle(ctx context.Context, m *nats.Msg) {
 	defer func() { _ = m.Ack() }()
+	// Extract upstream trace context from headers (publishTipChanged
+	// injects on the publish side per ADR 0018).
+	ctx = otel.GetTextMapPropagator().Extract(
+		ctx, propagation.HeaderCarrier(m.Header),
+	)
+	tracer := otel.Tracer("github.com/danmestas/agent-infra/coord")
+	ctx, span := tracer.Start(ctx, "coord.SyncOnBroadcast")
+	defer span.End()
+
 	var p tipChangedPayload
 	if err := json.Unmarshal(m.Data, &p); err != nil {
+		span.SetAttributes(attribute.String("error", err.Error()))
 		return
 	}
+	span.SetAttributes(attribute.String("manifest.hash", p.ManifestHash))
+
 	local, err := s.localFn(ctx)
-	if err != nil || local == p.ManifestHash {
+	if err != nil {
+		span.SetAttributes(
+			attribute.Bool("pull.success", false),
+			attribute.Bool("pull.skipped_idempotent", false),
+			attribute.String("error", err.Error()),
+		)
 		return
 	}
-	_ = s.pullFn(ctx, s.hubURL)
+	if local == p.ManifestHash {
+		span.SetAttributes(
+			attribute.Bool("pull.success", false),
+			attribute.Bool("pull.skipped_idempotent", true),
+		)
+		return
+	}
+	if err := s.pullFn(ctx, s.hubURL); err != nil {
+		span.SetAttributes(
+			attribute.Bool("pull.success", false),
+			attribute.Bool("pull.skipped_idempotent", false),
+			attribute.String("error", err.Error()),
+		)
+		return
+	}
+	span.SetAttributes(
+		attribute.Bool("pull.success", true),
+		attribute.Bool("pull.skipped_idempotent", false),
+	)
 }
 
 // nowNano is overridable in tests via build tags; default is time.Now.
