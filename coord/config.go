@@ -176,7 +176,7 @@ func (c Config) Validate() error {
 		)
 	}
 	if c.HubURL != "" {
-		if _, err := url.Parse(c.HubURL); err != nil {
+		if _, err := url.ParseRequestURI(c.HubURL); err != nil {
 			return fmt.Errorf("coord.Config: HubURL: %w", err)
 		}
 		if !strings.HasPrefix(c.HubURL, "http://") && !strings.HasPrefix(c.HubURL, "https://") {
