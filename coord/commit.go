@@ -124,6 +124,13 @@ func (c *Coord) Commit(
 		return "", fmt.Errorf("coord.Commit: %w", err)
 	}
 	_ = c.sub.fossil.CreateCheckout(ctx)
+	if c.cfg.EnableTipBroadcast && c.sub.nc != nil {
+		if err := publishTipChanged(ctx, c.sub.nc, uuid); err != nil {
+			// Non-fatal: commit landed; broadcast is best-effort.
+			// Subscribers will pick up the change on their next pull.
+			span.RecordError(err)
+		}
+	}
 	return RevID(uuid), nil
 }
 
