@@ -68,6 +68,8 @@ Fossil-native sync over HTTP, NATS for "tip changed" notifications. Reuses Fossi
 5. Retries `fossil commit` once.
 6. On success: publishes `tip.changed`. On second fork: surfaces `coord.ErrConflictForked` (planner partitioning failed).
 
+**Retry count is 1 by design.** A second `"would fork"` after a fresh `pull` + `update` means another agent committed to the same parent during the retry window — possible only if two slots were assigned overlapping files. That's a planner failure, unrecoverable without replanning, so coord stops retrying and surfaces immediately.
+
 ### Eagerness policy
 
 - **Pull eager:** every `tip.changed` broadcast triggers `fossil pull` (cheap, repo-only).
@@ -76,14 +78,10 @@ Fossil-native sync over HTTP, NATS for "tip changed" notifications. Reuses Fossi
 ### `tip.changed` NATS payload
 
 ```json
-{
-  "manifest_hash": "ab12cd…",
-  "agent_id": "trial-2e87623b",
-  "branch": "trunk",
-  "files_touched": ["pkg/foo/bar.go"],
-  "ts": "2026-04-25T17:33:09Z"
-}
+{ "manifest_hash": "ab12cd…" }
 ```
+
+The payload carries only what subscribers need to decide whether to pull — nothing else. Identity (`agent_id`, `branch`, `ts`) and trace context travel in the OTel propagation headers already wired through NATS per ADR 0018, keeping the coordination message free of telemetry concerns.
 
 Published by the committing leaf *after* `fossil commit` returns success.
 
@@ -128,7 +126,7 @@ Hub `.fossil` retained between sessions; commit history accumulates. Last-PR mar
 
 `.claude/skills/orchestrator/SKILL.md`:
 
-1. **Plan validation** — parse Markdown, extract slots, verify directory disjointness, verify task `Files:` belong to slot directory.
+1. **Plan validation** — parse Markdown, extract slots, **reject plans missing `[slot: name]` on any task**, verify directory disjointness, verify task `Files:` belong to slot directory.
 2. **Hub bootstrap** (session start) — `fossil new` if needed, start `fossil server` in background, start NATS.
 3. **Subagent dispatch** — clone leaf, open worktree, spawn via Task tool with env (`LEAF_REPO`, `LEAF_WT`, `HUB_URL`, `NATS_URL`, `AGENT_ID`, `SLOT_ID`) and instruction to load the `subagent` skill.
 4. **Monitoring** — subscribe `tip.changed` and coord `task.closed` / `task.failed`.
@@ -153,7 +151,7 @@ Tasks declared with explicit slot annotation:
 **Files:** libfossil/pull.go, libfossil/update.go
 ```
 
-If `[slot: …]` is missing, orchestrator infers from common path prefix and warns.
+The `[slot: name]` annotation is **required on every task**. Plans missing the annotation are rejected at validation — the orchestrator does not infer slots from file paths. One contract, one mechanism.
 
 ## Concrete deliverables (v1)
 
