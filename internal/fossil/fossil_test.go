@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -711,5 +714,116 @@ func TestCommit_WithBranch_PlacesOnBranch(t *testing.T) {
 	}
 	if tipRID == 0 {
 		t.Fatalf("BranchTip %q: got 0 rid", branch)
+	}
+}
+
+// TestManager_Pull_Roundtrip stands up an in-process libfossil HTTP
+// server backed by a freshly-created repo, then pulls from a leaf
+// Manager opened against an empty repo. The pull is a no-op clone
+// (server has no checkins beyond the initial /create) but exercises the
+// full xfer roundtrip end-to-end.
+func TestManager_Pull_Roundtrip(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	srvPath := filepath.Join(dir, "server.fossil")
+	srvRepo, err := libfossil.Create(srvPath, libfossil.CreateOpts{})
+	if err != nil {
+		t.Fatalf("libfossil.Create: %v", err)
+	}
+	defer srvRepo.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		resp, err := srvRepo.HandleSync(r.Context(), body)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		_, _ = w.Write(resp)
+	}))
+	defer srv.Close()
+
+	leafPath := filepath.Join(dir, "leaf.fossil")
+	mgr, err := Open(ctx, Config{
+		AgentID: "leaf-1", RepoPath: leafPath, CheckoutRoot: filepath.Join(dir, "wt"),
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer mgr.Close()
+	if err := mgr.Pull(ctx, srv.URL); err != nil {
+		t.Fatalf("Manager.Pull: %v", err)
+	}
+}
+
+// TestManager_Pull_AfterCloseErrors proves Pull returns ErrClosed when
+// the Manager has already been closed.
+func TestManager_Pull_AfterCloseErrors(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	mgr, err := Open(ctx, Config{
+		AgentID: "x", RepoPath: filepath.Join(dir, "r.fossil"),
+		CheckoutRoot: filepath.Join(dir, "wt"),
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	mgr.Close()
+	if err := mgr.Pull(ctx, "http://127.0.0.1:1/x"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("expected ErrClosed, got %v", err)
+	}
+}
+
+// TestManager_Tip_EmptyRepoReturnsEmpty confirms a fresh repo with no
+// checkins returns "" rather than an error or a synthetic UUID.
+func TestManager_Tip_EmptyRepoReturnsEmpty(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	mgr, err := Open(ctx, Config{
+		AgentID: "tip-empty", RepoPath: filepath.Join(dir, "r.fossil"),
+		CheckoutRoot: filepath.Join(dir, "wt"),
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer mgr.Close()
+	uuid, err := mgr.Tip(ctx)
+	if err != nil {
+		t.Fatalf("Tip: %v", err)
+	}
+	if uuid != "" {
+		t.Fatalf("fresh-repo Tip: got %q, want empty string", uuid)
+	}
+}
+
+// TestManager_Tip_AfterCommitReturnsUUID confirms Tip returns the
+// 40-char SHA-1 manifest UUID after a commit.
+func TestManager_Tip_AfterCommitReturnsUUID(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	mgr, err := Open(ctx, Config{
+		AgentID: "tip-after", RepoPath: filepath.Join(dir, "r.fossil"),
+		CheckoutRoot: filepath.Join(dir, "wt"),
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer mgr.Close()
+	// Commit before CreateCheckout: CreateCheckout requires a tip
+	// commit, but Commit does not require a checkout (per package
+	// docstring). Tip just reads repo state, so the checkout is
+	// irrelevant here.
+	if _, err := mgr.Commit(ctx, "seed", []File{{Path: "/a.txt", Content: []byte("a")}}, ""); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	uuid, err := mgr.Tip(ctx)
+	if err != nil {
+		t.Fatalf("Tip: %v", err)
+	}
+	if len(uuid) < 40 {
+		t.Fatalf("Tip after commit: got %q (len=%d), want >=40-char SHA", uuid, len(uuid))
 	}
 }
