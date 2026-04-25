@@ -259,8 +259,61 @@ func (m *Manager) Pull(ctx context.Context, hubURL string) error {
 	if m.done.Load() {
 		return ErrClosed
 	}
-	if _, err := m.repo.Pull(ctx, hubURL, libfossil.PullOpts{}); err != nil {
+	// libfossil.PullOpts has no ServerCode field, so we drop down to
+	// Sync directly to set ServerCode=AgentID. With both ServerCode and
+	// ProjectCode empty, libfossil v0.4.0's xfer encoder emits
+	// `pull  \n` and the server rejects the card as 0 args (encoder
+	// uses strings.Fields which collapses consecutive spaces). See
+	// Push for the matching workaround.
+	transport := libfossil.NewHTTPTransport(hubURL)
+	if _, err := m.repo.Sync(ctx, transport, libfossil.SyncOpts{
+		Push:       false,
+		Pull:       true,
+		ServerCode: m.cfg.AgentID,
+	}); err != nil {
 		return fmt.Errorf("fossil.Pull: %w", err)
+	}
+	return nil
+}
+
+// Push sends this Manager's local commits to the hub at hubURL. Repo-only
+// — never touches the working tree. Idempotent on a hub already at this
+// leaf's tip.
+//
+// libfossil v0.4.0 lacks a public Repo.Push URL-convenience wrapper
+// symmetric with Repo.Pull, so we reach into Repo.Sync directly through
+// libfossil.NewHTTPTransport(hubURL). This keeps internal/fossil as the
+// only place transport-construction details live; coord callers stay
+// URL-only.
+//
+// SyncOpts.Pull is set to true alongside Push because libfossil v0.4.0's
+// push protocol completes in a single round when Pull=false, before the
+// server returns the gimme cards that ask the client to deliver its
+// announced igot blobs. With Pull=true the client loops a second round
+// to satisfy the gimmes, which is the actual file-transfer round. From
+// the leaf's view, "the hub is ahead" never happens (the leaf is the
+// source of truth for its own commits) so the receive side is a no-op
+// — Pull=true here is purely to drive the multi-round push loop.
+//
+// ServerCode is set to cfg.AgentID because libfossil v0.4.0's xfer
+// encoder writes `push <serverCode> <projectCode>\n`; with both empty,
+// the consecutive spaces collapse under strings.Fields and the server
+// rejects the card as `push requires 1-2 args, got 0`. Any non-empty
+// ServerCode satisfies the encoder; AgentID is a stable per-leaf ID
+// suitable for the role.
+func (m *Manager) Push(ctx context.Context, hubURL string) error {
+	assert.NotNil(ctx, "fossil.Push: ctx is nil")
+	assert.NotEmpty(hubURL, "fossil.Push: hubURL is empty")
+	if m.done.Load() {
+		return ErrClosed
+	}
+	transport := libfossil.NewHTTPTransport(hubURL)
+	if _, err := m.repo.Sync(ctx, transport, libfossil.SyncOpts{
+		Push:       true,
+		Pull:       true,
+		ServerCode: m.cfg.AgentID,
+	}); err != nil {
+		return fmt.Errorf("fossil.Push: %w", err)
 	}
 	return nil
 }

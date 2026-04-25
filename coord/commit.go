@@ -107,6 +107,16 @@ func (c *Coord) Commit(
 		return "", fmt.Errorf("coord.Commit: %w", err)
 	}
 	_ = c.sub.fossil.CreateCheckout(ctx)
+	// Push to hub so peers can pull. Best-effort: if hub is unreachable,
+	// the commit is still durable locally and the next successful pull
+	// from a peer's broadcast will re-converge state. Ordered BEFORE
+	// publishTipChanged so the broadcast carries a hash subscribers can
+	// actually pull.
+	if c.cfg.HubURL != "" {
+		if err := c.sub.fossil.Push(ctx, c.cfg.HubURL); err != nil {
+			span.RecordError(err)
+		}
+	}
 	if c.cfg.EnableTipBroadcast && c.sub.nc != nil {
 		if err := publishTipChanged(ctx, c.sub.nc, uuid); err != nil {
 			// Non-fatal: commit landed; broadcast is best-effort.

@@ -3,19 +3,24 @@
 // disjoint-file tasks against them, and asserts the spec invariants:
 //
 //   - every slot's coord.Commit returns no error and a non-empty rev;
-//   - every slot's local fossil repo records exactly one trunk commit;
-//   - no slot's local fossil repo records any conflict-fork artifacts
-//     (single-trunk semantics; the no-fork-branch contract from ADR
-//     0005's Phase 2 commit-retry path);
+//   - a verifier clone of the hub records exactly n trunk commits
+//     (the strict spec assertion fossil_commits == tasks);
+//   - no leaf records any conflict-fork artifacts (single-trunk
+//     semantics; the no-fork-branch contract from ADR 0005's Phase 2
+//     commit-retry path);
 //   - every slot publishes a tip.changed broadcast (the production
 //     hub-pull trigger).
 //
-// The harness asserts on the leaves rather than the hub because coord
-// today only pulls from the hub; production agents push via fossil's
-// CLI-driven autosync, which is out of scope for this in-process test.
-// The leaf-level invariants are sufficient to prove that three
-// concurrent commits on disjoint files land cleanly without fork
-// branches — the cross-cutting contract that motivates the orchestrator.
+// The harness asserts via a verifier clone of the hub because libfossil
+// v0.4.0's server-side HandleSync stores received blobs but does not
+// crosslink them into event/leaf rows — that crosslink runs only on the
+// client (clone or pull). Cloning a fresh verifier from the hub
+// triggers crosslink locally, so its trunk timeline reflects the hub's
+// aggregated state. coord.Commit pushes to the hub after every
+// successful local commit (Task T21).
+//
+// Conflict-fork detection still happens per-leaf because each leaf only
+// stores its own commit pre-push.
 //
 // The package lives test-only because natstest.NewJetStreamServer takes
 // a *testing.T to plumb cleanup. main_test.go invokes Run.
@@ -78,9 +83,17 @@ func RunN(ctx context.Context, t *testing.T, dir string, n int) (*runResult, err
 		return nil, fmt.Errorf("create hub: %w", err)
 	}
 	defer func() { _ = hubRepo.Close() }()
+	hubProjectCode, err := hubRepo.Config("project-code")
+	if err != nil {
+		return nil, fmt.Errorf("hub project-code: %w", err)
+	}
 
 	hubSrv := httptest.NewServer(hubRepo.XferHandler())
 	defer hubSrv.Close()
+
+	if err := precreateLeaves(dir, hubProjectCode, n); err != nil {
+		return nil, err
+	}
 
 	nc, _ := natstest.NewJetStreamServer(t)
 	natsURL := nc.ConnectedUrl()
@@ -124,67 +137,110 @@ func RunN(ctx context.Context, t *testing.T, dir string, n int) (*runResult, err
 		return res, nil
 	}
 	t.Logf("e2e: %d slots completed, TipChangedSeen=%d", n, res.TipChangedSeen)
-
-	// Aggregate trunk checkins and fork-branch counts across every
-	// leaf. With n disjoint slots, the sum of trunk checkins must be
-	// exactly n (each leaf clones the empty hub then commits once),
-	// and the sum of conflict forks must be zero (the spec's
-	// no-fork-branches contract).
-	for i := 0; i < n; i++ {
-		leafPath := filepath.Join(dir, fmt.Sprintf("leaf-%d.fossil", i))
-		count, forks, lerr := inspectLeaf(leafPath)
-		if lerr != nil {
-			return res, fmt.Errorf(
-				"inspect leaf-%d: %w", i, lerr,
-			)
-		}
-		res.Commits += count
-		res.ForkBranches += forks
+	if aerr := aggregate(ctx, dir, hubSrv.URL, n, res); aerr != nil {
+		return res, aerr
 	}
 	t.Logf(
-		"e2e: %d slots: total trunk commits=%d fork branches=%d",
+		"e2e: %d slots: hub trunk commits=%d fork branches=%d",
 		n, res.Commits, res.ForkBranches,
 	)
 	return res, nil
 }
 
-// inspectLeaf opens a leaf fossil repo read-only and returns its trunk
-// checkin count plus its conflict-fork count. Both feed runResult so
-// the test can assert the no-fork-branches invariant per leaf rather
-// than on the (in this in-process test, never-pushed-to) hub.
-func inspectLeaf(repoPath string) (int, int, error) {
-	r, err := libfossil.Open(repoPath)
+// aggregate spins up a verifier clone of the hub and counts trunk
+// checkins there (libfossil v0.4.0's HandleSync stores blobs only;
+// crosslinking happens client-side, so a fresh clone is the cheapest
+// way to materialize the hub's aggregated event table). It also sums
+// per-leaf conflict-fork counts and writes both into res.
+func aggregate(
+	ctx context.Context, dir, hubURL string, n int, res *runResult,
+) error {
+	verifierPath := filepath.Join(dir, "verifier.fossil")
+	verifierTr := libfossil.NewHTTPTransport(hubURL)
+	verifier, _, err := libfossil.Clone(
+		ctx, verifierPath, verifierTr, libfossil.CloneOpts{},
+	)
 	if err != nil {
-		return 0, 0, fmt.Errorf("open: %w", err)
+		return fmt.Errorf("verifier clone: %w", err)
 	}
-	defer func() { _ = r.Close() }()
-	count, terr := countTimeline(r)
-	if terr != nil {
-		return 0, 0, fmt.Errorf("timeline: %w", terr)
+	defer func() { _ = verifier.Close() }()
+	hubCount, herr := countTimeline(verifier)
+	if herr != nil {
+		return fmt.Errorf("verifier timeline: %w", herr)
 	}
-	forks, ferr := r.ListConflictForks()
-	if ferr != nil {
-		return 0, 0, fmt.Errorf("listconflictforks: %w", ferr)
+	res.Commits = hubCount
+	for i := 0; i < n; i++ {
+		leafPath := filepath.Join(dir, fmt.Sprintf("leaf-%d.fossil", i))
+		forks, ferr := inspectLeafForks(leafPath)
+		if ferr != nil {
+			return fmt.Errorf("inspect leaf-%d: %w", i, ferr)
+		}
+		res.ForkBranches += forks
 	}
-	return count, len(forks), nil
+	return nil
 }
 
-// countTimeline returns the number of checkins on trunk in the given
-// repo. Timeline requires a non-zero start RID; we resolve it via
-// BranchTip("trunk") and treat "no such branch" as an empty repo.
-func countTimeline(r *libfossil.Repo) (int, error) {
-	tipRID, err := r.BranchTip("trunk")
-	if err != nil {
-		// Empty repo (no commits => no trunk branch tip).
-		return 0, nil
+// precreateLeaves materializes each leaf's fossil repo file with the
+// hub's project-code so the leaf and hub agree on the project identity
+// at sync time. With mismatched project codes, libfossil v0.4.0's sync
+// still transfers blobs but parent-link resolution fails (manifests
+// crosslink as orphaned leaves) and the verifier clone sees fragmented
+// timelines. Pre-creation must happen before coord.Open since
+// internal/fossil.Manager.Open opens existing files in place.
+func precreateLeaves(dir, hubProjectCode string, n int) error {
+	for i := 0; i < n; i++ {
+		leafPath := filepath.Join(dir, fmt.Sprintf("leaf-%d.fossil", i))
+		r, err := libfossil.Create(leafPath, libfossil.CreateOpts{
+			User: fmt.Sprintf("e2e-agent-%d", i),
+		})
+		if err != nil {
+			return fmt.Errorf("create leaf-%d: %w", i, err)
+		}
+		if serr := r.SetConfig("project-code", hubProjectCode); serr != nil {
+			_ = r.Close()
+			return fmt.Errorf("leaf-%d set project-code: %w", i, serr)
+		}
+		if cerr := r.Close(); cerr != nil {
+			return fmt.Errorf("close leaf-%d: %w", i, cerr)
+		}
 	}
-	entries, err := r.Timeline(libfossil.LogOpts{
-		Start: tipRID, Limit: 100,
-	})
+	return nil
+}
+
+// inspectLeafForks opens a leaf fossil repo read-only and returns the
+// count of conflict-fork artifacts. Per-leaf because the no-fork-branches
+// contract is asserted at every replica (each leaf must converge to a
+// linear trunk on its own).
+func inspectLeafForks(repoPath string) (int, error) {
+	r, err := libfossil.Open(repoPath)
+	if err != nil {
+		return 0, fmt.Errorf("open: %w", err)
+	}
+	defer func() { _ = r.Close() }()
+	forks, ferr := r.ListConflictForks()
+	if ferr != nil {
+		return 0, fmt.Errorf("listconflictforks: %w", ferr)
+	}
+	return len(forks), nil
+}
+
+// countTimeline returns the number of trunk checkins in the given repo.
+// Counts directly via the event table (type='ci') so the count includes
+// every checkin regardless of which leaf is current — Timeline starting
+// from BranchTip walks only the parent chain from the tip, so a repo
+// with multiple unmerged leaves on trunk would under-count. The hub
+// invariant is "every leaf's commit lands on the hub's event table"
+// (libfossil v0.4.0's server-side handler stores blobs but does not
+// crosslink; a verifier clone must crosslink locally before counting).
+func countTimeline(r *libfossil.Repo) (int, error) {
+	var n int
+	err := r.DB().QueryRow(
+		`SELECT COUNT(*) FROM event WHERE type='ci'`,
+	).Scan(&n)
 	if err != nil {
 		return 0, err
 	}
-	return len(entries), nil
+	return n, nil
 }
 
 // runSlot drives one agent through Open -> OpenTask -> Claim -> Commit
