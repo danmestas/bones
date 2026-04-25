@@ -3,7 +3,6 @@ package coord
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -101,74 +100,14 @@ func TestMerge_BranchNotFound(t *testing.T) {
 // survived the merge; the trunk side is implicit in the merge
 // succeeding (primary parent = trunk tip).
 func TestMerge_ForkThenMergeBack(t *testing.T) {
-	nc, _ := natstest.NewJetStreamServer(t)
-	dir := t.TempDir()
-	sharedRepo := filepath.Join(dir, "shared-code.fossil")
-	agentA := newCoordWithCodeRepo(
-		t, nc.ConnectedUrl(), "merge-agent-a", sharedRepo,
-	)
-	agentB := newCoordWithCodeRepo(
-		t, nc.ConnectedUrl(), "merge-agent-b", sharedRepo,
-	)
-	ctx := context.Background()
-
-	pathA := "/src/a.go"
-	pathB := "/src/b.go"
-	idA := openClaimPaths(t, agentA, "a task", pathA, pathB)
-	revA1, err := agentA.Commit(ctx, idA, "a initial", []File{
-		{Path: pathA, Content: []byte("a1\n")},
-		{Path: pathB, Content: []byte("b1\n")},
-	})
-	if err != nil {
-		t.Fatalf("agentA.Commit #1: %v", err)
-	}
-
-	pathC := "/src/c.go"
-	idB := openClaim(t, agentB, "b task", pathC)
-	revB, err := agentB.Commit(ctx, idB, "b initial", []File{
-		{Path: pathC, Content: []byte("c1\n")},
-	})
-	if err != nil {
-		t.Fatalf("agentB.Commit: %v", err)
-	}
-
-	// A's second commit forks: A's checkout still points at revA1 but
-	// trunk has advanced to revB on the shared repo.
-	_, err = agentA.Commit(ctx, idA, "a second", []File{
-		{Path: pathA, Content: []byte("a2\n")},
-		{Path: pathB, Content: []byte("b1\n")},
-	})
-	if err == nil {
-		t.Fatalf("agentA.Commit #2: expected ConflictForkedError, got nil")
-	}
-	var cfe *ConflictForkedError
-	if !errors.As(err, &cfe) {
-		t.Fatalf("agentA.Commit #2: err = %v, want *ConflictForkedError", err)
-	}
-	forkBranch := cfe.Branch
-	forkRev := RevID(cfe.Rev)
-
-	mergeRev, err := agentA.Merge(ctx, forkBranch, "trunk", "merge fork back")
-	if err != nil {
-		t.Fatalf("Merge: %v", err)
-	}
-	if mergeRev == "" {
-		t.Fatalf("Merge: empty RevID")
-	}
-	if mergeRev == RevID(revA1) || mergeRev == RevID(revB) || mergeRev == forkRev {
-		t.Fatalf(
-			"Merge: rev %s collides with an input (a1=%s b=%s fork=%s)",
-			mergeRev, revA1, revB, forkRev,
-		)
-	}
-
-	gotA, err := agentA.OpenFile(ctx, mergeRev, pathA)
-	if err != nil {
-		t.Fatalf("OpenFile %s: %v", pathA, err)
-	}
-	if string(gotA) != "a2\n" {
-		t.Fatalf("OpenFile %s = %q, want %q", pathA, gotA, "a2\n")
-	}
+	t.Skip(`fork-branch creation path was removed in the hub-leaf orchestrator
+Phase 2 work (see commit f7b3b8c). coord.Commit now retries on WouldFork
+via pull+update+retry-once and never lands on a fork branch — there is
+no fork branch at the coord layer to merge back. The libfossil-level
+branch-to-branch merge path is still tested by the upstream libfossil
+repo_merge_test.go and by internal/fossil merge tests; coord.Merge's
+plumbing is exercised by TestMerge_InvariantPanics and
+TestMerge_BranchNotFound earlier in this file.`)
 }
 
 // TestMerge_Conflict seeds a truly divergent repo shape directly at the
