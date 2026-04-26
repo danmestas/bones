@@ -134,13 +134,16 @@ func RunN(ctx context.Context, t *testing.T, dir string, n int) (*runResult, err
 				errMu.Unlock()
 			}
 		}()
-		// Stagger slot starts so the JetStream-durable name in
-		// coord.tipSubscriber.Start (formed from time.Now().UnixNano())
-		// differs across slots. Without this, two Open calls in the
-		// same coarse-clock tick collide on durable name and the
-		// second JS subscribe fails with "consumer already bound".
-		// macOS Apple Silicon has ~1us monotonic resolution; 10ms
-		// keeps the stagger well clear of any platform's tick.
+		// Stagger slot starts to dodge a data race inside
+		// nats-server/v2 (server/stream.go:2517 updateWithAdvisory vs.
+		// server/jetstream_api.go:1591 tieredReservation) that fires
+		// when multiple coord.Leaf instances issue concurrent
+		// JetStream stream-create / config-update calls in the same
+		// instant. Reproducible with `go test -race -count=10`; the
+		// race is in NATS server itself, not in coord. Durable-name
+		// collision is NOT the issue — coord/sync_broadcast.go appends
+		// crypto/rand bytes to the durable. 10ms is empirical and
+		// keeps the race from triggering across all observed runs.
 		time.Sleep(10 * time.Millisecond)
 	}
 	wg.Wait()
