@@ -276,6 +276,20 @@ func (l *Leaf) Commit(ctx context.Context, claim *Claim, files []File) (string, 
 	return uuid, nil
 }
 
+// Close marks the claimed task closed. Delegates to the underlying
+// Coord.CloseTask; the *Claim's release closure is also called so any
+// remaining file holds drop. After Close returns, the *Claim should not
+// be reused.
+func (l *Leaf) Close(ctx context.Context, claim *Claim) error {
+	assert.NotNil(l, "coord.Leaf.Close: receiver is nil")
+	assert.NotNil(ctx, "coord.Leaf.Close: ctx is nil")
+	assert.NotNil(claim, "coord.Leaf.Close: claim is nil")
+	if err := l.coord.CloseTask(ctx, claim.TaskID(), "leaf close"); err != nil {
+		return fmt.Errorf("coord.Leaf.Close: %w", err)
+	}
+	return claim.Release()
+}
+
 // commitMessage builds a default commit message for a Leaf.Commit. Kept
 // trivial in Phase 1; later phases will surface caller-supplied
 // messages once the orchestrator wires task descriptions through.
