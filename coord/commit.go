@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
+	"strings"
+	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -14,6 +18,16 @@ import (
 	"github.com/danmestas/agent-infra/internal/fossil"
 	"github.com/danmestas/agent-infra/internal/tasks"
 )
+
+// commitMaxRetries bounds the pre-flight + commit-under-lease loop in
+// Commit. Even with the hub-wide commit lease serializing the commit
+// window across leaves, a leaf may observe WouldFork=true between its
+// pre-flight Pull/Update and lease acquisition (another leaf landed a
+// commit during this leaf's backoff). The lease is RELEASED between
+// retries so other leaves can land commits while this leaf re-pulls
+// and waits to re-acquire. After commitMaxRetries true unrecoverable
+// conflicts surface as ErrConflictForked. Trial #8.
+const commitMaxRetries = 5
 
 // Commit writes files to the code-artifact Fossil repo as a new
 // checkin authored by cfg.AgentID. Returns the opaque RevID of the new
@@ -72,14 +86,6 @@ func (c *Coord) Commit(
 	if err := c.checkEpoch(ctx, taskID); err != nil {
 		return "", err
 	}
-	// Retry-on-fork: at most one retry per call. WouldFork reports
-	// true when the checkout's current rid is a sibling leaf of hub's
-	// tip; in that case we pull (broadcast may have lost the race),
-	// update the worktree against the now-synced repo, and retry the
-	// commit with branch="" (single-trunk semantics). A second fork
-	// after that means another agent committed during the retry
-	// window — only possible if two slots overlap in files — surface
-	// as ErrConflictForked without creating a fork branch.
 	tracer := otel.Tracer("github.com/danmestas/agent-infra/coord")
 	ctx, span := tracer.Start(ctx, "coord.Commit",
 		trace.WithAttributes(
@@ -89,82 +95,241 @@ func (c *Coord) Commit(
 	)
 	defer span.End()
 
-	fork, retried, err := c.resolveForkBeforeCommit(ctx)
+	// Pre-flight: pull from hub so our local view is current. NOT
+	// inside the lease — multiple leaves can pull concurrently against
+	// the hub. The leaf-local writeMu serializes against this leaf's
+	// own tipSubscriber pullFn, but doesn't block other leaves'
+	// independent Pulls. CreateCheckout+Update are gated on having a
+	// tip; on a fresh repo with no checkin yet the first Commit lands
+	// without any pre-flight checkout work.
+	if c.cfg.HubURL != "" {
+		if err := c.sub.fossil.Pull(ctx, c.cfg.HubURL); err != nil {
+			return "", fmt.Errorf("coord.Commit: pull (pre-flight): %w", err)
+		}
+		tip, terr := c.sub.fossil.Tip(ctx)
+		if terr != nil {
+			return "", fmt.Errorf("coord.Commit: tip (pre-flight): %w", terr)
+		}
+		if tip != "" {
+			if err := c.sub.fossil.CreateCheckout(ctx); err != nil {
+				return "", fmt.Errorf("coord.Commit: checkout: %w", err)
+			}
+			if err := c.sub.fossil.Update(ctx); err != nil {
+				return "", fmt.Errorf(
+					"coord.Commit: update (pre-flight): %w", err,
+				)
+			}
+		}
+	}
+
+	uuid, attempts, forkAttempts, err := c.commitWithScopedLease(
+		ctx, span, message, toCommit,
+	)
+	span.SetAttributes(
+		attribute.Int("commit.attempts", attempts),
+		attribute.Int("commit.fork_attempts", forkAttempts),
+	)
 	if err != nil {
 		return "", err
 	}
-	span.SetAttributes(
-		attribute.Bool("commit.fork_retried", retried),
-		attribute.Bool("commit.fork_retried_succeeded", retried && !fork),
-	)
-	if fork {
-		fe := &ConflictForkedError{Branch: "", Rev: ""}
-		span.SetStatus(codes.Error, "fork unrecoverable")
-		return "", fe
+	return RevID(uuid), nil
+}
+
+// commitWithScopedLease runs the bounded pre-flight-then-lease loop.
+// On each iteration the lease wraps ONLY the WouldFork check + commit
+// + push; pre-flight Pull/Update happens above the lease (or, on
+// retry, in the lease-released window between attempts). On success
+// it broadcasts tip.changed (after lease release). On exhaustion it
+// returns *ConflictForkedError. Returns (uuid, attempts, forkAttempts,
+// err); the count fields are reported as span attributes by Commit.
+func (c *Coord) commitWithScopedLease(
+	ctx context.Context,
+	span trace.Span,
+	message string,
+	toCommit []fossil.File,
+) (string, int, int, error) {
+	forkAttempts := 0
+	for attempt := 0; attempt < commitMaxRetries; attempt++ {
+		uuid, retryNeeded, err := c.commitOnceUnderLease(
+			ctx, span, message, toCommit,
+		)
+		if err != nil {
+			return "", attempt + 1, forkAttempts, err
+		}
+		if !retryNeeded {
+			return uuid, attempt + 1, forkAttempts, nil
+		}
+		forkAttempts++
+		// Refresh local view before retry. Lease released between
+		// attempts so other leaves can land their commits during our
+		// backoff.
+		if c.cfg.HubURL != "" {
+			if err := c.sub.fossil.Pull(ctx, c.cfg.HubURL); err != nil {
+				return "", attempt + 1, forkAttempts, fmt.Errorf(
+					"coord.Commit: pull (retry %d): %w", attempt, err,
+				)
+			}
+			tip, terr := c.sub.fossil.Tip(ctx)
+			if terr != nil {
+				return "", attempt + 1, forkAttempts, fmt.Errorf(
+					"coord.Commit: tip (retry %d): %w", attempt, terr,
+				)
+			}
+			if tip != "" {
+				if err := c.sub.fossil.CreateCheckout(ctx); err != nil {
+					return "", attempt + 1, forkAttempts, fmt.Errorf(
+						"coord.Commit: checkout (retry %d): %w",
+						attempt, err,
+					)
+				}
+				if err := c.sub.fossil.Update(ctx); err != nil {
+					return "", attempt + 1, forkAttempts, fmt.Errorf(
+						"coord.Commit: update (retry %d): %w",
+						attempt, err,
+					)
+				}
+			}
+		}
+		if attempt < commitMaxRetries-1 {
+			backoff := time.Duration(50*(attempt+1)) * time.Millisecond
+			select {
+			case <-ctx.Done():
+				return "", attempt + 1, forkAttempts, ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
 	}
+	span.SetStatus(codes.Error, "fork unrecoverable after retries")
+	return "", commitMaxRetries, forkAttempts,
+		&ConflictForkedError{Branch: "", Rev: ""}
+}
+
+// commitOnceUnderLease acquires the hub-wide commit lease, checks
+// WouldFork, commits if clean, pushes, releases the lease, then (after
+// release) broadcasts tip.changed. Returns (uuid, needsRetry, error).
+// needsRetry=true means another leaf moved the hub between our
+// pre-flight pull and our lease acquisition; caller must re-pull and
+// try again. The lease is released BEFORE the broadcast so subscribers
+// don't queue behind our lease.
+func (c *Coord) commitOnceUnderLease(
+	ctx context.Context,
+	span trace.Span,
+	message string,
+	toCommit []fossil.File,
+) (string, bool, error) {
+	var leaseRev uint64
+	if c.sub.leaseKV != nil {
+		rev, err := c.acquireCommitLease(ctx)
+		if err != nil {
+			span.RecordError(err)
+			return "", false, fmt.Errorf("coord.Commit: %w", err)
+		}
+		leaseRev = rev
+	}
+
+	uuid, retryNeeded, commitErr := c.doCommitUnderLease(
+		ctx, span, message, toCommit,
+	)
+	// Release lease BEFORE the broadcast. Best-effort; bucket TTL
+	// reaps stale entries on crash.
+	if c.sub.leaseKV != nil {
+		c.releaseCommitLease(ctx, leaseRev)
+	}
+	if commitErr != nil {
+		return "", false, commitErr
+	}
+	if retryNeeded {
+		return "", true, nil
+	}
+	// Broadcast tip.changed AFTER lease release so subscribers don't
+	// queue behind our lease.
+	if c.cfg.EnableTipBroadcast && c.sub.nc != nil {
+		if perr := publishTipChanged(ctx, c.sub.nc, uuid); perr != nil {
+			span.RecordError(perr)
+		}
+	}
+	return uuid, false, nil
+}
+
+// doCommitUnderLease performs the WouldFork-check + commit + push
+// while the caller holds the hub-wide commit lease. Returns
+// (uuid, needsRetry, error). needsRetry=true means the hub moved
+// between our pre-flight pull and our lease tenure; the caller
+// releases the lease and re-pulls.
+func (c *Coord) doCommitUnderLease(
+	ctx context.Context,
+	span trace.Span,
+	message string,
+	toCommit []fossil.File,
+) (string, bool, error) {
+	fork, err := c.sub.fossil.WouldFork(ctx)
+	if err != nil {
+		return "", false, fmt.Errorf("coord.Commit: %w", err)
+	}
+	if fork {
+		// Hub moved while we were queuing for the lease. Caller will
+		// re-pull and retry.
+		return "", true, nil
+	}
+
+	// We hold the lease and the local view is consistent — commit.
 	uuid, err := c.sub.fossil.Commit(ctx, message, toCommit, "")
 	if err != nil {
-		return "", fmt.Errorf("coord.Commit: %w", err)
+		return "", false, fmt.Errorf("coord.Commit: %w", err)
 	}
 	_ = c.sub.fossil.CreateCheckout(ctx)
-	// Push to hub so peers can pull. Best-effort: if hub is unreachable,
-	// the commit is still durable locally and the next successful pull
-	// from a peer's broadcast will re-converge state. Ordered BEFORE
-	// publishTipChanged so the broadcast carries a hash subscribers can
-	// actually pull.
+
+	// Push under the lease so peers don't pull a partial state.
+	// Best-effort — local commit is durable; broadcast on next pull
+	// recovers.
 	if c.cfg.HubURL != "" {
 		if err := c.sub.fossil.Push(ctx, c.cfg.HubURL); err != nil {
 			span.RecordError(err)
 		}
 	}
-	if c.cfg.EnableTipBroadcast && c.sub.nc != nil {
-		if err := publishTipChanged(ctx, c.sub.nc, uuid); err != nil {
-			// Non-fatal: commit landed; broadcast is best-effort.
-			// Subscribers will pick up the change on their next pull.
-			span.RecordError(err)
-		}
-	}
-	return RevID(uuid), nil
+	return uuid, false, nil
 }
 
-// resolveForkBeforeCommit performs the at-most-one-retry fork-recovery
-// dance: WouldFork → (if forked and HubURL set) Pull+Checkout+Update →
-// re-check WouldFork. Returns (forkAfterRetry, retried, error). When
-// HubURL is empty or no fork is detected, retried=false and the first
-// fork value is returned unchanged. All errors are wrapped with the
-// "coord.Commit: ..." prefix so callers can return them directly.
-func (c *Coord) resolveForkBeforeCommit(
-	ctx context.Context,
-) (bool, bool, error) {
-	fork, err := c.sub.fossil.WouldFork(ctx)
-	if err != nil {
-		return false, false, fmt.Errorf("coord.Commit: %w", err)
-	}
-	if !fork || c.cfg.HubURL == "" {
-		return fork, false, nil
-	}
-	if err := c.sub.fossil.Pull(ctx, c.cfg.HubURL); err != nil {
-		return false, true, fmt.Errorf(
-			"coord.Commit: pull on fork: %w", err,
+// acquireCommitLease blocks until the hub-wide COORD_COMMIT_LEASE is
+// held by this agent. Returns the KV revision for safe release. Uses
+// jittered exponential backoff bounded by cfg.OperationTimeout.
+func (c *Coord) acquireCommitLease(ctx context.Context) (uint64, error) {
+	deadline := time.Now().Add(c.cfg.OperationTimeout)
+	backoff := 5 * time.Millisecond
+	for {
+		rev, err := c.sub.leaseKV.Create(
+			ctx, "hub", []byte(c.cfg.AgentID),
 		)
+		if err == nil {
+			return rev, nil
+		}
+		// Already held; back off and retry. Both jetstream.ErrKeyExists
+		// and the legacy "wrong last sequence" wire error indicate
+		// contention; everything else is fatal.
+		if !errors.Is(err, jetstream.ErrKeyExists) &&
+			!strings.Contains(err.Error(), "wrong last sequence") &&
+			!strings.Contains(err.Error(), "key exists") {
+			return 0, fmt.Errorf("coord.acquireCommitLease: %w", err)
+		}
+		if time.Now().After(deadline) {
+			return 0, fmt.Errorf("coord.acquireCommitLease: timed out")
+		}
+		jitter := time.Duration(rand.Int63n(int64(backoff)))
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		case <-time.After(backoff + jitter):
+		}
+		if backoff < 200*time.Millisecond {
+			backoff *= 2
+		}
 	}
-	if err := c.sub.fossil.CreateCheckout(ctx); err != nil {
-		return false, true, fmt.Errorf(
-			"coord.Commit: checkout on fork: %w", err,
-		)
-	}
-	if err := c.sub.fossil.Update(ctx); err != nil {
-		return false, true, fmt.Errorf(
-			"coord.Commit: update on fork: %w", err,
-		)
-	}
-	fork, err = c.sub.fossil.WouldFork(ctx)
-	if err != nil {
-		return false, true, fmt.Errorf(
-			"coord.Commit: post-update wouldfork: %w", err,
-		)
-	}
-	return fork, true, nil
+}
+
+// releaseCommitLease deletes the lease key. Best-effort — bucket TTL
+// reaps stale entries if release fails (e.g., on agent crash).
+func (c *Coord) releaseCommitLease(ctx context.Context, rev uint64) {
+	_ = c.sub.leaseKV.Delete(ctx, "hub", jetstream.LastRevision(rev))
 }
 
 // checkHolds enforces Invariant 20: every file in files must be held by

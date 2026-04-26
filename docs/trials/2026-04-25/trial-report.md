@@ -4,14 +4,16 @@
 **Branch:** `hub-leaf-orchestrator` (worktree at `/Users/dmestas/projects/agent-infra-hub-leaf`)
 **PR:** https://github.com/danmestas/agent-infra/pull/14
 **Harness:** `examples/herd-hub-leaf/` (16 agents × 30 tasks = 480 ops)
-**OTLP endpoint:** `https://signoz-vm.tail51604c.ts.net` (Tailscale)
+**OTLP endpoint:** `http://signoz-vm.tail51604c.ts.net:4318` (Tailscale; otlphttp on the SigNoz collector port). **Trials 1–8 used `https://signoz-vm.tail51604c.ts.net` (port 443) by mistake — that path returns the SigNoz UI HTML with 200, which the otlphttp client treats as success while silently dropping spans. No telemetry from trials 1–8 reached SigNoz. See finding #9.**
 **Architecture under test:** per-agent libfossil + per-agent SQLite + hub fossil HTTP server + NATS broadcast (per `docs/superpowers/specs/2026-04-25-hub-leaf-orchestrator-design.md`)
 
 ## What we set out to learn
 
 After PR #14 landed the hub-and-leaf architecture, the question was: does the strict spec assertion `fossil_commits == tasks` hold under realistic concurrency? The 3×3 e2e (`examples/hub-leaf-e2e/TestE2E_3x3`) passes deterministically at 80ms but is too small to surface contention. The user's request: "bigger target, more complex tasks, run trials, observe outcomes, iterate."
 
-Five trials ran, each tweaking one architectural lever to isolate which constraint dominates throughput.
+**Note on what these trials are actually testing.** The 16-agent × 30-task herd is deliberately worst-case stress: 16 leaves in tight commit loops sharing one hub trunk, no human-paced think time, no cross-leaf workload differentiation. The intent is to surface architectural ceilings, not to model production. Realistic workloads are likely 2–5 leaves committing on minute timescales rather than 50ms tight loops; the friendly 3×3 e2e (production-shape) passes cleanly and represents the actual deployment target. The trials below explore "where does the architecture break, and which lever moves the break-point" — they are not "is the architecture fit for purpose." The friendly case answers the latter affirmatively.
+
+Trials each tweak one architectural lever to isolate which constraint dominates throughput in this stress regime.
 
 ## Trial table
 
@@ -24,10 +26,52 @@ Five trials ran, each tweaking one architectural lever to isolate which constrai
 | 5 | + hub-wide commit lease (NATS-KV) | 53/480 | 3573 | 397 | 1378/6381 | 67.9s | leaf SQLITE_BUSY (5) on `blob.Store` |
 | 6 | libfossil v0.4.1 (spec baseline + leaf busy_timeout, no autosync, no lease) | 17/480 | 2862 | 318 | 1042/1224 | 32.9s | leaf SQLITE_BUSY (5) on `processResponse round 3` (Pull) |
 | 7 | + lease + bounded-N (5) retry on v0.4.1 | 15/480 | 590 | 58 | 9374/42920 | 5m58s | leaf SQLITE_BUSY (517) on `manifest.Checkin: blob.Store` |
+| 8 | + leaf-local mutex + scoped lease (commit+push only) on v0.4.1 | 4/480 | 4284 | 476 | 5736/5861 | 2m54s | none terminal — bounded-N retry exhausts on every commit; agents reach max retries with WouldFork still true |
+| 9a | (PR #16 architecture, **OTLP disabled**) | 55/480 | 3830 | 425 | 5848/9292 | 3m1s | none |
+| 9b | (PR #16 architecture, **correct OTLP at port 4318**) | **131/480** | 3152 | 349 | 6299/**20600** | 3m27s | none |
 
 Aggregation step (verifier-clone of hub) on a separate trial #5 run returned `sync.Clone: exceeded 100 rounds` — the hub repo accumulated enough sibling branches that libfossil's clone protocol couldn't reconcile them within its round budget.
 
 ## Findings
+
+### Finding #11 — Throughput is hyper-sensitive to fine-grained inter-agent timing
+
+Trial 9a (PR #16 architecture, OTLP disabled) and 9b (same architecture, real OTLP at port 4318) used the IDENTICAL coord/fossil code. The only difference is whether each span emission costs ~ms of HTTP round-trip to the collector. Outcome:
+
+- 9a (no OTLP): **55/480** hub commits, 425 unrecoverable forks, P99 9.3s, runtime 3m1s
+- 9b (real OTLP): **131/480** hub commits (2.4× higher), 349 unrecoverable forks, P99 20.6s (2.2× higher), runtime 3m27s
+
+Telemetry on is *better*, with P99 latency *worse*. The mechanism: every span emission introduces a few ms of jitter inside `coord.Commit`. Under 16-way contention the architecture suffers from "all agents pile on at the same moment" — they all observe hub-tip-T0, all queue for the lease, all pre-flight Pull at T0, the first to grab the lease commits to T1, and the rest WouldFork-fail in lockstep. Random jitter from OTLP emission breaks the lockstep; some agents observe T1 instead of T0 because their span emission stalled them past the commit window. This *reduces* sympathetic-failure clustering even as it raises absolute latency.
+
+Operational implication: the architecture is solving the wrong race. WouldFork-gated commits at the coord layer don't tolerate burst contention well — any deliberate per-leaf jitter (a few-ms randomized backoff inside `coord.Commit` between holds and the lease attempt) might recover much of trial 9b's throughput WITHOUT requiring OTLP. Future trial #10 should test this hypothesis cheaply.
+
+But it's worth re-emphasizing the framing: 16 leaves in tight commit loops on one hub trunk is a stress regime, not a production model. The 3×3 e2e is the production-shape and works cleanly. These trials probe the failure envelope rather than the operating envelope.
+
+### Finding #10 — OTLP exporter overhead is real but secondary; misconfigured endpoint was the dominant signal-eater
+
+Earlier hypothesis: trials 1–8's poor numbers were dominated by OTLP exporter HTTP round-trips against the misconfigured SigNoz UI URL. Trial 9a (no OTLP at all, PR #16 architecture) tests this directly. Result: 55/480 — better than trials 6–8 (4-17/480) but nowhere near the step change. So OTLP overhead WAS a contributing factor (the PR #16 architecture wasn't actually as bad as trial #8's 4/480 suggested) but not the dominant bottleneck. The architecture's WouldFork-frame issue is.
+
+The real win from finding #9: telemetry is now usable. Trial 9b's spans landed in SigNoz under service `herd-hub-leaf-trial9b`. Inspecting `coord.Commit` and `coord.SyncOnBroadcast` spans there will show the actual time distribution per phase (Pull, lease wait, WouldFork, Commit, Push, broadcast) — diagnostic material the prior trials lacked.
+
+### Finding #9 — Trials 1–8 emitted spans into the void; SigNoz endpoint was the SPA frontend, not the OTLP collector
+
+Every trial through #8 set `OTEL_EXPORTER_OTLP_ENDPOINT=https://signoz-vm.tail51604c.ts.net` (port 443, the SigNoz UI route). That URL accepts every POST including `/v1/traces` and returns `200 OK text/html` (the SPA bootstrap page). The otlphttp client treats 200 as success and silently drops batched spans; no warnings, no exporter errors, no retries. **No trace data from trials 1–8 reached SigNoz storage.**
+
+The actual OTLP HTTP collector lives at `http://signoz-vm.tail51604c.ts.net:4318` (plain HTTP over Tailscale; TLS terminated at the SPA frontend on 443 only). A POST of `{"resourceSpans":[]}` to that endpoint returns `200 OK application/json {"partialSuccess":{}}` — the genuine OTLP receiver shape. Verified with a minimal `otlptracehttp.New` probe that landed `otel-probe-correct-endpoint` in the SigNoz Services UI within seconds.
+
+Mitigation in this PR: the harness's `setupTelemetry` now pre-flights the endpoint with an empty-resource POST and refuses to start if the response shape isn't OTLP-collector. README and trial-report header point at the corrected endpoint. Future trials (`#9` onward) populate SigNoz; any future endpoint typo aborts the harness instead of silently no-op-ing.
+
+The trial #1–#8 metrics tables are still trustworthy — those numbers come from in-process atomic counters, not OTel. What was missing is the per-span detail (commit.local_tip_before/after, pull_rounds, push_rounds, SyncOnBroadcast attributes) that would have made the architectural mismatches in findings #3, #7, #8 diagnosable from traces instead of from log inference. Trial #9 onward will have it.
+
+### Finding #8 — leaf-local mutex + scoped lease: **regressed throughput further**, exposing a deeper architectural mismatch
+
+Trial #8 implemented the two follow-ups Finding #7 named: a leaf-local `sync.Mutex` on `internal/fossil.Manager` that serializes the agent's Commit goroutine against `tipSubscriber.pullFn`'s broadcast-driven Pulls within a single leaf process, plus a tightly-scoped hub-wide JetStream KV lease (`COORD_COMMIT_LEASE`) that wraps ONLY the `WouldFork` check + commit + push within each retry iteration. Pre-flight Pull/Update happens above the lease; inter-retry Pull/Update happens with the lease released so other leaves can land commits during a leaf's backoff. Both changes built clean, `make check` green, `TestE2E_3x3` passes 3/3 with `-race`.
+
+Outcome on the 16×30 herd: **4/480 hub commits, 4284 fork retries, 476 unrecoverable forks, runtime 2m54s, P50 5.7s, P99 5.9s.** Worse than trial #6 (no lease, 17/480) and worse than trial #7 (lease across all retries, 15/480). The latency variance collapsing (P50 ≈ P99 ≈ 5.8s) is telling: virtually every commit is exhausting the bounded-N retry loop in roughly the same wall-clock budget — `5 attempts × ~50-150ms backoff + ~1s lease wait + Pull/WouldFork roundtrip per attempt`. There are no terminal SQLITE_BUSY failures: the leaf-local mutex closes that race, but the hub-wide lease + bounded retry combination cannot land any but a handful of commits before WouldFork persistently reports true on every attempt.
+
+The deeper finding: **scoped lease + bounded retry is incompatible with `WouldFork` semantics under high concurrency.** Each leaf's pre-flight Pull lands at hub-tip-T0. Lease acquisition takes ~1s under 16-way contention. By the time leaf-A holds the lease, T1 leaves have committed and the hub is at hub-tip-T1. Leaf-A's WouldFork=true (its checkout's parent RID is hub-tip-T0, which is now a sibling of T1's tip). Leaf-A releases the lease and re-pulls; the cycle repeats with leaf-B holding the lease while T2-N commits land. Lease serialization without checkout-state advancement under the lease (the trial #7 shape) is also wrong because retries within the lease leave the state in a known position. Neither shape works because **the lease serializes commits but not the WouldFork frame of reference**: the Pull/WouldFork window is open for hundreds of milliseconds during which the hub moves multiple times.
+
+Reading: the v1.1 step change requires either (a) doing the Pull-then-WouldFork-then-Commit-then-Push loop entirely under the lease so the WouldFork frame is fixed for the lease holder (trial #7's shape, but with a fix for the SQLITE_BUSY race that finding #3 named — which is what the leaf-local mutex addressed in trial #8); OR (b) abandoning WouldFork-gated commits at the coord layer entirely and trusting Fossil's own merge-on-conflict at the hub. The trial #7 lease-across-all-retries shape regressed because of the SQLITE_BUSY race; with the mutex closing that race, the trial #7 shape may now work — that's trial #9. Trial #8's symmetry — scoped lease + bounded retry — is provably wrong shape regardless of mutex.
 
 ### Finding #1 — The spec's "single retry, then surface" model collapses under iterated commits
 
@@ -99,18 +143,19 @@ The friendly 3×3 case (and any low-concurrency production workload) is correct 
 3. **Wire harness counters** — `BroadcastsPulled`/`BroadcastsSkippedIdempotent` should increment from the actual `coord.SyncOnBroadcast` span attributes (or a side counter the subscriber updates).
 4. **Re-baseline 3×3 e2e** — once libfossil v0.4.1 lands and finding #3 is closed, the trial commits' WouldFork-without-retry strictness may be tolerable. If not, restore the bounded-retry path.
 
-## Recommended path (updated 2026-04-25 post-trial #7)
+## Recommended path (updated 2026-04-25 post-trial #8)
 
 libfossil v0.4.1 shipped (xfer encoder, multi-round sync, server-side crosslink) and was merged into agent-infra (PR #14). Trial #6 confirms the substrate is reliable — `TestE2E_3x3` passes against the hub's `event` table directly with no verifier-clone, and the three workarounds documented earlier (`ServerCode = AgentID`, `Pull:true` co-flag, `precreateLeaves`) are gone.
 
-But trial #6 confirmed v0.4.1 alone does not lift the architecture's throughput ceiling (17/480), and trial #7 — bounded-N retry inside a hub-wide lease — regressed it further (15/480, 5m58s). Two follow-ups appear necessary together to deliver the step change:
+Three coord-layer trials on top of v0.4.1 (#6, #7, #8) all sit between 4/480 and 17/480 hub commits. Each varies retry+lease shape: no lease (#6, 17/480), lease across all retries (#7, 15/480), scoped lease + bounded retry with lease release between attempts (#8, 4/480). Trial #8's leaf-local mutex closes the SQLITE_BUSY (517) race that finding #3 and #7 named — confirmed by the absence of terminal substrate failures in the trial #8 run — but the lease-release-between-retries shape regresses throughput further because every leaf's WouldFork frame of reference drifts during the lease-released backoff window.
 
-1. **Leaf-local serialization** between `coord.Commit` and `tipSubscriber.pullFn` — a leaf-local mutex, or a single goroutine per leaf processing both commit and broadcast-driven pull serially. Without this, hub-wide serialization is undermined by intra-process races (trial #7's terminal SQLITE_BUSY 517 was intra-leaf, not cross-leaf).
-2. **Lease released between retries** — either move the bounded retry outside the lease (acquire-pull-update-release-evaluate-reacquire-commit), or shrink the lease scope to just the commit + push window so the pre-flight Pull/Update doesn't hold it.
+The signal across the three coord-layer trials: **WouldFork-gated commits at the coord layer cannot achieve high throughput against a moving hub.** Two architectural pivots remain:
 
-Both are coord-layer changes that don't need libfossil work. Trial #8 would be the next experiment with these shapes.
+1. **Trial #9: lease across all retries + leaf-local mutex.** Trial #7's shape (lease wraps the entire retry loop, including Pull+Update between attempts) regressed because of the SQLITE_BUSY race the mutex now closes. With the mutex, this shape may pass: the lease holder gets a stable WouldFork frame because it owns commit serialization end-to-end, and intra-leaf races no longer corrupt that state. Risk: lease tenure stretches to 5×(Pull+WouldFork+Commit+Push)/lease-hold which serializes 16 agents into a chain that may exceed reasonable wall-clock budgets.
 
-In the interim, PR #14's merged architecture is *correct, scale-limited at 16+ concurrent leaves on the same hub trunk*. The 3×3 e2e demonstrates the design works at the friendly case. Production deployments under low concurrency (single-digit leaves on the same trunk) are unaffected. The strict 16×30 assertion is a v1.1 deliverable gated on the leaf-local serialization + lease-scope refactor.
+2. **Pivot away from WouldFork at the coord layer.** Trust Fossil's own merge-on-conflict at the hub: each leaf commits unconditionally, the hub absorbs sibling leaves, a periodic merge service reconciles. Retries happen at the merge layer, not the commit layer. Higher throughput potential at the cost of a richer hub topology and longer post-commit reconciliation latency.
+
+In the interim, PR #14's merged architecture is *correct, scale-limited at 16+ concurrent leaves on the same hub trunk*. The 3×3 e2e demonstrates the design works at the friendly case. Production deployments under low concurrency (single-digit leaves on the same trunk) are unaffected. The strict 16×30 assertion is a v1.1 deliverable gated on the trial #9 (lease-across-all-retries + mutex) outcome or the merge-service architectural pivot.
 
 ## Trial commits
 
@@ -130,6 +175,7 @@ Trial #6 added no new commits — it ran the as-merged main (post PR #14) agains
 - `herd-hub-leaf-trial3`
 - `herd-hub-leaf-trial5` (no `trial4` — leaf busy_timeout used same service name as trial #3 for direct comparison)
 - `herd-hub-leaf-trial6` (post-PR #14 merge, against libfossil v0.4.1)
+- `herd-hub-leaf-trial8` (leaf-local mutex + scoped lease on v0.4.1)
 
 Span operations of interest:
 

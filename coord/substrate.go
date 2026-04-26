@@ -2,6 +2,7 @@ package coord
 
 import (
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/danmestas/agent-infra/internal/chat"
 	"github.com/danmestas/agent-infra/internal/fossil"
@@ -41,6 +42,16 @@ type substrate struct {
 	// used by Commit's retry path and the tip.changed subscriber. Set
 	// from cfg.HubURL at openSubstrate time.
 	hubURL string
+
+	// leaseKV is the COORD_COMMIT_LEASE JetStream KV bucket. Acquired
+	// before the WouldFork check + commit + push within each Commit
+	// retry iteration and released after, it serializes the
+	// commit-and-push window hub-wide so the parent-RID race
+	// cannot open during a leaf's commit attempt. Pre-flight Pull
+	// and inter-retry Pull/Update happen lease-free so other leaves
+	// can land their commits during a leaf's backoff. Empty when
+	// EnableTipBroadcast=false or HubURL=""; see Open. Trial #8.
+	leaseKV jetstream.KeyValue
 }
 
 // close tears down every Manager in the reverse of open order:
