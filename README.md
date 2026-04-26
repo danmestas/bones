@@ -11,6 +11,30 @@ git cleanup tax that multi-agent divergence imposes on branch-based VCS.
 
 ---
 
+## Quickstart
+
+```bash
+git clone https://github.com/danmestas/agent-infra
+cd agent-infra
+# Build EdgeSync's bin/leaf (sibling repo, see docs/adr/0018):
+cd ../EdgeSync && make leaf && cd ../agent-infra
+# Build agent-infra binaries:
+make
+# Initialize a workspace:
+bin/agent-init init
+# Bootstrap the hub:
+bash .orchestrator/scripts/hub-bootstrap.sh
+# Add and inspect tasks:
+bin/agent-tasks add "my first task" --files src/foo.go
+bin/agent-tasks open
+bin/agent-tasks status
+```
+
+See `bin/agent-tasks --help` for the full subcommand list (`add`, `claim`,
+`close`, `watch`, `status`, and more).
+
+---
+
 ## Why this project exists
 
 Multi-agent software development — where 5–10 Claude subagents collaborate on a
