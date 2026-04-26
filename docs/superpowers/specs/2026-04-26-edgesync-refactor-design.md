@@ -85,10 +85,16 @@ type Leaf struct { /* private */ }
 // joins hubNATSURL as upstream and pulls from hubHTTPAddr.
 func OpenLeaf(ctx context.Context, workdir, slotID, hubNATSURL, hubHTTPAddr string) (*Leaf, error)
 
-// Claim/Commit/Close are coord's claim-task lifecycle.
-func (l *Leaf) Claim(ctx context.Context, taskID string) (*Claim, error)
-func (l *Leaf) Commit(ctx context.Context, claim *Claim, files ...string) error
+// Task lifecycle: open → claim → commit → close.
+func (l *Leaf) OpenTask(ctx context.Context, title string, files []string) (TaskID, error)
+func (l *Leaf) Claim(ctx context.Context, taskID TaskID) (*Claim, error)
+func (l *Leaf) Commit(ctx context.Context, claim *Claim, files ...File) (RevID, error)
 func (l *Leaf) Close(ctx context.Context, claim *Claim) error
+
+// Fossil-write operations beyond commits — kept on Leaf so they share
+// the single agent.Repo() write path and trigger SyncNow on success.
+func (l *Leaf) Compact(ctx context.Context, opts CompactOptions) (CompactResult, error)
+func (l *Leaf) PostMedia(ctx context.Context, thread, mimeType string, data []byte) (RevID, error)
 
 // Read-side accessors for harnesses, tests, and orchestrator monitor code.
 func (l *Leaf) Tip(ctx context.Context) (string, error)
@@ -98,10 +104,19 @@ func (l *Leaf) Stop() error
 ```
 
 Internally `Leaf` holds a `*leaf.Agent` and a `*Coord` (the existing
-claim-scheduling state). `Commit` writes through the agent's repo, then
-calls `agent.SyncNow()`. If post-sync the local tip diverges from the
-parent expected at commit time, `Commit` returns `ErrConflict` (see
-"Conflict semantics" below).
+claim-scheduling state). All fossil-write methods (`Commit`, `Compact`,
+`PostMedia`) write through `l.agent.Repo()` — there is exactly one
+`*libfossil.Repo` handle per fossil file, owned by `leaf.Agent` — and
+call `agent.SyncNow()` on success. If post-sync the local tip diverges
+from the parent expected at commit time, `Commit` returns `ErrConflict`
+(see "Conflict semantics" below).
+
+`Coord.Commit`, `Coord.Compact`, and `Coord.PostMedia` are deleted as
+part of Phase 1. After the refactor there is exactly one commit code
+path in agent-infra: `(*Leaf).Commit`. The hold-gate and epoch-gate
+helpers (`checkHolds`, `checkEpoch`) stay as package-private methods
+on `*Coord` and are reached through `l.coord` from inside `*Leaf`
+methods.
 
 ### Hub-as-leaf — note for the curious
 
@@ -183,12 +198,24 @@ limit, not an oversight.
 
 ### Modify
 
-- `coord/commit.go` — drop fork+merge; `Commit` writes through
-  `Leaf.agent.Repo()`, calls `SyncNow`, surfaces `ErrConflict` on
-  divergence.
+- `coord/commit.go` — `Coord.Commit` deletes; the commit path moves
+  to `Leaf.Commit` (writes through `l.agent.Repo()`, calls `SyncNow`,
+  surfaces `ErrConflict` on divergence). The hold-gate/epoch-gate
+  helpers (`checkHolds`, `checkEpoch`) stay on `*Coord` and are
+  reached via `l.coord` from `*Leaf`.
+- `coord/compact.go` — `Coord.Compact` deletes; the implementation
+  moves onto `*Leaf` so it shares `l.agent.Repo()` and `SyncNow()`.
+- `coord/media.go` — `Coord.PostMedia` deletes; same migration as
+  Compact.
+- `coord/open_task.go` — `Leaf.OpenTask` added as a thin shim around
+  the existing `Coord.OpenTask` so harnesses don't need to reach into
+  `l.coord` directly.
 - `coord/coord.go` — drop `tipSubscriber` wiring; coord's
   initialization no longer publishes/subscribes to `coord.tip.changed`.
-- `coord/substrate.go` — drop any leaseKV residue.
+  Drop the `s.fossil` field setup; substrate no longer owns a
+  `*libfossil.Repo`.
+- `coord/substrate.go` — drop the `fossil *libfossil.Repo` field
+  entirely; drop any leaseKV residue.
 - `examples/herd-hub-leaf/harness.go` — rewrite to construct
   `coord.Hub` and N `coord.Leaf` instances. Drop the
   httptest-backed-libfossil hub.
@@ -335,3 +362,13 @@ sketched here and will be expanded once Phase 1 lands.
   P99 < 5s, zero unrecoverable conflicts.
 - **`ErrConflict` is a defense-in-depth assertion**, not a
   normal-flow error.
+- **One commit code path post-refactor**: `(*Leaf).Commit`. All
+  fossil-write methods — `Commit`, `Compact`, `PostMedia` — live on
+  `*Leaf` so they share `leaf.Agent.Repo()` and trigger `SyncNow()`.
+  `Coord.Commit`, `Coord.Compact`, and `Coord.PostMedia` delete in
+  Phase 1.
+- **One `*libfossil.Repo` per fossil file**, owned by `leaf.Agent`.
+  Substrate carries no `*libfossil.Repo` field.
+- **One `*Coord` per `*Leaf`** (matches the existing herd-hub-leaf
+  topology where `coord.Open` is called once per slot inside
+  `runAgent`).
