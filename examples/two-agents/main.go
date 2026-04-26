@@ -43,21 +43,10 @@ const (
 func newConfig(agentID, natsURL, chatRepo, checkoutRoot string) coord.Config {
 	return coord.Config{
 		AgentID:            agentID,
-		HoldTTLDefault:     30 * time.Second,
-		HoldTTLMax:         5 * time.Minute,
-		MaxHoldsPerClaim:   32,
-		MaxSubscribers:     32,
-		MaxTaskFiles:       32,
-		MaxReadyReturn:     256,
-		MaxTaskValueSize:   8 * 1024,
-		TaskHistoryDepth:   8,
-		OperationTimeout:   10 * time.Second,
-		HeartbeatInterval:  5 * time.Second,
-		NATSReconnectWait:  2 * time.Second,
-		NATSMaxReconnects:  5,
 		NATSURL:            natsURL,
 		ChatFossilRepoPath: chatRepo,
 		CheckoutRoot:       checkoutRoot,
+		// Tuning: zero — coord.Open fills sane defaults via defaultTuning.
 	}
 }
 

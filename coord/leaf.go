@@ -183,18 +183,7 @@ func openLeafCoord(ctx context.Context, slotID, natsURL, slotDir string) (*Coord
 		NATSURL:            natsURL,
 		CheckoutRoot:       slotDir,
 		ChatFossilRepoPath: filepath.Join(slotDir, "chat.fossil"),
-		HoldTTLDefault:     30 * time.Second,
-		HoldTTLMax:         5 * time.Minute,
-		MaxHoldsPerClaim:   16,
-		MaxSubscribers:     8,
-		MaxTaskFiles:       16,
-		MaxReadyReturn:     32,
-		MaxTaskValueSize:   16384,
-		TaskHistoryDepth:   8,
-		OperationTimeout:   60 * time.Second,
-		HeartbeatInterval:  5 * time.Second,
-		NATSReconnectWait:  100 * time.Millisecond,
-		NATSMaxReconnects:  10,
+		// Tuning: zero — Open applies sane defaults via defaultTuning.
 	}
 	return Open(ctx, cfg)
 }

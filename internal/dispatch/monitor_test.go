@@ -21,21 +21,12 @@ func newCoordOnURLWithHeartbeat(
 	fileID := strings.ReplaceAll(agentID, "/", "_")
 	cfg := coord.Config{
 		AgentID:            agentID,
-		HoldTTLDefault:     30 * time.Second,
-		HoldTTLMax:         5 * time.Minute,
-		MaxHoldsPerClaim:   32,
-		MaxSubscribers:     32,
-		MaxTaskFiles:       32,
-		MaxReadyReturn:     256,
-		MaxTaskValueSize:   8 * 1024,
-		TaskHistoryDepth:   8,
-		OperationTimeout:   10 * time.Second,
-		HeartbeatInterval:  hb,
-		NATSReconnectWait:  2 * time.Second,
-		NATSMaxReconnects:  5,
 		NATSURL:            url,
 		ChatFossilRepoPath: filepath.Join(t.TempDir(), fileID+"-chat.fossil"),
 		CheckoutRoot:       filepath.Join(t.TempDir(), fileID+"-checkouts"),
+		Tuning: coord.TuningConfig{
+			HeartbeatInterval: hb,
+		},
 	}
 	c, err := coord.Open(context.Background(), cfg)
 	if err != nil {

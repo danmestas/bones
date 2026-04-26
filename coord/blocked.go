@@ -21,7 +21,7 @@ func (c *Coord) Blocked(ctx context.Context) ([]Task, error) {
 	blockers := buildReadyBlockers(records)
 	blocked := filterBlocked(records, blockers)
 	sortReady(blocked)
-	return capReady(blocked, c.cfg.MaxReadyReturn), nil
+	return capReady(blocked, c.cfg.Tuning.MaxReadyReturn), nil
 }
 
 func filterBlocked(records []tasks.Task, b readyBlockers) []Task {

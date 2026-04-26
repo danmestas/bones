@@ -6,7 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"time"
+	"path/filepath"
 
 	"github.com/danmestas/agent-infra/coord"
 	"github.com/danmestas/agent-infra/internal/workspace"
@@ -22,20 +22,11 @@ func init() {
 // defaults used by the two-agents example harness.
 func newCoordConfig(info workspace.Info) coord.Config {
 	return coord.Config{
-		AgentID:           info.AgentID,
-		HoldTTLDefault:    30 * time.Second,
-		HoldTTLMax:        5 * time.Minute,
-		MaxHoldsPerClaim:  32,
-		MaxSubscribers:    32,
-		MaxTaskFiles:      32,
-		MaxReadyReturn:    256,
-		MaxTaskValueSize:  8 * 1024,
-		TaskHistoryDepth:  8,
-		OperationTimeout:  10 * time.Second,
-		HeartbeatInterval: 5 * time.Second,
-		NATSReconnectWait: 2 * time.Second,
-		NATSMaxReconnects: 5,
-		NATSURL:           info.NATSURL,
+		AgentID:            info.AgentID,
+		NATSURL:            info.NATSURL,
+		ChatFossilRepoPath: filepath.Join(info.WorkspaceDir, "chat.fossil"),
+		CheckoutRoot:       info.WorkspaceDir,
+		// Tuning: zero — coord.Open fills sane defaults via defaultTuning.
 	}
 }
 

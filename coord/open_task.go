@@ -99,9 +99,9 @@ func (c *Coord) assertOpenTaskPreconditions(
 		len(files) > 0, "coord.OpenTask: files is empty",
 	)
 	assert.Precondition(
-		len(files) <= c.cfg.MaxTaskFiles,
+		len(files) <= c.cfg.Tuning.MaxTaskFiles,
 		"coord.OpenTask: len(files)=%d exceeds MaxTaskFiles=%d",
-		len(files), c.cfg.MaxTaskFiles,
+		len(files), c.cfg.Tuning.MaxTaskFiles,
 	)
 	for _, f := range files {
 		assert.Precondition(
