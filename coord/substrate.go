@@ -36,6 +36,11 @@ type substrate struct {
 	chat     *chat.Manager
 	presence *presence.Manager
 	fossil   *fossil.Manager
+
+	// hubURL, when non-empty, is the orchestrator fossil-server base URL
+	// used by Commit's retry path and the tip.changed subscriber. Set
+	// from cfg.HubURL at openSubstrate time.
+	hubURL string
 }
 
 // close tears down every Manager in the reverse of open order:

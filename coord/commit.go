@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/danmestas/agent-infra/internal/assert"
 	"github.com/danmestas/agent-infra/internal/fossil"
@@ -19,15 +23,19 @@ import (
 // cfg.AgentID at call time. If any path is unheld or held by another
 // agent, Commit returns ErrNotHeld WITHOUT writing to the repo.
 //
-// Fork-on-conflict per ADR 0010 §4-5: before writing, Commit checks
-// whether the next commit on the current branch would create a sibling
-// leaf. When it would, the commit is placed on a new branch named
-// `${agent_id}-${task_id}-${unix_nano}` (Invariant 22), a fork notice
-// is posted to the task's chat thread ("task-<taskID>"), and the
-// returned error satisfies errors.Is(err, ErrConflictForked) and
-// errors.As(err, *ConflictForkedError). The commit is durable in both
-// the fork and no-fork cases; the error on fork signals that
-// reconciliation via coord.Merge is the caller's next step.
+// Retry-on-fork (Phase 2 of hub-leaf-orchestrator): before writing,
+// Commit calls WouldFork to detect whether the next commit on the
+// current branch would create a sibling leaf. When it would and
+// cfg.HubURL is set, Commit pulls from the hub, refreshes the checkout
+// against the now-synced repo, and retries WouldFork once. If the
+// retry resolves the fork, the commit lands on trunk and the durable
+// RevID is returned. If the retry still reports a fork — only possible
+// if a peer raced our pull window on a file we hold — Commit returns
+// ErrConflictForked with empty Branch and empty Rev (no commit
+// landed). With cfg.HubURL empty, the first WouldFork=true is treated
+// as immediately unrecoverable. This replaces the ADR 0010 fork-branch
+// behavior; no fork branches are ever created and the chat notify is
+// gone.
 //
 // Invariants asserted (panics on violation — programmer errors):
 // 1 (ctx non-nil), 8 (Coord not closed), taskID non-empty,
@@ -36,10 +44,9 @@ import (
 // Operator errors returned:
 //
 //	ErrNotHeld — one or more paths not held by this agent.
-//	*ConflictForkedError (wrapping ErrConflictForked) — fork detected;
-//	    commit landed on the forked branch. Use errors.As to extract
-//	    Branch and Rev. The chat-notify post is best-effort: if it
-//	    fails, its error is joined alongside so callers see both.
+//	*ConflictForkedError (wrapping ErrConflictForked) — fork still
+//	    present after retry (or first fork with HubURL empty); no
+//	    commit landed. Branch and Rev are empty.
 //	Any substrate error from internal/fossil — wrapped with the
 //	    coord.Commit prefix.
 func (c *Coord) Commit(
@@ -65,70 +72,99 @@ func (c *Coord) Commit(
 	if err := c.checkEpoch(ctx, taskID); err != nil {
 		return "", err
 	}
-	// Fork detection: WouldFork reports true when the checkout's
-	// current rid is a sibling leaf — i.e., another leaf on the
-	// current branch exists that isn't ours. WouldFork is a no-op
-	// (returns false, nil) when no checkout is attached, which is
-	// correct for the very first commit on a fresh repo: with no
-	// prior tip there cannot be a sibling. Subsequent commits on
-	// this Manager detect fork correctly because Commit attaches the
-	// checkout in its post-commit lazy-init below.
-	fork, err := c.sub.fossil.WouldFork(ctx)
+	// Retry-on-fork: at most one retry per call. WouldFork reports
+	// true when the checkout's current rid is a sibling leaf of hub's
+	// tip; in that case we pull (broadcast may have lost the race),
+	// update the worktree against the now-synced repo, and retry the
+	// commit with branch="" (single-trunk semantics). A second fork
+	// after that means another agent committed during the retry
+	// window — only possible if two slots overlap in files — surface
+	// as ErrConflictForked without creating a fork branch.
+	tracer := otel.Tracer("github.com/danmestas/agent-infra/coord")
+	ctx, span := tracer.Start(ctx, "coord.Commit",
+		trace.WithAttributes(
+			attribute.String("agent_id", c.cfg.AgentID),
+			attribute.String("task_id", string(taskID)),
+		),
+	)
+	defer span.End()
+
+	fork, retried, err := c.resolveForkBeforeCommit(ctx)
 	if err != nil {
-		return "", fmt.Errorf("coord.Commit: %w", err)
+		return "", err
 	}
-	branch := ""
+	span.SetAttributes(
+		attribute.Bool("commit.fork_retried", retried),
+		attribute.Bool("commit.fork_retried_succeeded", retried && !fork),
+	)
 	if fork {
-		branch = fmt.Sprintf(
-			"%s-%s-%d",
-			c.cfg.AgentID, taskID, time.Now().UnixNano(),
-		)
+		fe := &ConflictForkedError{Branch: "", Rev: ""}
+		span.SetStatus(codes.Error, "fork unrecoverable")
+		return "", fe
 	}
-	uuid, err := c.sub.fossil.Commit(ctx, message, toCommit, branch)
+	uuid, err := c.sub.fossil.Commit(ctx, message, toCommit, "")
 	if err != nil {
 		return "", fmt.Errorf("coord.Commit: %w", err)
 	}
-	// Post-commit: attach the checkout so the next commit's WouldFork
-	// call has a working-copy anchor at our just-landed tip. Best-
-	// effort — a failure here only means fork detection is skipped
-	// on the next commit, not that this commit is unsafe. On fork,
-	// also move the checkout to the new rev so subsequent WouldFork
-	// reads the new branch (with one leaf, our own) rather than the
-	// original branch where the sibling leaf still lives.
 	_ = c.sub.fossil.CreateCheckout(ctx)
-	if fork {
-		_ = c.sub.fossil.Checkout(ctx, uuid)
-		return c.onFork(ctx, taskID, branch, uuid, files)
+	// Push to hub so peers can pull. Best-effort: if hub is unreachable,
+	// the commit is still durable locally and the next successful pull
+	// from a peer's broadcast will re-converge state. Ordered BEFORE
+	// publishTipChanged so the broadcast carries a hash subscribers can
+	// actually pull.
+	if c.cfg.HubURL != "" {
+		if err := c.sub.fossil.Push(ctx, c.cfg.HubURL); err != nil {
+			span.RecordError(err)
+		}
+	}
+	if c.cfg.EnableTipBroadcast && c.sub.nc != nil {
+		if err := publishTipChanged(ctx, c.sub.nc, uuid); err != nil {
+			// Non-fatal: commit landed; broadcast is best-effort.
+			// Subscribers will pick up the change on their next pull.
+			span.RecordError(err)
+		}
 	}
 	return RevID(uuid), nil
 }
 
-// onFork builds a ConflictForkedError for a commit that was placed on
-// a dedicated branch, posts a best-effort notification to the task's
-// chat thread, and returns the combined error. The chat post failure
-// is joined alongside the fork error (errors.Join) so callers that
-// route on errors.Is(err, ErrConflictForked) still match while a
-// caller that inspects with errors.Unwrap sees both. The commit is
-// durable either way — the returned RevID is always the forked rev.
-// See ADR 0010 §5 for the body format.
-func (c *Coord) onFork(
+// resolveForkBeforeCommit performs the at-most-one-retry fork-recovery
+// dance: WouldFork → (if forked and HubURL set) Pull+Checkout+Update →
+// re-check WouldFork. Returns (forkAfterRetry, retried, error). When
+// HubURL is empty or no fork is detected, retried=false and the first
+// fork value is returned unchanged. All errors are wrapped with the
+// "coord.Commit: ..." prefix so callers can return them directly.
+func (c *Coord) resolveForkBeforeCommit(
 	ctx context.Context,
-	taskID TaskID,
-	branch, rev string,
-	files []File,
-) (RevID, error) {
-	fe := &ConflictForkedError{Branch: branch, Rev: rev}
-	body := fmt.Sprintf(
-		"fork: agent=%s branch=%s rev=%s path=%s",
-		c.cfg.AgentID, branch, rev, files[0].Path,
-	)
-	thread := "task-" + string(taskID)
-	if perr := c.sub.chat.Send(ctx, thread, body); perr != nil {
-		return RevID(rev), errors.Join(
-			fe, fmt.Errorf("coord.Commit: chat notify: %w", perr),
+) (bool, bool, error) {
+	fork, err := c.sub.fossil.WouldFork(ctx)
+	if err != nil {
+		return false, false, fmt.Errorf("coord.Commit: %w", err)
+	}
+	if !fork || c.cfg.HubURL == "" {
+		return fork, false, nil
+	}
+	if err := c.sub.fossil.Pull(ctx, c.cfg.HubURL); err != nil {
+		return false, true, fmt.Errorf(
+			"coord.Commit: pull on fork: %w", err,
 		)
 	}
-	return RevID(rev), fe
+	if err := c.sub.fossil.CreateCheckout(ctx); err != nil {
+		return false, true, fmt.Errorf(
+			"coord.Commit: checkout on fork: %w", err,
+		)
+	}
+	if err := c.sub.fossil.Update(ctx); err != nil {
+		return false, true, fmt.Errorf(
+			"coord.Commit: update on fork: %w", err,
+		)
+	}
+	fork, err = c.sub.fossil.WouldFork(ctx)
+	if err != nil {
+		return false, true, fmt.Errorf(
+			"coord.Commit: post-update wouldfork: %w", err,
+		)
+	}
+	return fork, true, nil
 }
 
 // checkHolds enforces Invariant 20: every file in files must be held by
