@@ -56,7 +56,7 @@ func TestLink_HappyPath(t *testing.T) {
 		t.Fatalf("Edges len = %d, want 1", len(rec.Edges))
 	}
 	got := rec.Edges[0]
-	if got.Type != EdgeBlocks || got.Target != string(to) {
+	if got.Type != tasks.EdgeBlocks || got.Target != string(to) {
 		t.Errorf("Edges[0] = %+v, want {blocks, %s}", got, to)
 	}
 }
