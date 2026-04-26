@@ -93,37 +93,7 @@ func runTask(
 	ctx context.Context, c *coord.Coord,
 	slotIdx, taskIdx int, cfg Config, rng *rand.Rand, res *Result,
 ) error {
-	// File count for this task.
-	n := cfg.MinFiles
-	if cfg.MaxFiles > cfg.MinFiles {
-		n += rng.Intn(cfg.MaxFiles - cfg.MinFiles + 1)
-	}
-	files := make([]coord.File, n)
-	paths := make([]string, n)
-	for i := 0; i < n; i++ {
-		// Path is task-scoped within the slot so successive tasks on the
-		// same slot do not contend on the same hold (a slot's previous
-		// task closed before the next begins, but distinct paths keep
-		// the hold-key history clean and avoid touching closed-task records).
-		p := filepath.Join("/",
-			fmt.Sprintf("slot-%d", slotIdx),
-			fmt.Sprintf("task-%d", taskIdx),
-			fmt.Sprintf("file-%d.txt", i),
-		)
-		paths[i] = p
-		size := cfg.MinBytes
-		if cfg.MaxBytes > cfg.MinBytes {
-			size += rng.Intn(cfg.MaxBytes - cfg.MinBytes + 1)
-		}
-		buf := make([]byte, size)
-		// Fill with deterministic bytes so two re-runs with the same
-		// seed produce identical commit content (helps reproduce
-		// fossil-side issues from logs).
-		for j := range buf {
-			buf[j] = byte('a' + rng.Intn(26))
-		}
-		files[i] = coord.File{Path: p, Content: buf}
-	}
+	files, paths := buildTaskFiles(slotIdx, taskIdx, cfg, rng)
 
 	taskID, err := c.OpenTask(ctx,
 		fmt.Sprintf("task-%d-%d", slotIdx, taskIdx), paths)
@@ -147,8 +117,57 @@ func runTask(
 	defer func() { _ = rel() }()
 	atomic.AddInt64(&res.ClaimsWon, 1)
 
-	// Random think time so commits interleave naturally on the wall
-	// clock instead of all firing in lockstep.
+	if err := sleepThink(ctx, cfg, rng); err != nil {
+		return err
+	}
+
+	if err := commitWithRetry(ctx, c, slotIdx, taskIdx, taskID, files, rng, res); err != nil {
+		return err
+	}
+
+	if err := c.CloseTask(ctx, taskID,
+		fmt.Sprintf("herd slot %d task %d done", slotIdx, taskIdx),
+	); err != nil {
+		return fmt.Errorf("agent-%d task-%d close: %w",
+			slotIdx, taskIdx, err)
+	}
+	return nil
+}
+
+// buildTaskFiles deterministically synthesizes the file set for one task.
+// Paths are task-scoped within the slot so successive tasks on the same
+// slot do not contend on the same hold; deterministic content lets two
+// re-runs with the same seed produce identical commits.
+func buildTaskFiles(slotIdx, taskIdx int, cfg Config, rng *rand.Rand) ([]coord.File, []string) {
+	n := cfg.MinFiles
+	if cfg.MaxFiles > cfg.MinFiles {
+		n += rng.Intn(cfg.MaxFiles - cfg.MinFiles + 1)
+	}
+	files := make([]coord.File, n)
+	paths := make([]string, n)
+	for i := 0; i < n; i++ {
+		p := filepath.Join("/",
+			fmt.Sprintf("slot-%d", slotIdx),
+			fmt.Sprintf("task-%d", taskIdx),
+			fmt.Sprintf("file-%d.txt", i),
+		)
+		paths[i] = p
+		size := cfg.MinBytes
+		if cfg.MaxBytes > cfg.MinBytes {
+			size += rng.Intn(cfg.MaxBytes - cfg.MinBytes + 1)
+		}
+		buf := make([]byte, size)
+		for j := range buf {
+			buf[j] = byte('a' + rng.Intn(26))
+		}
+		files[i] = coord.File{Path: p, Content: buf}
+	}
+	return files, paths
+}
+
+// sleepThink waits a randomized amount within [MinThinkMS, MaxThinkMS]
+// so commits interleave on the wall clock instead of firing in lockstep.
+func sleepThink(ctx context.Context, cfg Config, rng *rand.Rand) error {
 	thinkMS := cfg.MinThinkMS
 	if cfg.MaxThinkMS > cfg.MinThinkMS {
 		thinkMS += rng.Intn(cfg.MaxThinkMS - cfg.MinThinkMS + 1)
@@ -158,18 +177,25 @@ func runTask(
 		return ctx.Err()
 	case <-time.After(time.Duration(thinkMS) * time.Millisecond):
 	}
+	return nil
+}
 
-	// Harness-layer commit-retry: coord.Commit does at-most-one
-	// internal pull+update+retry on WouldFork. Under heavy concurrency
-	// (16 leaves racing), the at-most-one retry can itself lose the
-	// fork race when a third leaf commits inside the retry window. The
-	// harness retries on ConflictForkedError with bounded backoff so a
-	// race-loss does not kill the slot — but counts every retry so the
-	// summary surfaces real contention.
+// commitWithRetry wraps coord.Commit with a bounded retry loop. coord
+// itself does at-most-one internal pull+update+retry on WouldFork; under
+// heavy concurrency the retry can lose the fork race when a third leaf
+// commits inside the retry window. The harness retries on
+// ConflictForkedError with jittered backoff so a race-loss does not kill
+// the slot, and counts every retry so the summary surfaces real
+// contention. On exhaustion, increments ForkUnrecoverable.
+func commitWithRetry(
+	ctx context.Context, c *coord.Coord,
+	slotIdx, taskIdx int, taskID coord.TaskID, files []coord.File,
+	rng *rand.Rand, res *Result,
+) error {
 	const maxCommitRetries = 8
 	const commitBackoffStep = 25 * time.Millisecond
-	var commitDur time.Duration
 	commitStart := time.Now()
+	var err error
 	for attempt := 0; ; attempt++ {
 		_, err = c.Commit(ctx,
 			taskID,
@@ -185,36 +211,24 @@ func runTask(
 		if attempt >= maxCommitRetries {
 			break
 		}
-		// Jittered backoff so concurrent retries do not lock-step.
-		jitter := time.Duration(rng.Intn(int(commitBackoffStep))) * time.Nanosecond / 1
+		jitter := time.Duration(rng.Intn(int(commitBackoffStep)))
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(commitBackoffStep*time.Duration(attempt+1) + jitter):
 		}
 	}
-	commitDur = time.Since(commitStart)
-	res.AddLatency(commitDur)
-	if err != nil {
-		// Hit max retries; surface as unrecoverable. Real planner
-		// partitions on disjoint slots will fall here too, so the
-		// summary line reflects actual irrecoverable forks.
-		var cfe *coord.ConflictForkedError
-		if errors.As(err, &cfe) {
-			atomic.AddInt64(&res.ForkUnrecoverable, 1)
-			return fmt.Errorf(
-				"agent-%d task-%d unrecoverable fork after %d retries: %w",
-				slotIdx, taskIdx, maxCommitRetries, err)
-		}
-		return fmt.Errorf("agent-%d task-%d commit: %w",
-			slotIdx, taskIdx, err)
+	res.AddLatency(time.Since(commitStart))
+	if err == nil {
+		return nil
 	}
-
-	if err := c.CloseTask(ctx, taskID,
-		fmt.Sprintf("herd slot %d task %d done", slotIdx, taskIdx),
-	); err != nil {
-		return fmt.Errorf("agent-%d task-%d close: %w",
-			slotIdx, taskIdx, err)
+	var cfe *coord.ConflictForkedError
+	if errors.As(err, &cfe) {
+		atomic.AddInt64(&res.ForkUnrecoverable, 1)
+		return fmt.Errorf(
+			"agent-%d task-%d unrecoverable fork after %d retries: %w",
+			slotIdx, taskIdx, maxCommitRetries, err)
 	}
-	return nil
+	return fmt.Errorf("agent-%d task-%d commit: %w",
+		slotIdx, taskIdx, err)
 }

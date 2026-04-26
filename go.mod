@@ -2,6 +2,12 @@ module github.com/danmestas/agent-infra
 
 go 1.26.0
 
+// EdgeSync is private; both local development and CI consume it via a
+// sibling checkout. CI's ci.yml clones github.com/danmestas/EdgeSync to
+// ../EdgeSync; local devs are expected to have the same layout. Drop
+// this replace once EdgeSync is published or moves to a public mirror.
+replace github.com/danmestas/EdgeSync/leaf => ../EdgeSync/leaf
+
 require (
 	github.com/danmestas/EdgeSync/leaf v0.0.1
 	github.com/danmestas/libfossil v0.4.0
@@ -10,7 +16,9 @@ require (
 	github.com/nats-io/nats-server/v2 v2.12.6
 	github.com/nats-io/nats.go v1.49.0
 	go.opentelemetry.io/otel v1.43.0
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.43.0
 	go.opentelemetry.io/otel/metric v1.43.0
+	go.opentelemetry.io/otel/sdk v1.43.0
 	go.opentelemetry.io/otel/trace v1.43.0
 )
 
@@ -37,9 +45,7 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.19.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.43.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.43.0 // indirect
-	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.43.0 // indirect
 	go.opentelemetry.io/otel/log v0.19.0 // indirect
-	go.opentelemetry.io/otel/sdk v1.43.0 // indirect
 	go.opentelemetry.io/otel/sdk/log v0.19.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.43.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect

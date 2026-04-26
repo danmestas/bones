@@ -134,13 +134,13 @@ func printSummary(cfg Config, res *Result) {
 	fmt.Printf("  hub commits:        %d\n", res.HubCommits)
 	fmt.Printf("  fork retries:       %d  (out of %d commits)\n",
 		res.ForkRetries, total)
-	fmt.Printf("  fork unrecoverable: %d  (planner partition failure — should be 0 if slots disjoint)\n",
+	fmt.Printf("  fork unrecoverable: %d  (planner partition failure)\n",
 		res.ForkUnrecoverable)
 	fmt.Printf("  claims won:         %d\n", res.ClaimsWon)
 	fmt.Printf("  claims lost:        %d\n", res.ClaimsLost)
-	fmt.Printf("  broadcasts pulled:  %d  (observable via SigNoz coord.SyncOnBroadcast spans)\n",
+	fmt.Printf("  broadcasts pulled:  %d  (see coord.SyncOnBroadcast spans)\n",
 		res.BroadcastsPulled)
-	fmt.Printf("  broadcasts skipped (idempotent): %d  (observable via SigNoz coord.SyncOnBroadcast spans)\n",
+	fmt.Printf("  broadcasts skipped (idempotent): %d  (see SyncOnBroadcast)\n",
 		res.BroadcastsSkippedIdempotent)
 	p50 := res.Percentile(50).Milliseconds()
 	p99 := res.Percentile(99).Milliseconds()
