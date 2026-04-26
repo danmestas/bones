@@ -209,9 +209,7 @@ func (l *Leaf) Claim(ctx context.Context, taskID TaskID) (*Claim, error) {
 }
 
 // Commit writes files into the leaf's libfossil repo as a new checkin
-// authored by the slot, then triggers a sync round (SyncNow). On
-// post-sync divergence — local tip drifted from the parent expected at
-// commit time — returns ErrConflict.
+// authored by the slot, then triggers a sync round (SyncNow).
 //
 // The hold-gate (Invariant 20) and epoch-gate (Invariant 24) are
 // enforced via the leaf's Coord: every File.Path must be held by this
@@ -222,10 +220,6 @@ func (l *Leaf) Claim(ctx context.Context, taskID TaskID) (*Claim, error) {
 // *libfossil.Repo handle to leaf.fossil in this process. Per
 // architectural invariant: one *libfossil.Repo per fossil file,
 // owned by leaf.Agent.
-//
-// ErrConflict is a defense-in-depth assertion: the disjoint-slot
-// validator should make this unreachable. There is no auto-recovery
-// (fork+merge has been deleted); callers treat it as planner failure.
 //
 // On success, returns the manifest UUID of the new checkin.
 func (l *Leaf) Commit(ctx context.Context, claim *Claim, files []File) (string, error) {
@@ -240,13 +234,6 @@ func (l *Leaf) Commit(ctx context.Context, claim *Claim, files []File) (string, 
 	}
 	if err := l.coord.checkEpoch(ctx, claim.TaskID()); err != nil {
 		return "", err
-	}
-
-	// Capture parent tip before the write so we can detect post-sync
-	// divergence (the new ErrConflict signal that replaces fork+merge).
-	parent, err := l.Tip(ctx)
-	if err != nil {
-		return "", fmt.Errorf("coord.Leaf.Commit: pre-tip: %w", err)
 	}
 
 	// Write through the agent's repo handle — the only *libfossil.Repo
@@ -275,17 +262,6 @@ func (l *Leaf) Commit(ctx context.Context, claim *Claim, files []File) (string, 
 	// propagation reaches the hub's serve-nats subscriber on the
 	// fossil.<projectcode>.sync subject.
 	l.agent.SyncNow()
-
-	// Post-sync divergence check: if the local tip's parent chain does
-	// not include `parent`, the commit went onto a sibling fork and the
-	// planner overlapped slots. This is ErrConflict; no recovery.
-	post, err := l.Tip(ctx)
-	if err != nil {
-		return "", fmt.Errorf("coord.Leaf.Commit: post-tip: %w", err)
-	}
-	if parent != "" && post == parent {
-		return "", fmt.Errorf("coord.Leaf.Commit: %w: tip did not advance", ErrConflict)
-	}
 	return uuid, nil
 }
 
