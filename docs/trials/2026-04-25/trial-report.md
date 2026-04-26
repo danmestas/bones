@@ -22,6 +22,7 @@ Five trials ran, each tweaking one architectural lever to isolate which constrai
 | 3 | + hub busy_timeout=30s + 1 retry | 39/480 | 3438 | 382 | 1074/1619 | 35.4s | leaf SQLITE_BUSY (5) |
 | 4 | + leaf busy_timeout=30s | 37/480 | 3717 | 413 | 1072/1594 | 35.4s | leaf SQLITE_BUSY (5) |
 | 5 | + hub-wide commit lease (NATS-KV) | 53/480 | 3573 | 397 | 1378/6381 | 67.9s | leaf SQLITE_BUSY (5) on `blob.Store` |
+| 6 | libfossil v0.4.1 (spec baseline + leaf busy_timeout, no autosync, no lease) | 17/480 | 2862 | 318 | 1042/1224 | 32.9s | leaf SQLITE_BUSY (5) on `processResponse round 3` (Pull) |
 
 Aggregation step (verifier-clone of hub) on a separate trial #5 run returned `sync.Clone: exceeded 100 rounds` — the hub repo accumulated enough sibling branches that libfossil's clone protocol couldn't reconcile them within its round budget.
 
@@ -54,6 +55,16 @@ A separate trial #5 run (background task `bdmikocdo`) failed at the verifier-clo
 
 `BroadcastsPulled` and `BroadcastsSkippedIdempotent` counters in `examples/herd-hub-leaf/harness.go` are declared and reported in the stdout summary, but never incremented anywhere. Broadcasts ARE firing (verified by SigNoz spans for `coord.SyncOnBroadcast`); the counters are dead instrumentation. Worth wiring up before the next trial.
 
+### Finding #6 — libfossil v0.4.1 fixed the substrate but didn't lift the architecture's throughput ceiling
+
+After libfossil v0.4.1 shipped (xfer encoder, multi-round sync, server-side crosslink), the substrate-level deficiencies that motivated findings #3 and #4 are gone — `TestE2E_3x3` passes against the hub's own `event` table directly with no verifier-clone, the `precreateLeaves` project-code threading is no longer needed, and `Manager.Push` no longer needs the `ServerCode = AgentID` or `Pull:true` workarounds. The 3×3 friendly case is clean.
+
+Trial #6 ran the same 16×30 herd against this clean substrate without any of the trial-step-2-through-5 architectural changes (no autosync, no lease, no bounded-N retry — just the spec's at-most-one-retry coord.Commit path plus the leaf busy_timeout from the merged trial commit). Result: **17/480 hub commits**, identical to trial #1's baseline. Fork retries 2862, unrecoverable forks 318, runtime 32.9s. Terminal failure is leaf SQLITE_BUSY (5) on `processResponse round 3` during a Pull, so the leaf busy_timeout is in effect but doesn't extend to all SQLite connection paths during a sync session.
+
+Reading: **v0.4.1 was necessary but not sufficient.** It removed the phantom-fork problem from finding #3 (Pulls now retrieve consistent state) but didn't change the parent-RID race window during pull→commit→push. Under 16-way concurrency a third leaf still commits inside any single leaf's retry window, so the spec's at-most-one-retry coord layer remains the ceiling. The natural next levers — already prototyped in trials 2–5 and archived to `trial-explorations-2026-04-25` — are bounded-N retry (trial-step-3) plus hub-wide commit lease (trial-step-4); now that the substrate is reliable, the lease should deliver the step change it failed to deliver in trial #5.
+
+The friendly 3×3 case (and any low-concurrency production workload) is correct and unchanged. The 16-way scaling case needs trial-step-3+4 reapplied on top of v0.4.1.
+
 ## What worked
 
 - **`hub-leaf-orchestrator` branch** — 22 commits + 5 trial commits stacked cleanly without rebase pain. PR #14 stays the integration target.
@@ -75,11 +86,15 @@ A separate trial #5 run (background task `bdmikocdo`) failed at the verifier-clo
 3. **Wire harness counters** — `BroadcastsPulled`/`BroadcastsSkippedIdempotent` should increment from the actual `coord.SyncOnBroadcast` span attributes (or a side counter the subscriber updates).
 4. **Re-baseline 3×3 e2e** — once libfossil v0.4.1 lands and finding #3 is closed, the trial commits' WouldFork-without-retry strictness may be tolerable. If not, restore the bounded-retry path.
 
-## Recommended path
+## Recommended path (updated 2026-04-25 post-trial #6)
 
-The architecture is correct; the libfossil v0.4.0 substrate has known deficiencies that block the trials from producing the intended outcome. **Pause architecture trials, ship libfossil v0.4.1 with the three fixes**, then re-run trials #1–#5 on the fixed substrate. Expect the lease (trial #5) to deliver the step change (480/480 commits) once `WouldFork` is reliable.
+libfossil v0.4.1 shipped (xfer encoder, multi-round sync, server-side crosslink) and was merged into agent-infra (PR #14). Trial #6 confirms the substrate is reliable — `TestE2E_3x3` passes against the hub's `event` table directly with no verifier-clone, and the three workarounds documented earlier (`ServerCode = AgentID`, `Pull:true` co-flag, `precreateLeaves`) are gone.
 
-In the interim, PR #14 represents *correct architecture, not yet correct at scale*. The 3×3 e2e demonstrates the design works at the friendly case; the strict assertion at scale is a v1.1 deliverable gated on libfossil v0.4.1.
+But trial #6 also confirms v0.4.1 alone does not lift the architecture's throughput ceiling. The spec's at-most-one-retry coord layer is still the bottleneck under 16-way concurrency: hub commits stuck at 17/480, identical to trial #1's substrate-broken baseline.
+
+Next step: reapply trial-step-3 (bounded-N retry) and trial-step-4 (hub-wide commit lease) on top of v0.4.1. Both prototypes exist on the archived `trial-explorations-2026-04-25` branch and can be cherry-picked. With the substrate now reliable, the lease should serialize cleanly without the phantom-fork problem that confused it in trial #5; a bounded retry of 5–8 attempts should cover the residual race window.
+
+In the interim, PR #14's merged architecture is *correct, scale-limited at 16+ concurrent leaves on the same hub trunk*. The 3×3 e2e demonstrates the design works at the friendly case. Production deployments under low concurrency (single-digit leaves on the same trunk) are unaffected. The strict 16×30 assertion is a v1.1 deliverable gated on the lease + bounded-retry reapply.
 
 ## Trial commits
 
@@ -90,12 +105,15 @@ In the interim, PR #14 represents *correct architecture, not yet correct at scal
 - `70521bd` — trial-step-4: hub-wide commit lease via JetStream KV serializes pull/commit/push
 - `85ada4d` — herd-hub-leaf: print summary even when Run returns error (diagnostic harness fix)
 
+Trial #6 added no new commits — it ran the as-merged main (post PR #14) against libfossil v0.4.1.
+
 ## SigNoz services to inspect
 
 - `herd-hub-leaf` (trial #1)
 - `herd-hub-leaf-trial2`
 - `herd-hub-leaf-trial3`
 - `herd-hub-leaf-trial5` (no `trial4` — leaf busy_timeout used same service name as trial #3 for direct comparison)
+- `herd-hub-leaf-trial6` (post-PR #14 merge, against libfossil v0.4.1)
 
 Span operations of interest:
 
