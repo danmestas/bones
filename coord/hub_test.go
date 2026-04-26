@@ -4,6 +4,7 @@ package coord
 import (
 	"context"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -41,8 +42,8 @@ func TestHub_OpenStop(t *testing.T) {
 		t.Fatalf("NATSURL: empty")
 	}
 	// hub.fossil must exist on disk after Open
-	if _, err := filepath.Abs(filepath.Join(dir, "hub.fossil")); err != nil {
-		t.Fatalf("abs: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, "hub.fossil")); err != nil {
+		t.Fatalf("hub.fossil missing after OpenHub: %v", err)
 	}
 	if err := h.Stop(); err != nil {
 		t.Fatalf("Stop: %v", err)
