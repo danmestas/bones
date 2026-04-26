@@ -296,21 +296,10 @@ func (m *Manager) Pull(ctx context.Context, hubURL string) error {
 // only place transport-construction details live; coord callers stay
 // URL-only.
 //
-// SyncOpts.Pull is set to true alongside Push because libfossil v0.4.0's
-// push protocol completes in a single round when Pull=false, before the
-// server returns the gimme cards that ask the client to deliver its
-// announced igot blobs. With Pull=true the client loops a second round
-// to satisfy the gimmes, which is the actual file-transfer round. From
-// the leaf's view, "the hub is ahead" never happens (the leaf is the
-// source of truth for its own commits) so the receive side is a no-op
-// — Pull=true here is purely to drive the multi-round push loop.
-//
-// ServerCode is set to cfg.AgentID because libfossil v0.4.0's xfer
-// encoder writes `push <serverCode> <projectCode>\n`; with both empty,
-// the consecutive spaces collapse under strings.Fields and the server
-// rejects the card as `push requires 1-2 args, got 0`. Any non-empty
-// ServerCode satisfies the encoder; AgentID is a stable per-leaf ID
-// suitable for the role.
+// libfossil v0.4.1's Sync round-loop continues based on pending work
+// regardless of the user's Pull flag, so Push: true alone drives the
+// gimme/igot exchange that delivers blobs to the hub. Empty ServerCode
+// is accepted by v0.4.1's xfer encoder.
 func (m *Manager) Push(ctx context.Context, hubURL string) error {
 	assert.NotNil(ctx, "fossil.Push: ctx is nil")
 	assert.NotEmpty(hubURL, "fossil.Push: hubURL is empty")
@@ -319,9 +308,7 @@ func (m *Manager) Push(ctx context.Context, hubURL string) error {
 	}
 	transport := libfossil.NewHTTPTransport(hubURL)
 	if _, err := m.repo.Sync(ctx, transport, libfossil.SyncOpts{
-		Push:       true,
-		Pull:       true,
-		ServerCode: m.cfg.AgentID,
+		Push: true,
 	}); err != nil {
 		return fmt.Errorf("fossil.Push: %w", err)
 	}
