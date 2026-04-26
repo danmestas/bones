@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -58,6 +59,16 @@ func publishTipChanged(ctx context.Context, nc *nats.Conn, manifestHash string) 
 // tipSubscriber consumes coord.tip.changed broadcasts and runs pullFn
 // when the broadcast hash differs from the local tip (returned by
 // localFn). Idempotent: identical hashes are no-ops. Closing unsubs.
+//
+// Coalescing: at most one broadcast-driven Pull is in flight per
+// subscriber at any time. Broadcasts arriving while a Pull is in
+// flight are dropped (acked, span recorded with
+// pull.skipped_coalesced=true). Rationale: every Pull captures the
+// hub's state at the time it runs; broadcasts that arrived during the
+// Pull are subsumed by it. Without coalescing, a tight-loop herd of
+// N leaves produces N²-per-leaf broadcast Pulls that queue at the
+// leaf-mutex (writeMu on internal/fossil.Manager), crowding out the
+// agent's own Commit work. See trial-report.md finding #14.
 type tipSubscriber struct {
 	nc      *nats.Conn
 	hubURL  string
@@ -65,6 +76,7 @@ type tipSubscriber struct {
 	localFn func(ctx context.Context) (string, error)
 	js      nats.JetStreamContext
 	sub     *nats.Subscription
+	pulling atomic.Bool
 }
 
 // Start declares a JetStream durable consumer named "coord-tip-<random>"
@@ -147,6 +159,21 @@ func (s *tipSubscriber) handle(ctx context.Context, m *nats.Msg) {
 		)
 		return
 	}
+	// Coalesce: if a Pull is already in flight for this subscriber, drop
+	// this broadcast. The in-flight Pull will fetch the hub's state at
+	// the time it runs (which is at-or-after this broadcast's tip), so
+	// nothing is lost by skipping. Without this gate, every commit fans
+	// out N-1 broadcast Pulls to N-1 peers; under high concurrency the
+	// queue at the leaf-mutex grows faster than it drains. See
+	// trial-report.md finding #14.
+	if !s.pulling.CompareAndSwap(false, true) {
+		span.SetAttributes(
+			attribute.Bool("pull.success", false),
+			attribute.Bool("pull.skipped_coalesced", true),
+		)
+		return
+	}
+	defer s.pulling.Store(false)
 	if err := s.pullFn(ctx, s.hubURL); err != nil {
 		span.SetAttributes(
 			attribute.Bool("pull.success", false),
