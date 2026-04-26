@@ -103,7 +103,12 @@ type Result struct {
 	CommitLatencies   []time.Duration
 
 	UnrecoverableErr error
-	Runtime          time.Duration
+	// AggregateErr captures verifier-clone failures (e.g., libfossil
+	// "exceeded 100 rounds" from finding #4). Non-fatal: HubCommits is
+	// populated from a direct hub-event-table count instead. Surfaced
+	// in the summary so the operator sees the protocol-budget signal.
+	AggregateErr error
+	Runtime      time.Duration
 }
 
 // AddLatency appends a commit latency observation under lock.
@@ -287,14 +292,46 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		res.UnrecoverableErr = firstErr
 	}
 
+	// Record wall-clock runtime BEFORE aggregate. Verifier-clone may
+	// fail with "exceeded 100 rounds" when the hub repo accumulates
+	// too many sibling branches (trial #5 finding #4); in that case
+	// the agent-side metrics are still valid and we want them in the
+	// summary regardless of clone outcome.
+	res.Runtime = time.Since(start)
+
+	// Direct hub-side count: query the hub's event table for ci rows.
+	// libfossil v0.4.1's server-side crosslink keeps `event` populated
+	// in real time, so this works even when verifier clone fails. The
+	// clone-based aggregateHub still runs below as a cross-check.
+	if err := countHubCommitsDirect(hubRepo, res); err != nil {
+		// Soft failure; aggregateHub may still succeed.
+		_ = err
+	}
+
 	// Aggregate hub state via verifier clone (libfossil v0.4.0
 	// HandleSync stores blobs but does not crosslink server-side).
 	if aerr := aggregateHub(ctx, cfg.WorkDir, hubSrv.URL, res); aerr != nil {
-		return res, fmt.Errorf("aggregate: %w", aerr)
+		// Direct count above is the source of truth post-v0.4.1; the
+		// clone failure no longer zeroes the metric. Surface the
+		// clone error as a non-fatal note in res.AggregateErr so the
+		// caller can print it without failing the trial summary.
+		res.AggregateErr = fmt.Errorf("aggregate: %w", aerr)
 	}
-
-	res.Runtime = time.Since(start)
 	return res, nil
+}
+
+// countHubCommitsDirect reads the hub's event table for ci rows. Used
+// when verifier-clone fails (round-budget exhaustion) but the hub itself
+// has consistent state. Safe under v0.4.1's server-side crosslink.
+func countHubCommitsDirect(repo *libfossil.Repo, res *Result) error {
+	var n int
+	if err := repo.DB().QueryRow(
+		`SELECT COUNT(*) FROM event WHERE type='ci'`,
+	).Scan(&n); err != nil {
+		return fmt.Errorf("count hub direct: %w", err)
+	}
+	res.HubCommits = n
+	return nil
 }
 
 // aggregateHub clones the hub into a verifier repo and counts trunk

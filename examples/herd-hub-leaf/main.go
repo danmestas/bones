@@ -146,6 +146,10 @@ func printSummary(cfg Config, res *Result) {
 	p99 := res.Percentile(99).Milliseconds()
 	fmt.Printf("  P50/P99 commit ms:  %d / %d\n", p50, p99)
 	fmt.Printf("  total runtime:      %s\n", res.Runtime.Round(time.Millisecond))
+	if res.AggregateErr != nil {
+		fmt.Printf("  aggregate note:     %v (HubCommits sourced from direct hub-event count)\n",
+			res.AggregateErr)
+	}
 }
 
 // setupTelemetry installs an OTel TracerProvider exporting to the
