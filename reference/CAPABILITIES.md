@@ -281,5 +281,18 @@ The substrate differences that matter most:
 
 ---
 
+## 16. Scaling/observability trials
+
+| Date | Architecture under test | Hub commits / 480 | Branch | Report |
+|---|---|---|---|---|
+| 2026-04-23 | shared-SQLite stress amplifier (8×20) | n/a | `trial/herd-observability` | trial branch |
+| 2026-04-25 | hub-and-leaf, per-agent libfossil (16×30) | 17–53 | `hub-leaf-orchestrator` (PR #14) | [docs/trials/2026-04-25/trial-report.md](../docs/trials/2026-04-25/trial-report.md) |
+
+The 2026-04-25 trial established that **PR #14's architecture is correct in design** but the libfossil v0.4.0 substrate has three deficiencies (xfer encoder, server-side crosslink, push-needs-pull-loop) that block the strict `fossil_commits == tasks` assertion at scale. Strict assertion is v1.1 deliverable gated on libfossil v0.4.1. See the report for full findings.
+
+Exploratory trial commits (autosync rewrite, hub-wide commit lease) were archived to local tag `trials-2026-04-25` and branch `trial-explorations-2026-04-25`; they are not on PR #14 because they regressed the 3×3 e2e and didn't produce the expected step change.
+
+---
+
 *Living doc. Revise as phases land and design questions resolve. See
 `README.md` for the phase plan and master open-questions list.*

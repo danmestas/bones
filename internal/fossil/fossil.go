@@ -107,6 +107,16 @@ func Open(ctx context.Context, cfg Config) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fossil.Open: %w", err)
 	}
+	// Leaf SQLite gets a 30-second busy_timeout. Two writers race on the
+	// same leaf DB in the hub-leaf model: the agent's Commit goroutine and
+	// the broadcast-driven tipSubscriber.pullFn. Without this pragma each
+	// fails fast with SQLITE_BUSY (5) on the first lock contention. With
+	// it, writers wait instead of dropping the work. See
+	// docs/trials/2026-04-25/trial-report.md finding #2.
+	if _, err := repo.DB().Exec("PRAGMA busy_timeout = 30000"); err != nil {
+		_ = repo.Close()
+		return nil, fmt.Errorf("fossil.Open: leaf busy_timeout: %w", err)
+	}
 
 	return &Manager{
 		cfg:  cfg,
