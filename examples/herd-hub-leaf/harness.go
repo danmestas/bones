@@ -160,6 +160,10 @@ func freeAddr() (string, error) {
 // Run executes the full trial against coord.Hub + N coord.Leaf. Caller
 // must have set up OTel before calling so spans land in the configured
 // exporter.
+//
+//	stay together for end-to-end clarity.
+//
+//nolint:funlen // trial harness: setup, fan-out, drain, teardown
 func Run(ctx context.Context, cfg Config) (*Result, error) {
 	assert.NotNil(ctx, "herd-hub-leaf.Run: ctx is nil")
 	assert.NotEmpty(cfg.WorkDir, "herd-hub-leaf.Run: cfg.WorkDir is empty")
@@ -187,14 +191,21 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	var wg sync.WaitGroup
 	var errMu sync.Mutex
 	var firstErr error
+	var leavesMu sync.Mutex
+	leaves := make([]*coord.Leaf, 0, cfg.Agents)
 
 	for i := 0; i < cfg.Agents; i++ {
 		i := i
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			rerr := runAgent(ctx, i, cfg,
+			l, rerr := runAgent(ctx, i, cfg,
 				hub.LeafUpstream(), hub.NATSURL(), hub.HTTPAddr(), res)
+			if l != nil {
+				leavesMu.Lock()
+				leaves = append(leaves, l)
+				leavesMu.Unlock()
+			}
 			if rerr != nil {
 				errMu.Lock()
 				if firstErr == nil {
@@ -213,36 +224,74 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	}
 	res.Runtime = time.Since(start)
 
-	// Stop the hub before reading hub.fossil: leaf.Agent owns the only
-	// *libfossil.Repo handle to the file while running, and SQLite-WAL
-	// requires we not race a second handle against it.
+	// Wait for in-flight syncs to land at the hub before reading.
+	// leaf.Agent.SyncNow only signals the leaf's pollLoop — Stopping
+	// the leaf right after Leaf.Commit returns can cancel in-flight
+	// sync RPCs and lose commits at teardown. Same pattern as
+	// examples/hub-leaf-e2e/main.go: keep leaves alive, poll the hub
+	// until either every commit is visible or the deadline elapses,
+	// then tear down. SQLite-WAL allows a second read-only handle
+	// concurrent with the hub's writer.
+	expected := int(res.ClaimsWon - res.ForkUnrecoverable)
+	if cerr := waitHubCommits(cfg.WorkDir, expected, 30*time.Second, res); cerr != nil {
+		res.AggregateErr = cerr
+	}
+	stopLeaves(leaves)
 	if err := hub.Stop(); err != nil {
-		res.AggregateErr = fmt.Errorf("hub stop: %w", err)
+		if res.AggregateErr == nil {
+			res.AggregateErr = fmt.Errorf("hub stop: %w", err)
+		}
 	} else {
 		hubStopped = true
-		if cerr := countHubCommits(cfg.WorkDir, res); cerr != nil {
-			res.AggregateErr = cerr
-		}
 	}
 	return res, nil
 }
 
-// countHubCommits opens hub.fossil read-only after Hub.Stop and counts
-// trunk checkin events. Agnostic to the verifier-clone path that was
-// retired with libfossil v0.4.0's HandleSync (server-side crosslink in
-// v0.4.1+ keeps the event table populated in real time).
-func countHubCommits(workdir string, res *Result) error {
-	repo, err := libfossil.Open(filepath.Join(workdir, "hub.fossil"))
-	if err != nil {
-		return fmt.Errorf("open hub: %w", err)
+// stopLeaves stops every leaf in the slice. Errors ignored; teardown
+// is best-effort because the hub already counted commits via the
+// post-poll waitHubCommits.
+func stopLeaves(leaves []*coord.Leaf) {
+	for _, l := range leaves {
+		if l == nil {
+			continue
+		}
+		_ = l.Stop()
 	}
-	defer func() { _ = repo.Close() }()
-	var n int
-	if err := repo.DB().QueryRow(
-		`SELECT COUNT(*) FROM event WHERE type='ci'`,
-	).Scan(&n); err != nil {
-		return fmt.Errorf("count hub commits: %w", err)
+}
+
+// waitHubCommits polls hub.fossil's event-ci count until it reaches
+// expected or the deadline elapses, writing the final observed count
+// into res.HubCommits. Open uses a separate read-only *libfossil.Repo
+// concurrent with the hub agent's writer (SQLite-WAL safe).
+func waitHubCommits(workdir string, expected int, timeout time.Duration, res *Result) error {
+	repoPath := filepath.Join(workdir, "hub.fossil")
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		r, err := libfossil.Open(repoPath)
+		if err == nil {
+			row := r.DB().QueryRow(`SELECT COUNT(*) FROM event WHERE type='ci'`)
+			var n int
+			scanErr := row.Scan(&n)
+			_ = r.Close()
+			if scanErr == nil {
+				res.HubCommits = n
+				if n >= expected {
+					return nil
+				}
+				lastErr = nil
+			} else {
+				lastErr = scanErr
+			}
+		} else {
+			lastErr = err
+		}
+		if time.Now().After(deadline) {
+			if lastErr != nil {
+				return fmt.Errorf("waitHubCommits: %w", lastErr)
+			}
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	res.HubCommits = n
-	return nil
 }
