@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -453,17 +451,5 @@ func legalTransition(current, next Task) bool {
 }
 
 func closedCompactionOnlyUpdate(current, next Task) bool {
-	strippedCurrent := current
-	strippedNext := next
-	strippedCurrent.UpdatedAt = time.Time{}
-	strippedNext.UpdatedAt = time.Time{}
-	strippedCurrent.SchemaVersion = 0
-	strippedNext.SchemaVersion = 0
-	strippedCurrent.OriginalSize = 0
-	strippedNext.OriginalSize = 0
-	strippedCurrent.CompactLevel = 0
-	strippedNext.CompactLevel = 0
-	strippedCurrent.CompactedAt = nil
-	strippedNext.CompactedAt = nil
-	return reflect.DeepEqual(strippedCurrent, strippedNext)
+	return current.eqNonCompaction(next)
 }

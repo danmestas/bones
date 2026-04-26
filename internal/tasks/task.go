@@ -158,6 +158,80 @@ func decode(b []byte) (Task, error) {
 	return t, nil
 }
 
+// eqNonCompaction reports whether t and other are equal on all fields
+// that are not compaction metadata. Any new Task field that is not a
+// compaction field MUST be listed here; omitting it silently permits
+// that field to change in a closed→closed update, which would be a
+// correctness bug. The compile-time field exhaustion check is:
+//
+//	_ = Task{
+//	    ID, Title, Status, ClaimedBy, Files, Parent, Edges,
+//	    Context, CreatedAt, DeferUntil, ClosedAt, ClosedBy,
+//	    ClosedReason, ClaimEpoch,
+//	    // compaction fields intentionally omitted:
+//	    //   UpdatedAt, SchemaVersion, OriginalSize, CompactLevel, CompactedAt
+//	}
+//
+// The five compaction fields (UpdatedAt, SchemaVersion, OriginalSize,
+// CompactLevel, CompactedAt) are allowed to differ; all others must
+// match for a closed→closed update to be legal.
+func (t Task) eqNonCompaction(other Task) bool {
+	if t.ID != other.ID ||
+		t.Title != other.Title ||
+		t.Status != other.Status ||
+		t.ClaimedBy != other.ClaimedBy ||
+		t.Parent != other.Parent ||
+		t.ClosedBy != other.ClosedBy ||
+		t.ClosedReason != other.ClosedReason ||
+		t.ClaimEpoch != other.ClaimEpoch {
+		return false
+	}
+	// Slice comparisons.
+	if len(t.Files) != len(other.Files) {
+		return false
+	}
+	for i := range t.Files {
+		if t.Files[i] != other.Files[i] {
+			return false
+		}
+	}
+	if len(t.Edges) != len(other.Edges) {
+		return false
+	}
+	for i := range t.Edges {
+		if t.Edges[i] != other.Edges[i] {
+			return false
+		}
+	}
+	// Map comparison.
+	if len(t.Context) != len(other.Context) {
+		return false
+	}
+	for k, v := range t.Context {
+		if other.Context[k] != v {
+			return false
+		}
+	}
+	// Pointer-time comparisons.
+	switch {
+	case t.DeferUntil == nil && other.DeferUntil != nil:
+		return false
+	case t.DeferUntil != nil && other.DeferUntil == nil:
+		return false
+	case t.DeferUntil != nil && !t.DeferUntil.Equal(*other.DeferUntil):
+		return false
+	}
+	switch {
+	case t.ClosedAt == nil && other.ClosedAt != nil:
+		return false
+	case t.ClosedAt != nil && other.ClosedAt == nil:
+		return false
+	case t.ClosedAt != nil && !t.ClosedAt.Equal(*other.ClosedAt):
+		return false
+	}
+	return t.CreatedAt.Equal(other.CreatedAt)
+}
+
 // EventKind identifies the shape of a task state change delivered by
 // Watch.
 type EventKind int
