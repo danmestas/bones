@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 
 	"github.com/danmestas/libfossil"
@@ -79,6 +80,18 @@ type Manager struct {
 	checkout *libfossil.Checkout // nil until CreateCheckout succeeds
 	dir      string              // cfg.CheckoutRoot/cfg.AgentID
 	done     atomic.Bool
+
+	// writeMu serializes leaf SQLite writers within this Manager's
+	// process. Two callers are common: the agent's Commit goroutine
+	// (calling Commit/Push) and a broadcast-driven Pull goroutine
+	// (calling Pull/Update). They race on the same WAL — the lock
+	// prevents fail-fast SQLITE_BUSY (5) and (517) under concurrent
+	// access. Held during the SQLite write only; libfossil network
+	// round-trips happen with the lock held but that's acceptable
+	// because the alternative is data corruption. Read-only methods
+	// (Tip, WouldFork, OpenFile, Diff) take a snapshot and don't
+	// acquire the lock. ADR 0010 / trial-report.md finding #3, #7.
+	writeMu sync.Mutex
 }
 
 // Open creates (if needed) and opens the fossil repo at cfg.RepoPath.
@@ -163,6 +176,8 @@ func (m *Manager) CreateCheckout(ctx context.Context) error {
 	if m.done.Load() {
 		return ErrClosed
 	}
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
 	if m.checkout != nil {
 		return nil
 	}
@@ -215,6 +230,8 @@ func (m *Manager) Commit(
 	if m.done.Load() {
 		return "", ErrClosed
 	}
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
 
 	parent, _, err := m.tipRID()
 	if err != nil {
@@ -269,6 +286,8 @@ func (m *Manager) Pull(ctx context.Context, hubURL string) error {
 	if m.done.Load() {
 		return ErrClosed
 	}
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
 	// libfossil.PullOpts has no ServerCode field, so we drop down to
 	// Sync directly to set ServerCode=AgentID. With both ServerCode and
 	// ProjectCode empty, libfossil v0.4.0's xfer encoder emits
@@ -306,6 +325,8 @@ func (m *Manager) Push(ctx context.Context, hubURL string) error {
 	if m.done.Load() {
 		return ErrClosed
 	}
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
 	transport := libfossil.NewHTTPTransport(hubURL)
 	if _, err := m.repo.Sync(ctx, transport, libfossil.SyncOpts{
 		Push: true,
@@ -325,6 +346,8 @@ func (m *Manager) Update(ctx context.Context) error {
 	if m.done.Load() {
 		return ErrClosed
 	}
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
 	if m.checkout == nil {
 		return ErrNoCheckout
 	}
@@ -446,6 +469,8 @@ func (m *Manager) Checkout(ctx context.Context, rev string) error {
 	if m.done.Load() {
 		return ErrClosed
 	}
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
 	if m.checkout == nil {
 		return ErrNoCheckout
 	}
