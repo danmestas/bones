@@ -5,7 +5,7 @@
 **PR:** https://github.com/danmestas/agent-infra/pull/14
 **Harness:** `examples/herd-hub-leaf/` (16 agents × 30 tasks = 480 ops)
 **OTLP endpoint:** `http://signoz-vm.tail51604c.ts.net:4318` (Tailscale; otlphttp on the SigNoz collector port). **Trials 1–8 used `https://signoz-vm.tail51604c.ts.net` (port 443) by mistake — that path returns the SigNoz UI HTML with 200, which the otlphttp client treats as success while silently dropping spans. No telemetry from trials 1–8 reached SigNoz. See finding #9.**
-**Architecture under test:** per-agent libfossil + per-agent SQLite + hub fossil HTTP server + NATS broadcast (per `docs/superpowers/specs/2026-04-25-hub-leaf-orchestrator-design.md`)
+**Architecture under test:** per-agent libfossil + per-agent SQLite + hub fossil HTTP server + NATS broadcast (per ADR 0023 `docs/adr/0023-hub-leaf-orchestrator.md`)
 
 ## What we set out to learn
 
