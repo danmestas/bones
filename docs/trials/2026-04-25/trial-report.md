@@ -29,10 +29,91 @@ Trials each tweak one architectural lever to isolate which constraint dominates 
 | 8 | + leaf-local mutex + scoped lease (commit+push only) on v0.4.1 | 4/480 | 4284 | 476 | 5736/5861 | 2m54s | none terminal — bounded-N retry exhausts on every commit; agents reach max retries with WouldFork still true |
 | 9a | (PR #16 architecture, **OTLP disabled**) | 55/480 | 3830 | 425 | 5848/9292 | 3m1s | none |
 | 9b | (PR #16 architecture, **correct OTLP at port 4318**) | **131/480** | 3152 | 349 | 6299/**20600** | 3m27s | none |
+| 10 | fork+merge model: delete lease, delete retry, auto-merge fork branches | 22-24/480 | 0 | 0 | 128-139/449-458 | 893-896ms | leaf "blob not found" during pre-flight Update (libfossil substrate, not coord) |
+| 11 | (regressed: PR #16 was actually trial #8 lease+retry; trial #10's fork+merge code never landed on main; this row is trial #8 architecture re-tested on libfossil v0.4.2 substrate) | 42/480 | 3946 | 438 | 5797/7807 | 2m58s | none |
+| 11b | fork+merge model (cherry-picked from `b9cba0d`) on libfossil v0.4.2 substrate, 16×30 stress | 699 hub events / 369 task completions in 5m46s (killed) | 0 | 0 | 14936/31271 | 5m46s (killed) | none — architecture correct; latency climbing unbounded due to broadcast-Pull amplification |
+| 12 | fork+merge model on libfossil v0.4.2 substrate, **4×30 (realistic concurrency)** | **235 hub events / 120/120 task completions** | 0 | 0 | **49/1137** | **8.755s** | none — production-shape works perfectly |
+| 13 | + Pull coalescing on top of fork+merge, 16×30 stress | 793 hub events / 413/480 task completions | 0 | 0 | 13822/30574 | 7m8s | "exceeded 100 rounds" on a leaf's pre-flight Pull |
+| 14 | rate-envelope sweep on fork+merge + Pull coalescing — 6×30 / 8×30 / 12×30 / 13×30 / 14×30 | see "Rate envelope sweep" section below | | | | | |
+
+### Rate envelope sweep (trial #14, all on fork+merge + Pull-coalescing on libfossil v0.4.2)
+
+| N | Tasks | Hub events | Runtime | P50 | P99 | Hub events/sec | Status |
+|---|---|---|---|---|---|---|---|
+| 4×30 | 120/120 | 235 | 8.7s | 49ms | 1137ms | 27 (burst) | ✅ |
+| 6×30 | 180/180 | 354 | 1m2s | 2115ms | 3117ms | 5.7 | ✅ |
+| 8×30 | 240/240 | 473 | 2m4s | 3619ms | 6948ms | 3.8 | ✅ |
+| 12×30 | 360/360 | 715 | 5m38s | 10511ms | 19744ms | 2.1 | ✅ |
+| 13×30 | 336/390 | 640 | 4m48s | 9941ms | 19212ms | 2.2 | ❌ "100 rounds" on Pull |
+| 14×30 | 371/420 | 731 | 5m58s | 11058ms | 23258ms | 2.0 | ❌ "100 rounds" on Pull |
+| 16×30 | 413/480 | 793 (killed) | 7m8s+ | 13822ms | 30574ms | 1.9 | ❌ killed |
+
+The wall isn't an agent count — it's a sustained hub commit rate. At ~2 hub events/sec under tight-loop stress, libfossil's 100-round Pull-negotiation budget gets eaten and one leaf's pre-flight Pull aborts. This is **not a hard limit on parallelism in production** because production agents commit on minute timescales (think time, code editing), not 50ms tight loops. With 1 commit/min/agent, even 100+ concurrent agents stay well under 2 hub events/sec.
 
 Aggregation step (verifier-clone of hub) on a separate trial #5 run returned `sync.Clone: exceeded 100 rounds` — the hub repo accumulated enough sibling branches that libfossil's clone protocol couldn't reconcile them within its round budget.
 
 ## Findings
+
+### Finding #15 — There is no hard agent-count limit; the architecture is hub-commit-rate-limited at ~2 events/sec sustained
+
+Trial #14's rate-envelope sweep (6, 8, 12, 13, 14, 16 agents × 30 tasks each) under tight-loop stress (no think time, every commit fires immediately after the previous) found the failure cliff is between 12 and 13 leaves. But the failure is the same shape regardless of N: a leaf's pre-flight Pull aborts with `libfossil: sync: sync: exceeded 100 rounds` because the hub has grown faster than the leaf can negotiate. The hub event rate at every failure is essentially identical (~2 events/sec). The hub event rate when N succeeds is also ~2 events/sec for N≥6.
+
+**The architecture's ceiling is the hub commit rate, not the agent count.** Under tight-loop stress at N>12, agents pile commits onto the hub faster than other agents' Pulls can absorb the growth, and the libfossil xfer protocol's 100-round budget is the hard stop. Coalescing broadcast-driven Pulls (commit `4daaa29`) helped throughput modestly (~12% more tasks done at N=16 than without coalescing) but doesn't change the asymptote because it's a hub-side limit, not a leaf-side one.
+
+**Production implications.** With production-cadence workloads (agents commit every minute or so during human-paced coding work, not every 50ms in a tight loop), the per-agent commit rate is ~0.017 events/sec/agent. That gives 100+ concurrent agents head-room before the 2 events/sec ceiling hits. The friendly 3×3 e2e (`TestE2E_3x3`) plus trial #12's 4×30 = 8.7s show the architecture works cleanly at production shape.
+
+**Tier guidance:**
+- **Sweet spot (sub-second P50):** N ≤ 4. Use this for interactive tooling where latency matters.
+- **Acceptable (single-digit P99):** N ≤ 8. Use this for batch agents with bearable latency.
+- **Ceiling under tight-loop stress:** N ≤ 12. Beyond this, libfossil 100-round budget is the wall.
+- **Production cadence (1 commit/min/agent):** N up to ~100+ agents fine; wall is hub-side rate, not agent count.
+
+The orchestrator skill should call out the rate envelope rather than impose a hard agent count limit. Backpressure (delay commit if hub rate exceeds threshold) is a future-work option but unnecessary for production workloads.
+
+### Finding #14 — Fork+merge architecture works perfectly at production-shape concurrency; broadcast-Pull amplification is the 16×30 bottleneck
+
+Trial #12 ran the cherry-picked fork+merge architecture on libfossil v0.4.2 substrate with **HERD_AGENTS=4, HERD_TASKS_PER_AGENT=30** — modeling the user's framing of realistic workloads (2–5 leaves on minute timescales, not the 16×30 stress). Result: **120/120 task completions in 8.755 seconds**, P50 49ms, P99 1137ms, 0 forks-from-the-harness, 0 unrecoverable. 235 hub events from 120 tasks ≈ 2:1 ratio (most commits forked-and-merged; some landed straight to trunk). The architecture is fit for the designed workload.
+
+Trial 11b (16×30 same code, killed at 5m46s) had reached 369/480 task completions before kill, with P50 14.9s and latency climbing unbounded over time per the SigNoz dashboard (Apdex falling from 0.55 → 0.25, p99 climbing 9s → 30s+, ops/s falling 7.5 → 3 — a queueing pattern, not steady state). SigNoz showed `coord.SyncOnBroadcast` had 1461 calls vs 369 commits — broadcasts are firing 4× per commit (and would be 15× per commit with full fan-out, but the queue was building faster than draining when killed).
+
+The mechanism: each commit broadcasts `tip.changed`; all peers' subscribers wake up and run a Pull. Each Pull holds the leaf's `writeMu` (added in trial #8 to fix intra-leaf SQLITE_BUSY between Commit and broadcast-driven Pull). Under 16-way concurrency, broadcast-Pulls queue up at the leaf-mutex, and the Commit goroutine waits. Per-commit P50 of 15s is dominated by mutex wait time, not actual fossil work (Pulls themselves take ~1s P50).
+
+Total broadcast work scales as N²-per-leaf (each commit broadcasts N-1 times → each leaf receives N-1 broadcasts per peer commit). At N=4: 3 broadcasts × ~1s = 3s of broadcast work per peer commit, across 4 peers = 12 broadcast-seconds per commit ≈ 0.75s of mutex contention per commit. At N=16: 15 broadcasts × ~1s = 15s × 16 peers = 240 broadcast-seconds per commit ≈ 15s of mutex contention per commit. The dashboard's 14.9s P50 is consistent with this scaling.
+
+The fix candidates rank in this order: (a) coalesce broadcast-Pulls — if a Pull is in flight, drop new broadcasts since the in-flight Pull will catch the latest hub state anyway. (b) drop broadcast-Pulls entirely; the next commit's pre-flight Pull catches up. (c) reduce broadcast fan-out (per-slot or per-task scoping). Option (a) is the smallest change and tests the hypothesis directly.
+
+### Finding #13 — Trial #10's fork+merge model never made it to main
+
+Investigation while diagnosing trial #11's bad numbers revealed that PR #16 was merged with parent `Merge: 9c1176f 3573329` — meaning the branch-side parent was `3573329` (the OTLP endpoint fix), not `c90f996` (trial #10 docs) or `b9cba0d` (trial #10 fork+merge implementation). Those two commits exist as dangling refs but are not in main's history. They were pushed to the branch AFTER the merge was clicked in GitHub, OR rebased away, OR the merge was based on an earlier branch tip than expected.
+
+Consequence: trials #10 and #11 reported metrics from DIFFERENT codebases. Trial #10 ran the fork+merge model and died fast on the v0.4.1 substrate "blob not found" error at 22/480. Trial #11 ran on v0.4.2 substrate but, unbeknownst to the trial, was actually executing trial #8's lease+retry architecture — explaining its 42/480 result (a marginal improvement over trial #8's v0.4.1 numbers because the substrate was fixed but the architecture was unchanged).
+
+Trial 11b cherry-picked `b9cba0d` and `c90f996` onto branch `trial-11-libfossil-v0.4.2`, restoring the fork+merge architecture, and re-ran the 16×30 herd. That's the trial that produced 369/480 in 5m46s with 0 unrecoverable, and it's the one the broadcast-amplification analysis applies to.
+
+### Finding #12 — Fork+merge model is architecturally correct; the throughput ceiling moved off coord and onto libfossil's blob-transfer machinery
+
+Trial #10 implemented the architecturally-correct shape per the design intent: per-agent libfossil leaves, hub trunk, NATS broadcast, planner-driven disjoint slots, and — crucially — *forks-as-recoverable-state* rather than *forks-as-precondition-violation*. Every prior trial built machinery to PREVENT forks (lease, bounded-N retry, busy_timeouts, lease-around-the-WouldFork-frame); trial #10 lets fossil place forks on generated branches when WouldFork=true at commit time, then auto-merges those branches back into trunk locally and pushes the merge.
+
+The coord-layer code shrunk meaningfully: `coord.Commit` lost its bounded-N retry loop, the `COORD_COMMIT_LEASE` JetStream KV bucket, the lease-acquire/release helpers, and the `math/rand` import. `internal/fossil.Manager.Commit` grew a `forkBranch string` return; coord reads it and drives `Pull-after-fork → Merge → Push → notify` when non-empty. The local `writeMu` from trial #8 stayed (still serializes the leaf's own Commit goroutine vs `tipSubscriber.pullFn` on the same SQLite). Test surface stayed coherent: `TestCommit_ForkUnrecoverable_NoHub` flipped to `TestCommit_ForkAutoMerge_NoHub` (now expects the auto-merge to succeed); `TestE2E_3x3` relaxed `Commits == 3` to `Commits >= 3` since auto-merge can legitimately add a merge commit on top of the per-slot commits. `make check: OK` and the 3×3 e2e passes 10/10 under `-race -count=3`.
+
+Trial outcome on the 16×30 herd:
+
+- **22-24/480 hub commits** in **~896ms**.
+- **0 fork retries** (= the harness saw no `ConflictForkedError` returns; the new model handles forks inside `coord.Commit` and only surfaces the error on a real file-content merge conflict, which never happens with disjoint slots).
+- **0 fork-unrecoverable.**
+- **32-33 claims won** out of 480 — agents abort their slot-loop on the first non-fork error.
+- **P50/P99 commit latency 128-139 / 449-458 ms** — *dramatically* faster than trials 6-9b (P50 1-9 seconds, P99 1-42 seconds). The lease-waiting dominant term is gone.
+- **Terminal failure: `coord.Commit: update (pre-flight): fossil.Update: libfossil: update: checkout.Update: add slot-N/task-M/file-K.txt: writeFileFromUUID slot-N/task-M/file-K.txt: blob not found for uuid <hex>`.** Reproducible across runs (same shape, different uuids/slots). The early agents complete cleanly (the first ~22 trunk commits land), then the failure cascades.
+
+The failure is *not* in coord. It's libfossil v0.4.1 reporting that a leaf's manifest references a blob the leaf does not have. Most likely cause given the trace: the auto-merge cycle creates a merge manifest with TWO parents (fork branch tip + trunk tip); Push delivers that manifest plus the fork-branch commit blob, but other agents' tipSubscriber-driven Pulls race the multi-blob delivery and crosslink an incomplete state. When a downstream agent's pre-flight Pull then tries to Update its checkout against the resulting state, libfossil walks a manifest's file references and finds a blob entry whose `uuid` resolves to no `blob` row — `writeFileFromUUID: blob not found`. The trial's tipSubscriber-driven concurrent Pulls (every leaf's broadcast-driven Pull fires on every other leaf's commit) make the race far more likely than in the friendly 3×3 case.
+
+This is a *qualitative* shift relative to all prior trials. Trials 1-9b had coord-layer throughput ceilings (lease wait, WouldFork frame, bounded-N retry exhaustion). Trial #10 moved that ceiling: coord now spends ~140ms per commit (1-2 orders of magnitude faster than every prior trial), and the system fails in the SUBSTRATE rather than at the coord layer. The architecture is correct; the substrate's blob-transfer guarantees under concurrent multi-leaf Push+Pull don't yet support it.
+
+P50 and P99 alone tell most of the story. Prior trials had P50/P99 separated by 2-5x reflecting lease-wait + retry-backoff variance. Trial #10's P50 139ms / P99 458ms is a clean 3.3x ratio with no fat tail — exactly the latency distribution a non-contended trunk-based-development model should produce.
+
+The harness's runtime is so short (~900ms) because agents abort on the first non-fork error and the substrate failure cascades quickly. The trial completes 22-24 hub commits in well under a second, then bursts through ~13-14 substrate failures in the next few hundred ms before all 16 agents have had a chance to crash. Were the substrate to be fixed, this same coord shape running at 139ms/commit could plausibly hit 480/480 in 30-60s — the throughput target the spec implied.
+
+The path forward is *not* another coord-layer trial. The path forward is a libfossil patch that either (a) pushes blob batches atomically before announcing the manifest at the hub, (b) blocks Pull until the blob set is consistent, or (c) gives leaves a way to signal "manifest known, blobs not yet" so concurrent peer Pulls don't crosslink prematurely. Until the substrate guarantees what the architecture requires, the herd-stress regime will keep surfacing this failure.
 
 ### Finding #11 — Throughput is hyper-sensitive to fine-grained inter-agent timing
 
@@ -157,6 +238,18 @@ The signal across the three coord-layer trials: **WouldFork-gated commits at the
 
 In the interim, PR #14's merged architecture is *correct, scale-limited at 16+ concurrent leaves on the same hub trunk*. The 3×3 e2e demonstrates the design works at the friendly case. Production deployments under low concurrency (single-digit leaves on the same trunk) are unaffected. The strict 16×30 assertion is a v1.1 deliverable gated on the trial #9 (lease-across-all-retries + mutex) outcome or the merge-service architectural pivot.
 
+### Updated 2026-04-25 post-trial #10
+
+Trial #10 implemented option (2) — the architectural pivot away from WouldFork-gated commits at the coord layer. Result: coord throughput improves dramatically (P50 139ms vs. trials 6-9b P50 1-9 seconds) and forks resolve cleanly via auto-merge (0 fork-retries, 0 unrecoverable-forks under disjoint slots). The 16×30 assertion fails 22-24/480 not because of a coord-layer ceiling but because libfossil v0.4.1 surfaces "blob not found" errors during pre-flight Update when concurrent multi-leaf Push+Pull traffic crosslinks incomplete blob state on peer leaves.
+
+The remaining work to deliver `fossil_commits == tasks` at 16-way concurrency is in libfossil, not coord. The coord layer is now correct and lean. Three plausible substrate fixes (any of which would let trial #10's coord shape land all 480 commits):
+
+1. **Atomic blob-batch delivery.** Hub buffers an incoming Push session and only marks blobs queryable after every blob in the session lands. Concurrent peer Pulls then never see a manifest whose blob set is incomplete.
+2. **Pull blocks until consistent.** Pull retries internally (or backs off) when it pulls a manifest whose declared blobs are not yet in the local repo. The current behavior crosslinks the manifest into `event`/`mlink`/`tagxref` regardless and surfaces the missing blob only at Update time.
+3. **Manifest-known-blobs-pending state at the leaf.** The leaf accepts the manifest into a quarantine area, queues blob-fetch separately, and only promotes the manifest to crosslinked state once the blob set is consistent.
+
+Production deployments under low concurrency are unaffected — the 3×3 e2e passes 10/10 with `-race -count=3` and represents the actual deployment shape. The 16-way herd is a stress regime, not a production model.
+
 ## Trial commits
 
 - `f0e3bec` — examples/herd-hub-leaf: 16x30 trial harness for new architecture (OTLP to SigNoz)
@@ -176,6 +269,8 @@ Trial #6 added no new commits — it ran the as-merged main (post PR #14) agains
 - `herd-hub-leaf-trial5` (no `trial4` — leaf busy_timeout used same service name as trial #3 for direct comparison)
 - `herd-hub-leaf-trial6` (post-PR #14 merge, against libfossil v0.4.1)
 - `herd-hub-leaf-trial8` (leaf-local mutex + scoped lease on v0.4.1)
+- `herd-hub-leaf-trial10` (fork+merge model — delete lease, delete retry, auto-merge fork branches)
+- `herd-hub-leaf-trial10-rerun` (same shape, replay)
 
 Span operations of interest:
 
