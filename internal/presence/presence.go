@@ -174,6 +174,12 @@ func (m *Manager) putEntry(ctx context.Context) error {
 	return nil
 }
 
+// maxPresenceEntries caps the number of KV keys Who will scan. A
+// bucket with more entries than this indicates a bug or stale-data
+// condition that must be investigated; panic early rather than iterate
+// unboundedly.
+const maxPresenceEntries = 4096
+
 // Who returns every live agent in this Manager's project. A fresh
 // scan; presence state is read-through the KV. Entries whose Project
 // does not match Config.Project are filtered out at the client
@@ -194,8 +200,13 @@ func (m *Manager) Who(ctx context.Context) ([]Entry, error) {
 	}
 	defer func() { _ = lister.Stop() }()
 	prefix := m.cfg.Project + "/"
+	var count int
 	var out []Entry
 	for key := range lister.Keys() {
+		assert.Precondition(count < maxPresenceEntries,
+			"presence.Who: scanned more than %d entries — bug or stale-data explosion",
+			maxPresenceEntries)
+		count++
 		if !strings.HasPrefix(key, prefix) {
 			continue
 		}
