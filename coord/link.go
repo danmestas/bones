@@ -40,13 +40,17 @@ func (c *Coord) Link(ctx context.Context, from, to TaskID, edgeType EdgeType) er
 		return fmt.Errorf("coord.Link: to=%s: %w", to, err)
 	}
 
+	internalType := tasks.EdgeType(edgeType)
 	mutate := func(cur tasks.Task) (tasks.Task, error) {
 		for _, e := range cur.Edges {
-			if e.Type == edgeType && e.Target == string(to) {
+			if e.Type == internalType && e.Target == string(to) {
 				return cur, nil // idempotent no-op
 			}
 		}
-		cur.Edges = append(cur.Edges, tasks.Edge{Type: edgeType, Target: string(to)})
+		cur.Edges = append(cur.Edges, tasks.Edge{
+			Type:   internalType,
+			Target: string(to),
+		})
 		cur.UpdatedAt = time.Now().UTC()
 		return cur, nil
 	}
