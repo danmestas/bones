@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	natsserver "github.com/nats-io/nats-server/v2/server"
 
@@ -111,7 +112,7 @@ func startEmbeddedNATS(storeDir string) (*natsserver.Server, error) {
 		return nil, fmt.Errorf("new server: %w", err)
 	}
 	go srv.Start()
-	if !srv.ReadyForConnections(5e9) { // 5 seconds in nanos
+	if !srv.ReadyForConnections(5 * time.Second) {
 		srv.Shutdown()
 		return nil, fmt.Errorf("nats not ready")
 	}
