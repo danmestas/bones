@@ -10,8 +10,8 @@
 //
 // Each agent runs k tasks against its own slot directory. Slots are
 // disjoint by construction (slot-i/) so the no-fork-branches contract
-// holds, but the harness exercises real concurrency at the JetStream
-// broadcast layer, the hub-pull path, and the fossil push.
+// holds, but the harness exercises real concurrency at the agent NATS
+// sync path and the fossil push to the hub.
 //
 // Compared to examples/hub-leaf-e2e (the 3x3 sanity test), this harness
 // scales up (default 16 x 30 = 480 commits) and emits OTLP traces to
