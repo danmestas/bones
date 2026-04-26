@@ -35,7 +35,7 @@ func dispatchCmd(ctx context.Context, info workspace.Info, args []string) error 
 func dispatchWorkerCmd(ctx context.Context, info workspace.Info, args []string) error {
 	return runOp(ctx, "dispatch-worker", func(ctx context.Context) error {
 		cfg := newCoordConfig(info)
-		opts, err := parseDispatchWorkerFlags(cfg.HoldTTLDefault, args)
+		opts, err := parseDispatchWorkerFlags(cfg.Tuning.HoldTTLDefault, args)
 		if err != nil {
 			return err
 		}

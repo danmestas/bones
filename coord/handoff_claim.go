@@ -70,9 +70,9 @@ func (c *Coord) assertHandoffClaimPreconditions(
 	assert.NotEmpty(fromAgent, "coord.HandoffClaim: fromAgent is empty")
 	assert.Precondition(ttl > 0, "coord.HandoffClaim: ttl must be > 0")
 	assert.Precondition(
-		ttl <= c.cfg.HoldTTLMax,
+		ttl <= c.cfg.Tuning.HoldTTLMax,
 		"coord.HandoffClaim: ttl=%s exceeds HoldTTLMax=%s",
-		ttl, c.cfg.HoldTTLMax,
+		ttl, c.cfg.Tuning.HoldTTLMax,
 	)
 }
 

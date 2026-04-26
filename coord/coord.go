@@ -84,6 +84,7 @@ type Coord struct {
 // returning so no substrate resources leak.
 func Open(ctx context.Context, cfg Config) (*Coord, error) {
 	assert.NotNil(ctx, "coord.Open: ctx is nil")
+	cfg.Tuning = defaultTuning(cfg.Tuning)
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("coord.Open: invalid config: %w", err)
 	}
@@ -105,8 +106,8 @@ func openSubstrate(
 ) (*substrate, error) {
 	nc, err := nats.Connect(
 		cfg.NATSURL,
-		nats.ReconnectWait(cfg.NATSReconnectWait),
-		nats.MaxReconnects(cfg.NATSMaxReconnects),
+		nats.ReconnectWait(cfg.Tuning.NATSReconnectWait),
+		nats.MaxReconnects(cfg.Tuning.NATSMaxReconnects),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("coord.Open: nats connect: %w", err)
@@ -114,27 +115,25 @@ func openSubstrate(
 	s := &substrate{nc: nc}
 	if s.holds, err = holds.Open(ctx, nc, holds.Config{
 		Bucket:     holdsBucket,
-		HoldTTLMax: cfg.HoldTTLMax,
+		HoldTTLMax: cfg.Tuning.HoldTTLMax,
 	}); err != nil {
 		s.close()
 		return nil, fmt.Errorf("coord.Open: holds: %w", err)
 	}
 	if s.tasks, err = tasks.Open(ctx, tasks.Config{
-		NATSURL:          cfg.NATSURL,
-		BucketName:       tasksBucket,
-		HistoryDepth:     cfg.TaskHistoryDepth,
-		MaxValueSize:     int32(cfg.MaxTaskValueSize),
-		OperationTimeout: cfg.OperationTimeout,
+		NATSURL:      cfg.NATSURL,
+		BucketName:   tasksBucket,
+		HistoryDepth: cfg.Tuning.TaskHistoryDepth,
+		MaxValueSize: int32(cfg.Tuning.MaxTaskValueSize),
 	}); err != nil {
 		s.close()
 		return nil, fmt.Errorf("coord.Open: tasks: %w", err)
 	}
 	if s.archive, err = tasks.Open(ctx, tasks.Config{
-		NATSURL:          cfg.NATSURL,
-		BucketName:       archiveBucket,
-		HistoryDepth:     cfg.TaskHistoryDepth,
-		MaxValueSize:     int32(cfg.MaxTaskValueSize),
-		OperationTimeout: cfg.OperationTimeout,
+		NATSURL:      cfg.NATSURL,
+		BucketName:   archiveBucket,
+		HistoryDepth: cfg.Tuning.TaskHistoryDepth,
+		MaxValueSize: int32(cfg.Tuning.MaxTaskValueSize),
 	}); err != nil {
 		s.close()
 		return nil, fmt.Errorf("coord.Open: archive tasks: %w", err)
@@ -144,7 +143,7 @@ func openSubstrate(
 		ProjectPrefix:  projectPrefix(cfg.AgentID),
 		Nats:           nc,
 		FossilRepoPath: cfg.ChatFossilRepoPath,
-		MaxSubscribers: cfg.MaxSubscribers,
+		MaxSubscribers: cfg.Tuning.MaxSubscribers,
 	}); err != nil {
 		s.close()
 		return nil, fmt.Errorf("coord.Open: chat: %w", err)
@@ -154,7 +153,7 @@ func openSubstrate(
 		Project:           projectPrefix(cfg.AgentID),
 		Bucket:            presenceBucket,
 		NATSConn:          nc,
-		HeartbeatInterval: cfg.HeartbeatInterval,
+		HeartbeatInterval: cfg.Tuning.HeartbeatInterval,
 	}); err != nil {
 		s.close()
 		return nil, fmt.Errorf("coord.Open: presence: %w", err)
@@ -277,9 +276,9 @@ func (c *Coord) assertClaimPreconditions(
 	assert.NotEmpty(string(taskID), "coord.Claim: taskID is empty")
 	assert.Precondition(ttl > 0, "coord.Claim: ttl must be > 0")
 	assert.Precondition(
-		ttl <= c.cfg.HoldTTLMax,
+		ttl <= c.cfg.Tuning.HoldTTLMax,
 		"coord.Claim: ttl=%s exceeds HoldTTLMax=%s",
-		ttl, c.cfg.HoldTTLMax,
+		ttl, c.cfg.Tuning.HoldTTLMax,
 	)
 }
 

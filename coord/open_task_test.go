@@ -200,7 +200,7 @@ func TestOpenTask_InvariantPanics(t *testing.T) {
 		}, "files is empty")
 	})
 	t.Run("too many files", func(t *testing.T) {
-		big := make([]string, c.cfg.MaxTaskFiles+1)
+		big := make([]string, c.cfg.Tuning.MaxTaskFiles+1)
 		for i := range big {
 			big[i] = fmt.Sprintf("/f-%04d", i)
 		}

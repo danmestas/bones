@@ -25,21 +25,22 @@ func validConfig(t *testing.T) Config {
 	t.Helper()
 	return Config{
 		AgentID:            "test-agent",
-		HoldTTLDefault:     30 * time.Second,
-		HoldTTLMax:         5 * time.Minute,
-		MaxHoldsPerClaim:   32,
-		MaxSubscribers:     32,
-		MaxTaskFiles:       32,
-		MaxReadyReturn:     256,
-		MaxTaskValueSize:   8 * 1024,
-		TaskHistoryDepth:   8,
-		OperationTimeout:   10 * time.Second,
-		HeartbeatInterval:  5 * time.Second,
-		NATSReconnectWait:  2 * time.Second,
-		NATSMaxReconnects:  5,
 		NATSURL:            "nats://127.0.0.1:0",
 		ChatFossilRepoPath: filepath.Join(t.TempDir(), "chat.fossil"),
 		CheckoutRoot:       t.TempDir(),
+		Tuning: TuningConfig{
+			HoldTTLDefault:    30 * time.Second,
+			HoldTTLMax:        5 * time.Minute,
+			MaxHoldsPerClaim:  32,
+			MaxSubscribers:    32,
+			MaxTaskFiles:      32,
+			MaxReadyReturn:    256,
+			MaxTaskValueSize:  8 * 1024,
+			TaskHistoryDepth:  8,
+			HeartbeatInterval: 5 * time.Second,
+			NATSReconnectWait: 2 * time.Second,
+			NATSMaxReconnects: 5,
+		},
 	}
 }
 
@@ -63,7 +64,7 @@ func newCoordWithMaxSubs(
 	t.Helper()
 	cfg := validConfigWithURL(t, url)
 	cfg.AgentID = agentID
-	cfg.MaxSubscribers = maxSubs
+	cfg.Tuning.MaxSubscribers = maxSubs
 	cfg.ChatFossilRepoPath = filepath.Join(
 		t.TempDir(), agentID+"-chat.fossil",
 	)
@@ -201,7 +202,7 @@ func TestClaim_InvariantPanics(t *testing.T) {
 	t.Run("ttl exceeds max", func(t *testing.T) {
 		requirePanic(t, func() {
 			_, _ = c.Claim(
-				ctx, TaskID("t"), c.cfg.HoldTTLMax+time.Second,
+				ctx, TaskID("t"), c.cfg.Tuning.HoldTTLMax+time.Second,
 			)
 		}, "exceeds HoldTTLMax")
 	})
