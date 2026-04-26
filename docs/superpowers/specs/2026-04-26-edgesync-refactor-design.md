@@ -1,6 +1,6 @@
 # EdgeSync Refactor Design
 
-**Status:** Draft
+**Status:** Draft (revised post-Ousterhout review)
 **Date:** 2026-04-26
 **Author:** Dan Mestas (with Claude)
 **Supersedes:** None
@@ -8,17 +8,16 @@
 
 ## Goal
 
-Replace agent-infra's direct dependency on `github.com/danmestas/libfossil`
-with a dependency on `github.com/danmestas/EdgeSync/leaf`. The leaf agent
-becomes the single fossil/sync abstraction inside agent-infra; the `coord`
-package is reduced to claim/task orchestration and lets EdgeSync handle
-sync.
+Replace agent-infra's hand-rolled libfossil sync layer with EdgeSync's
+`leaf.Agent` as the sync engine. Wrap `leaf.Agent` inside two
+agent-infra-owned types — `coord.Hub` and `coord.Leaf` — that present a
+narrow interface for the orchestrator's hub-and-leaf use case. Keep
+coord's claim/task scheduling; delete the fork+merge model, the
+`coord.tip.changed` broadcast, and pull coalescing.
 
 After the refactor, re-run trials 1–15 against the new architecture and
-update the rate-envelope numbers in the orchestrator skill. Once the
-trials confirm the refactored architecture meets the documented tiers,
-run an end-to-end Space Invaders trial as the production-shape
-validation.
+update the rate-envelope numbers. Phase 3 is the Space Invaders
+end-to-end run, gated on Phase 2 results.
 
 ## Background
 
@@ -45,167 +44,168 @@ of EdgeSync's built-in NATS sync mesh, while keeping (3). EdgeSync's
 - iroh peer-to-peer sync (out of scope for this refactor).
 
 `leaf.Agent.Repo()` returns a `*libfossil.Repo`, so all read-side
-operations agent-infra needs (Tip, WouldFork, OpenFile, Diff, etc.) are
-still reachable through the EdgeSync abstraction without importing
-libfossil directly.
-
-agent-infra already declares `github.com/danmestas/EdgeSync/leaf v0.0.1`
-in its `go.mod` with a `replace` directive pointing at the sibling
-`../EdgeSync/leaf` checkout. The dependency is in place but unused.
+operations agent-infra needs are reachable through EdgeSync. agent-infra
+already declares `github.com/danmestas/EdgeSync/leaf v0.0.1` in `go.mod`
+with a `replace` directive pointing at `../EdgeSync/leaf`. The
+dependency is in place but unused.
 
 ## Architecture
 
-### Hub
+agent-infra exposes two public types — `coord.Hub` and `coord.Leaf` —
+that own the underlying `leaf.Agent` and present a narrow interface.
+Callers (harnesses, the orchestrator, tests) never construct
+`leaf.Agent` directly. This is the "deep modules" principle: each
+type's interface is small; its internals are rich.
 
-The hub is a `leaf.Agent` with `ServeHTTPAddr: ":8765"`. There is no
-separate "hub" type — the hub is just a leaf that other leaves sync to.
-
-```go
-hubAgent, err := agent.New(agent.Config{
-    RepoPath:      filepath.Join(workdir, "hub.fossil"),
-    NATSUpstream:  "nats://127.0.0.1:4222",
-    ServeHTTPAddr: ":8765",
-    Autosync:      agent.AutosyncOff,
-    Pull:          false, // hub is the canonical source; never pulls
-    Push:          false, // peers push to it; it never client-syncs out
-})
-```
-
-The hub is a passive receiver: peers push to its `XferHandler` over
-HTTP. The hub itself never runs a client-side sync round
-(`Push: false, Pull: false`). It runs an embedded NATS server that
-peer leaves join as upstream so coord's claim/task NATS KV traffic
-flows through one mesh.
-
-### Per-slot leaf
-
-Each slot owns a `leaf.Agent` whose repo lives at
-`.orchestrator/leaves/<slot>/leaf.fossil`. Sync to the hub is automatic
-through EdgeSync's poll loop and triggered on demand by
-`agent.SyncNow()` after each commit.
+### `coord.Hub`
 
 ```go
-leafAgent, err := agent.New(agent.Config{
-    RepoPath:      filepath.Join(workdir, "leaves", slotID, "leaf.fossil"),
-    NATSUpstream:  hubNATSURL,
-    PollInterval:  5 * time.Second,
-    Push:          true,
-    Pull:          true,
-    Autosync:      agent.AutosyncOn,
-})
+type Hub struct { /* private */ }
+
+// OpenHub starts a hub that owns workdir/hub.fossil, serves HTTP on
+// httpAddr, and runs an embedded NATS server. The hub is a passive
+// receiver of pushes from peer leaves.
+func OpenHub(ctx context.Context, workdir, httpAddr string) (*Hub, error)
+
+func (h *Hub) NATSURL() string  // for leaves to set as upstream
+func (h *Hub) HTTPAddr() string // for leaves to set as sync target
+func (h *Hub) Stop() error
 ```
 
-The leaf agent embeds NATS as a leaf node of the hub's server, so
-sync messages flow without configuring a separate NATS topology.
+The hub configures `leaf.Agent` with `ServeHTTPAddr: httpAddr,
+Pull: false, Push: false, Autosync: AutosyncOff`. Callers don't see
+those flags.
 
-### `coord` package after refactor
-
-`coord` retains:
-
-- claim-based task scheduling (NATS KV bucket per task);
-- `Open(ctx, ...) -> Coord`;
-- `Claim(ctx, taskID) -> Claim`;
-- `Commit(ctx, claim, files...) -> error`;
-- `Close(ctx, claim) -> error`.
-
-`coord` deletes:
-
-- `coord/sync_broadcast.go` (publishTipChanged + tipSubscriber);
-- `coord/merge.go` (fork+merge logic);
-- `coord/merge_test.go`;
-- `coord/commit_retry_test.go` (fork+merge specific cases);
-- the `recoverFork` helper in `coord/commit.go`;
-- the `pulling atomic.Bool` and pull-coalescing branch in
-  `sync_broadcast.go`.
-
-`coord.Commit` after refactor:
+### `coord.Leaf`
 
 ```go
-func (c *Coord) Commit(ctx context.Context, claim *Claim, files ...string) error {
-    // 1. Stage and commit locally through leaf.Agent.Repo().
-    // 2. Call leafAgent.SyncNow() to push to hub.
-    // 3. If sync surfaces a fork, return ErrConflict — slot
-    //    partition was wrong, planner must re-plan.
-    // 4. No retry, no auto-merge.
-}
+type Leaf struct { /* private */ }
+
+// OpenLeaf starts a per-slot leaf at workdir/<slotID>/leaf.fossil that
+// joins hubNATSURL as upstream and pulls from hubHTTPAddr.
+func OpenLeaf(ctx context.Context, workdir, slotID, hubNATSURL, hubHTTPAddr string) (*Leaf, error)
+
+// Claim/Commit/Close are coord's claim-task lifecycle.
+func (l *Leaf) Claim(ctx context.Context, taskID string) (*Claim, error)
+func (l *Leaf) Commit(ctx context.Context, claim *Claim, files ...string) error
+func (l *Leaf) Close(ctx context.Context, claim *Claim) error
+
+// Read-side accessors for harnesses, tests, and orchestrator monitor code.
+func (l *Leaf) Tip(ctx context.Context) (string, error)
+func (l *Leaf) WT() string // worktree path
+
+func (l *Leaf) Stop() error
 ```
+
+Internally `Leaf` holds a `*leaf.Agent` and a `*Coord` (the existing
+claim-scheduling state). `Commit` writes through the agent's repo, then
+calls `agent.SyncNow()`. If post-sync the local tip diverges from the
+parent expected at commit time, `Commit` returns `ErrConflict` (see
+"Conflict semantics" below).
+
+### Hub-as-leaf — note for the curious
+
+A hub is just a `leaf.Agent` with serve flags set. The
+`coord.Hub`/`coord.Leaf` distinction is at the agent-infra layer
+because the two roles have different APIs: the hub doesn't claim or
+commit; the leaf doesn't expose an HTTP address. Splitting them at the
+type level keeps each interface tight.
 
 ### Conflict semantics
 
 Slots are disjoint by orchestrator-validator contract
 (`cmd/orchestrator-validate-plan/`). Two slots writing to the same path
-is a planner bug, not a runtime concern. Therefore:
+is a planner bug.
 
-- forks at the fossil level indicate the validator missed an overlap;
-- coord surfaces forks as `ErrConflict` to the caller;
-- the orchestrator skill stops the run on `ErrConflict` and reports
-  which two slots overlap on which paths (matching today's
-  "fork unrecoverable" semantics).
+`ErrConflict` is a **defense-in-depth assertion**, not a normal-flow
+error. The validator should make it impossible. If a `Leaf.Commit`
+ever returns `ErrConflict` at runtime, that means the validator missed
+an overlap; the orchestrator treats it as planner failure, stops the
+run, and reports which two slots overlap. There is no auto-recovery
+path — fork+merge has been deleted.
 
-This matches the current trial-harness assertion that `fork
-unrecoverable` is always 0 in disjoint-slot layouts.
+This matches today's "fork unrecoverable" semantics in the trial
+harness: always 0 in disjoint-slot layouts; non-zero is a bug.
 
 ### Deployment shapes
 
-The same `leaf.Agent` Go object backs both deployment shapes:
+`coord.Hub` and `coord.Leaf` are pure Go types. Two deployment shapes
+share the same code:
 
-1. **In-process** (tests, trials): the test/harness embeds
-   `leaf.Agent` instances directly and the hub is a leaf in the same
-   process tree.
-2. **Out-of-process** (Space Invaders, production): each slot spawns
-   `bin/leaf` (the EdgeSync CLI binary) as a sidecar; Task subagents
-   commit via fossil CLI through the local repo, and `bin/leaf`
-   handles sync.
+1. **In-process** (tests, herd-hub-leaf, hub-leaf-e2e): the harness
+   constructs `Hub` and N `Leaf` instances directly; the embedded NATS
+   and HTTP listeners live in the same process.
+2. **Out-of-process** (Space Invaders, production): the orchestrator
+   spawns one `bin/leaf --serve-http :8765` (EdgeSync CLI) for the hub
+   and one `bin/leaf` per slot. agent-infra's Go code (running inside
+   each Task subagent's tool calls) constructs `coord.Leaf` against
+   the slot's already-running `bin/leaf` socket — or, more simply, the
+   subagent's commits go through fossil CLI and `bin/leaf` handles
+   sync; coord stays Go-side for claim/task tracking via NATS KV.
 
-Because `leaf.Agent` is one Go type, the in-process trial results
-remain representative of out-of-process production within the
-constraints of process-boundary overhead (which trial Phase 2 will
-quantify).
+The exact IPC story for shape 2 is sketched, not specified — Phase 3's
+spec will pin it down. Phase 1 only needs shape 1 to work.
+
+### What chat and workspace do
+
+`internal/chat/chat.go` and `internal/workspace/workspace.go` open
+local libfossil repos for non-sync purposes (chat history, workspace
+state). They have no remote, no peers, no sync. Forcing them through
+`leaf.Agent` would impose NATS embed and polling overhead with no
+benefit.
+
+These two files **keep their direct libfossil imports**. The
+"use EdgeSync, not libfossil" rule applies to the **sync abstraction**;
+local-only fossil usage is unaffected. This is a deliberate scope
+limit, not an oversight.
 
 ## File-level change inventory
 
 ### Delete
 
-- `coord/sync_broadcast.go`
-- `coord/merge.go`, `coord/merge_test.go`
-- `coord/commit_retry_test.go`
-- any `recoverFork`-only branches in `coord/commit.go`
+- `internal/fossil/fossil.go` and `internal/fossil/fossil_test.go` —
+  responsibilities move into `coord.Leaf` (lifecycle, repo
+  ownership) and `coord.Hub` (lifecycle, serve config). The
+  `Manager` type's pass-through accessors disappear; what remains
+  (worktree setup, repo path conventions) is short and lives where
+  it's used.
+- `coord/sync_broadcast.go` — replaced by EdgeSync's NATS sync mesh.
+- `coord/merge.go`, `coord/merge_test.go` — fork+merge model.
+- `coord/commit_retry_test.go` — fork+merge specific cases.
+- the `recoverFork` helper in `coord/commit.go`.
 
-### Rewrite
+### Add
 
-- `internal/fossil/fossil.go` — replace direct libfossil open with a
-  thin wrapper that owns a `leaf.Agent` and exposes the read-side ops
-  coord needs (`Tip`, `OpenFile`, `Diff`, `Checkout`). Sync ops
-  delegate to `leafAgent.SyncNow()`.
-- `internal/fossil/fossil_test.go` — rewrite around the new wrapper.
-- `internal/chat/chat.go` — open the chat repo through `leaf.Agent`.
-- `internal/workspace/workspace.go` — same.
-- `examples/herd-hub-leaf/harness.go` — rewrite to spin up a hub
-  `leaf.Agent` and N per-slot `leaf.Agent` instances. Drop the
+- `coord/hub.go` — `coord.Hub` type, constructor, lifecycle.
+- `coord/leaf.go` — `coord.Leaf` type, constructor, lifecycle, Tip,
+  WT, Stop. (Existing claim/commit/close logic relocates here from
+  whatever current file holds it.)
+
+### Modify
+
+- `coord/commit.go` — drop fork+merge; `Commit` writes through
+  `Leaf.agent.Repo()`, calls `SyncNow`, surfaces `ErrConflict` on
+  divergence.
+- `coord/coord.go` — drop `tipSubscriber` wiring; coord's
+  initialization no longer publishes/subscribes to `coord.tip.changed`.
+- `coord/substrate.go` — drop any leaseKV residue.
+- `examples/herd-hub-leaf/harness.go` — rewrite to construct
+  `coord.Hub` and N `coord.Leaf` instances. Drop the
   httptest-backed-libfossil hub.
 - `examples/hub-leaf-e2e/main.go` — same shape, smaller scale.
 - `.orchestrator/scripts/hub-bootstrap.sh` — replace the broken
   `fossil server --busytimeout 30000` invocation with `bin/leaf
   --serve-http :8765 --repo .orchestrator/hub.fossil ...`.
-
-### Modify
-
-- `coord/commit.go` — drop fork+merge; commit + SyncNow + surface
-  ErrConflict.
-- `coord/coord.go` — drop `tipSubscriber` wiring.
-- `coord/substrate.go` — drop any leaseKV residue.
-- any references to `coord/merge.go` helpers from other files. The
-  Phase 1 implementation plan includes a grep task that enumerates
-  these before deletion so no broken imports survive.
-- `go.mod` — leave the `replace github.com/danmestas/EdgeSync/leaf =>
-  ../EdgeSync/leaf` directive in place; remove the `libfossil` direct
-  dependency once nothing imports it. Keep the modernc driver import
-  if `leaf.Agent` requires it transitively.
+- `go.mod` — remove the direct `libfossil` dep when no longer needed
+  by sync code; keep `libfossil` only for chat/workspace.
 
 ### Keep unchanged
 
 - `cmd/orchestrator-validate-plan/main.go` — does not touch fossil.
-- `coord` claim/task code — Open, Claim, Close, NATS KV bucket logic.
+- `internal/chat/chat.go`, `internal/workspace/workspace.go` — keep
+  direct libfossil imports per scope limit above.
+- `coord` claim/task code (NATS KV bucket logic) — relocated to
+  `coord/leaf.go` but the algorithm is unchanged.
 - `.claude/skills/orchestrator/SKILL.md` — text changes only after
   Phase 2 trials confirm tier guidance still holds.
 
@@ -213,34 +213,49 @@ quantify).
 
 ### Phase 1 — Refactor
 
-- File-level changes from the inventory above.
+- File-level changes from the inventory.
 - `make check` (fmt-check, vet, lint, race, todo-check) green
   throughout. Per project CLAUDE.md, CI must pass before commit/PR.
-- Each commit lands a coherent unit: e.g. one commit deletes
-  sync_broadcast, one rewrites internal/fossil, one rewrites
-  herd-hub-leaf, etc.
-- A single PR for the refactor, reviewed before Phase 2 starts.
+- Each commit lands a coherent unit (delete sync_broadcast; introduce
+  coord.Hub/coord.Leaf; rewrite herd-hub-leaf; etc.).
+- One PR for the refactor, reviewed before Phase 2 starts.
+
+### Phase 1 → Phase 2 gate
+
+Phase 2 starts when Phase 1's PR merges and `make check` is green on
+the refactored main.
 
 ### Phase 2 — Trial re-run
 
 - Re-run herd-hub-leaf at `HERD_AGENTS=4, 8, 12, 16, 20`.
-- Capture new rate envelope; expect different numbers because:
-  - EdgeSync's poll loop has its own cadence (default 5s);
-  - sync over EdgeSync's NATS or HTTP transport may not match the
-    httptest-backed XferHandler's latency;
-  - removing pull coalescing may amplify or attenuate broadcast
-    traffic differently.
+- Capture new rate envelope; expect different numbers because
+  EdgeSync's poll loop, transport, and lack of pull coalescing all
+  shift the picture.
 - Document findings as trials 16+ in
   `docs/trials/2026-04-26/trial-report.md`.
 - Update orchestrator skill tier guidance with new numbers.
 
-### Phase 3 — Space Invaders trial
+### Phase 2 → Phase 3 gate
 
-- Orchestrator spawns hub `bin/leaf` and N slot `bin/leaf` processes.
+Phase 3 starts only when Phase 2 confirms:
+
+- **N=4 leaves at human-paced cadence** (≤4 commits/minute total
+  across all leaves) sustain 100% completion with **P99 < 5 seconds**;
+- **zero unrecoverable conflicts** in disjoint-slot layouts.
+
+These are the conditions under which Space Invaders is realistic. If
+Phase 2 fails the gate, the architecture needs re-spec before Space
+Invaders is attempted; do not retry Phase 3 against a known-broken
+substrate.
+
+### Phase 3 — Space Invaders
+
+- Orchestrator spawns hub `bin/leaf` and N=4 slot `bin/leaf`
+  processes.
 - Task subagents (LLM) work in their slot directories; commit via
   `fossil commit` through the local repo; sync flows through the
   sidecar leaf.
-- Goal: build a working Space Invaders game across N=4 slots
+- Goal: build a working Space Invaders game across 4 slots
   (frontend, game logic, audio, integration) — a real
   multi-agent build.
 - Validates the deployment story (process boundaries, fossil CLI
@@ -248,75 +263,75 @@ quantify).
 
 Each phase gets its own implementation plan via the writing-plans
 skill. This document covers Phase 1 in detail; Phases 2 and 3 are
-sketched here and will be expanded into specs once Phase 1 lands.
+sketched here and will be expanded once Phase 1 lands.
 
 ## Out of scope
 
-- iroh peer-to-peer sync (Mode 4 in EdgeSync); orchestrator stays on
-  the hub-and-leaf topology.
-- GitHub PR creation from finished trials (v2 work per the
-  orchestrator skill).
+- iroh peer-to-peer sync.
+- GitHub PR creation from finished trials (v2 work).
 - Multi-cloud / remote-harness subagents (v2 work).
-- Replacing the in-process trial harness with a fully-distributed one
-  before Phase 3 — the in-process harness stays for fast iteration.
+- Forcing chat/workspace through `leaf.Agent` (covered above).
 
 ## Risks and open questions
 
 1. **EdgeSync poll cadence vs. trial cadence.** The harness commits
    with zero think time. EdgeSync's default `PollInterval` is 5s, so
    under tight-loop stress most sync rounds will be triggered by
-   `SyncNow()` rather than polling. `SyncNow` and `Autosync` are
-   distinct: `SyncNow` triggers an immediate one-shot round;
-   `Autosync` controls whether the agent client-syncs after local
-   commits inside libfossil. Whether either is throttled or queued
-   internally under herd load is unverified — Phase 2 will surface
-   this.
-2. **`leaf.Agent` start/stop overhead.** Spinning up 16
-   `leaf.Agent` instances may have measurable per-instance startup
-   cost (NATS embedded server bootstrap, HTTP listener, etc.).
-   Phase 2 will quantify; if it dominates, the harness can share a
-   single embedded NATS across leaves (by setting `NATSUpstream` to a
-   shared address).
+   `SyncNow()` rather than polling. Whether `SyncNow()` is throttled
+   or queued internally under herd load is unverified — Phase 2 will
+   surface this. `SyncNow` and `Autosync` are distinct: `SyncNow`
+   triggers an immediate one-shot round; `Autosync` controls
+   client-side auto-sync after local commits inside libfossil.
+2. **`leaf.Agent` start/stop overhead.** Spinning up 16 leaf agents
+   may have measurable per-instance startup cost (NATS embedded
+   server, HTTP listener, telemetry observer). If startup dominates
+   trial time, the harness can share a single embedded NATS across
+   leaves by pointing `NATSUpstream` at the hub.
 3. **Fork detection without fork+merge.** EdgeSync's sync may accept
-   a fork silently; if so, `coord.Commit` needs to detect the fork
-   post-sync (e.g. by re-checking `Tip()` against the expected
-   parent). The detection mechanism is unspecified here and will be
-   nailed down during plan-writing for Phase 1.
-4. **Hub HTTP performance under herd load.** The httptest-backed
-   hub in trial #14 hit a 2 events/sec ceiling around N=12 due to
-   libfossil's 100-round Pull negotiation budget. `bin/leaf
-   --serve-http` runs the same XferHandler; the ceiling likely
-   matches but is not guaranteed.
+   a fork silently; `coord.Leaf.Commit` needs to detect divergence
+   post-sync (e.g. by re-checking `Tip()` against the parent expected
+   at commit time). The detection mechanism is unspecified here and
+   will be nailed down during Phase 1 plan-writing.
+4. **Hub HTTP performance under herd load.** Trial #14 hit a 2
+   events/sec ceiling around N=12 due to libfossil's 100-round Pull
+   negotiation budget. `bin/leaf --serve-http` runs the same
+   `XferHandler`; the ceiling likely matches but is not guaranteed.
 5. **modernc.org/sqlite under -race.** Already documented as a
-   substrate-level architectural choice. The refactor does not change
-   this; the same finding (DST -race timeout) will apply unless
-   EdgeSync's leaf chooses a different driver. Verify during Phase 1
-   that `make check` race targets stay within budget.
+   substrate-level architectural choice. The refactor doesn't change
+   this; verify during Phase 1 that `make check` race targets stay
+   within budget.
 
 ## Success criteria
 
-- agent-infra has zero `import "github.com/danmestas/libfossil"` lines
-  outside `vendor/` (`grep -r 'github.com/danmestas/libfossil'
-  --include='*.go'` returns nothing). Achievable because
-  `leaf.Agent.Repo()` returns a `*libfossil.Repo` whose methods are
-  reachable via Go type inference — the wrapper keeps the `*Repo`
-  internal and exposes only the methods coord/internal need, so no
-  agent-infra signature names the libfossil type.
-- `make check` passes on the refactor branch.
-- All existing tests under `coord/`, `internal/`, and both example
-  harnesses pass against the EdgeSync-backed implementation.
-- Phase 2 documents a new rate envelope and tier guidance.
-- Phase 3 produces a working Space Invaders game from a real
-  multi-slot orchestrator run.
+- All sync, lifecycle, and serve operations in agent-infra go through
+  `leaf.Agent` (wrapped by `coord.Hub` and `coord.Leaf`). Read-side
+  `*libfossil.Repo` access via `agent.Repo()` is acceptable; no
+  `coord` or harness code constructs a `*libfossil.Repo` itself for
+  sync purposes.
+- `internal/fossil` is deleted; its responsibilities live in
+  `coord.Hub` and `coord.Leaf`.
+- `coord/sync_broadcast.go`, `coord/merge.go`, `coord/merge_test.go`,
+  and `coord/commit_retry_test.go` are deleted.
+- `chat` and `workspace` continue to use libfossil directly (scope
+  limit).
+- `make check` passes on the refactor branch; all coord and example
+  tests pass against the EdgeSync-backed implementation.
+- Phase 2 documents a new rate envelope and either confirms tier
+  guidance or motivates a re-spec.
+- Phase 3, if reached, produces a working Space Invaders game from a
+  real multi-slot orchestrator run.
 
 ## Decisions captured
 
-- **Path (c)** chosen: replace coord's sync layer with EdgeSync's NATS
-  mesh; keep claim/task scheduling.
-- **One Go type, two deployment shapes**: `leaf.Agent` runs both
-  in-process (trials) and as a sidecar (production) with no logic
-  divergence.
-- **Forks surface as errors**, not auto-merge: slot disjointness is
-  the validator's job; runtime forks are planner bugs.
-- **Phasing is sequential, not parallel**: refactor → trials →
-  Space Invaders. No skipping ahead.
+- **Path (c) chosen** (brainstorm 2026-04-26): replace coord's sync
+  layer; keep claim/task scheduling.
+- **`coord.Hub` and `coord.Leaf` are the public types**; `leaf.Agent`
+  is implementation detail. Each type has a small, deep interface.
+- **`internal/fossil` deletes**; its responsibilities move into the
+  new coord types. No "thin wrapper" layer survives.
+- **`chat` and `workspace` keep direct libfossil**; the EdgeSync rule
+  is about the sync abstraction, not local-only fossil usage.
+- **Phase 3 has an explicit gate**: N=4 at human-paced cadence,
+  P99 < 5s, zero unrecoverable conflicts.
+- **`ErrConflict` is a defense-in-depth assertion**, not a
+  normal-flow error.
