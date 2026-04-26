@@ -39,6 +39,29 @@ spans go nowhere.
   `Seed + slotIndex`. With the same seed, two re-runs produce
   identical workloads.
 
+## Rate envelope (the hub's ceiling under tight-loop stress)
+
+This harness commits with **zero think time** — every leaf fires the
+next commit immediately after the previous one finishes. That's a
+deliberate stress amplifier; production agents commit on minute
+timescales during human-paced coding work, not 50ms tight loops.
+
+Under tight-loop stress, the architecture asymptotes around **2 hub
+events/sec sustained**. Above that, libfossil's 100-round Pull-
+negotiation budget gets eaten and a leaf's pre-flight Pull aborts.
+Trial #14 (see `docs/trials/2026-04-25/trial-report.md`) found:
+
+- `HERD_AGENTS=4` → P50 49ms, runtime 8.7s, 100% completion
+- `HERD_AGENTS=8` → P50 3.6s, runtime 2m4s, 100% completion
+- `HERD_AGENTS=12` → P50 10.5s, runtime 5m38s, 100% completion
+- `HERD_AGENTS=13` → aborts ("100 rounds")
+- `HERD_AGENTS=14` → aborts ("100 rounds")
+- `HERD_AGENTS=16` → aborts ("100 rounds")
+
+Production cadence (1 commit/min/agent) gives 100+ concurrent agents
+of head-room before the rate envelope tightens. The trial uses tight
+loops to surface the architectural ceiling, not to model production.
+
 ## Stdout summary
 
 The harness prints a result block at the end:

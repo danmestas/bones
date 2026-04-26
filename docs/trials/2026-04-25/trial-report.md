@@ -33,10 +33,42 @@ Trials each tweak one architectural lever to isolate which constraint dominates 
 | 11 | (regressed: PR #16 was actually trial #8 lease+retry; trial #10's fork+merge code never landed on main; this row is trial #8 architecture re-tested on libfossil v0.4.2 substrate) | 42/480 | 3946 | 438 | 5797/7807 | 2m58s | none |
 | 11b | fork+merge model (cherry-picked from `b9cba0d`) on libfossil v0.4.2 substrate, 16×30 stress | 699 hub events / 369 task completions in 5m46s (killed) | 0 | 0 | 14936/31271 | 5m46s (killed) | none — architecture correct; latency climbing unbounded due to broadcast-Pull amplification |
 | 12 | fork+merge model on libfossil v0.4.2 substrate, **4×30 (realistic concurrency)** | **235 hub events / 120/120 task completions** | 0 | 0 | **49/1137** | **8.755s** | none — production-shape works perfectly |
+| 13 | + Pull coalescing on top of fork+merge, 16×30 stress | 793 hub events / 413/480 task completions | 0 | 0 | 13822/30574 | 7m8s | "exceeded 100 rounds" on a leaf's pre-flight Pull |
+| 14 | rate-envelope sweep on fork+merge + Pull coalescing — 6×30 / 8×30 / 12×30 / 13×30 / 14×30 | see "Rate envelope sweep" section below | | | | | |
+
+### Rate envelope sweep (trial #14, all on fork+merge + Pull-coalescing on libfossil v0.4.2)
+
+| N | Tasks | Hub events | Runtime | P50 | P99 | Hub events/sec | Status |
+|---|---|---|---|---|---|---|---|
+| 4×30 | 120/120 | 235 | 8.7s | 49ms | 1137ms | 27 (burst) | ✅ |
+| 6×30 | 180/180 | 354 | 1m2s | 2115ms | 3117ms | 5.7 | ✅ |
+| 8×30 | 240/240 | 473 | 2m4s | 3619ms | 6948ms | 3.8 | ✅ |
+| 12×30 | 360/360 | 715 | 5m38s | 10511ms | 19744ms | 2.1 | ✅ |
+| 13×30 | 336/390 | 640 | 4m48s | 9941ms | 19212ms | 2.2 | ❌ "100 rounds" on Pull |
+| 14×30 | 371/420 | 731 | 5m58s | 11058ms | 23258ms | 2.0 | ❌ "100 rounds" on Pull |
+| 16×30 | 413/480 | 793 (killed) | 7m8s+ | 13822ms | 30574ms | 1.9 | ❌ killed |
+
+The wall isn't an agent count — it's a sustained hub commit rate. At ~2 hub events/sec under tight-loop stress, libfossil's 100-round Pull-negotiation budget gets eaten and one leaf's pre-flight Pull aborts. This is **not a hard limit on parallelism in production** because production agents commit on minute timescales (think time, code editing), not 50ms tight loops. With 1 commit/min/agent, even 100+ concurrent agents stay well under 2 hub events/sec.
 
 Aggregation step (verifier-clone of hub) on a separate trial #5 run returned `sync.Clone: exceeded 100 rounds` — the hub repo accumulated enough sibling branches that libfossil's clone protocol couldn't reconcile them within its round budget.
 
 ## Findings
+
+### Finding #15 — There is no hard agent-count limit; the architecture is hub-commit-rate-limited at ~2 events/sec sustained
+
+Trial #14's rate-envelope sweep (6, 8, 12, 13, 14, 16 agents × 30 tasks each) under tight-loop stress (no think time, every commit fires immediately after the previous) found the failure cliff is between 12 and 13 leaves. But the failure is the same shape regardless of N: a leaf's pre-flight Pull aborts with `libfossil: sync: sync: exceeded 100 rounds` because the hub has grown faster than the leaf can negotiate. The hub event rate at every failure is essentially identical (~2 events/sec). The hub event rate when N succeeds is also ~2 events/sec for N≥6.
+
+**The architecture's ceiling is the hub commit rate, not the agent count.** Under tight-loop stress at N>12, agents pile commits onto the hub faster than other agents' Pulls can absorb the growth, and the libfossil xfer protocol's 100-round budget is the hard stop. Coalescing broadcast-driven Pulls (commit `4daaa29`) helped throughput modestly (~12% more tasks done at N=16 than without coalescing) but doesn't change the asymptote because it's a hub-side limit, not a leaf-side one.
+
+**Production implications.** With production-cadence workloads (agents commit every minute or so during human-paced coding work, not every 50ms in a tight loop), the per-agent commit rate is ~0.017 events/sec/agent. That gives 100+ concurrent agents head-room before the 2 events/sec ceiling hits. The friendly 3×3 e2e (`TestE2E_3x3`) plus trial #12's 4×30 = 8.7s show the architecture works cleanly at production shape.
+
+**Tier guidance:**
+- **Sweet spot (sub-second P50):** N ≤ 4. Use this for interactive tooling where latency matters.
+- **Acceptable (single-digit P99):** N ≤ 8. Use this for batch agents with bearable latency.
+- **Ceiling under tight-loop stress:** N ≤ 12. Beyond this, libfossil 100-round budget is the wall.
+- **Production cadence (1 commit/min/agent):** N up to ~100+ agents fine; wall is hub-side rate, not agent count.
+
+The orchestrator skill should call out the rate envelope rather than impose a hard agent count limit. Backpressure (delay commit if hub rate exceeds threshold) is a future-work option but unnecessary for production workloads.
 
 ### Finding #14 — Fork+merge architecture works perfectly at production-shape concurrency; broadcast-Pull amplification is the 16×30 bottleneck
 

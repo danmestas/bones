@@ -67,6 +67,30 @@ For each slot, invoke the Task tool with:
 The orchestrator dispatches subagents in parallel (single message with N
 Task tool calls).
 
+### Parallelism guidance (per docs/trials/2026-04-25/trial-report.md finding #15)
+
+The architecture is hub-commit-rate-limited, not agent-count-limited.
+Production agents commit on minute timescales (during human-paced coding
+work) so per-agent commit rate is ~0.017 events/sec, leaving head-room
+for 100+ concurrent agents before hitting the hub's ~2 events/sec
+sustained ceiling.
+
+Tier guidance for picking concurrency:
+
+- **Sweet spot (sub-second P50):** N ≤ 4 slots. Use for interactive
+  tooling where latency matters.
+- **Acceptable (single-digit P99):** N ≤ 8 slots. Use for batch agents
+  with bearable latency.
+- **Ceiling under tight-loop stress (50ms commit cadence):** N ≤ 12.
+  Beyond this libfossil's 100-round Pull-negotiation budget is the wall.
+- **Production cadence (1 commit/min/agent):** ~100+ agents fine; the
+  wall is hub-side rate, not agent count.
+
+If the plan has more slots than fit your concurrency tier, dispatch in
+batches (N at a time, wait for each batch to drain before starting the
+next). The trial harness `examples/herd-hub-leaf/` reproduces the rate
+envelope; consult its README and the trial report for current numbers.
+
 ## Step 5: Monitor
 
 Subscribe to NATS subjects to watch progress (in v1, this is mostly
