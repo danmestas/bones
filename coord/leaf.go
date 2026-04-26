@@ -129,6 +129,26 @@ func OpenLeaf(
 		return nil, fmt.Errorf("coord.OpenLeaf: agent.Start: %w", err)
 	}
 
+	// Set SQLite busy_timeout on the leaf's repo so concurrent writes
+	// (Leaf.Commit vs in-flight leaf.Agent.SyncNow pull) wait briefly
+	// for the WAL lock instead of failing with SQLITE_BUSY. Phase 2
+	// trial #1 surfaced this at N=4: agent.SyncNow runs a pull/push
+	// round on a goroutine after Leaf.Commit returns, and the next
+	// Commit can fire before that round drains. 30s mirrors the value
+	// the deleted internal/fossil.Manager used.
+	//
+	// Pin to MaxOpenConns=1 so the pragma applies to ALL queries —
+	// busy_timeout is a per-connection setting and the database/sql
+	// pool may otherwise hand subsequent queries a fresh connection
+	// without the pragma. internal/fossil/fossil.go set the pragma
+	// only; the Phase 1 refactor surfaced that the pool semantics
+	// require single-conn pinning to make the timeout actually apply.
+	a.Repo().DB().SqlDB().SetMaxOpenConns(1)
+	if _, err := a.Repo().DB().Exec(`PRAGMA busy_timeout = 30000`); err != nil {
+		_ = a.Stop()
+		return nil, fmt.Errorf("coord.OpenLeaf: busy_timeout: %w", err)
+	}
+
 	cc, err := openLeafCoord(ctx, slotID, hubNATSClient, slotDir)
 	if err != nil {
 		_ = a.Stop()
