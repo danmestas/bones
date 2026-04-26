@@ -25,6 +25,7 @@ import (
 )
 
 const usage = `Usage:
+  agent-tasks add    <title> [--files=a,b,c] [--parent=<id>] [--context k=v]... [--json]
   agent-tasks create <title> [--files=a,b,c] [--parent=<id>] [--context k=v]... [--json]
   agent-tasks list   [--all] [--status=X] [--claimed-by=X] [--json]
   agent-tasks show   <id> [--json]
@@ -33,6 +34,8 @@ const usage = `Usage:
                           [--context k=v]... [--claimed-by=X] [--json]
   agent-tasks close  <id> [--reason="..."] [--json]
   agent-tasks ready  [--json]
+  agent-tasks watch
+  agent-tasks status
   agent-tasks link   <from-id> <to-id> --type=blocks|supersedes|duplicates|discovered-from
                      [--json]
   agent-tasks prime  [--json]

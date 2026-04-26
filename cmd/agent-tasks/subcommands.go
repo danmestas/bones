@@ -160,6 +160,9 @@ func parseRFC3339Flag(name, value string) (*time.Time, error) {
 
 func init() {
 	handlers["create"] = createCmd
+	// "add" is the beads-compatible alias for "create" (DX audit I1a).
+	// Both verbs share identical behavior; "add" is the human-friendly form.
+	handlers["add"] = createCmd
 }
 
 func createCmd(ctx context.Context, info workspace.Info, args []string) error {
