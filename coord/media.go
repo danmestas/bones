@@ -56,7 +56,7 @@ func (l *Leaf) PostMedia(
 	if err != nil {
 		return fmt.Errorf("coord.Leaf.PostMedia: encode body: %w", err)
 	}
-	if err := l.coord.sub.chat.Send(ctx, thread, body); err != nil {
+	if err := l.coord.sendChat(ctx, thread, body); err != nil {
 		return fmt.Errorf("coord.Leaf.PostMedia: %w", err)
 	}
 	return nil
