@@ -57,6 +57,16 @@ func OpenHub(ctx context.Context, workdir, httpAddr string) (*Hub, error) {
 		if cerr != nil {
 			return nil, fmt.Errorf("coord.OpenHub: create repo: %w", cerr)
 		}
+		// Grant the unauthenticated user clone/pull/push caps so leaf
+		// agents can sync without coord plumbing per-leaf credentials.
+		// libfossil's xfer handler treats requests with no login card
+		// as user "nobody" (see internal/sync/handler.go initAuth).
+		// libfossil.Create pre-populates "nobody" with empty caps;
+		// SetCaps grants 'gio' (clone, pull, push).
+		if cerr := r.SetCaps("nobody", "gio"); cerr != nil {
+			_ = r.Close()
+			return nil, fmt.Errorf("coord.OpenHub: grant nobody caps: %w", cerr)
+		}
 		_ = r.Close()
 	}
 
@@ -67,12 +77,13 @@ func OpenHub(ctx context.Context, workdir, httpAddr string) (*Hub, error) {
 	}
 
 	cfg := agent.Config{
-		RepoPath:      repoPath,
-		NATSUpstream:  srv.ClientURL(),
-		ServeHTTPAddr: httpAddr,
-		Pull:          false,
-		Push:          false,
-		Autosync:      agent.AutosyncOff,
+		RepoPath:         repoPath,
+		NATSUpstream:     srv.ClientURL(),
+		ServeHTTPAddr:    httpAddr,
+		ServeNATSEnabled: true,
+		Pull:             false,
+		Push:             false,
+		Autosync:         agent.AutosyncOff,
 	}
 	a, err := agent.New(cfg)
 	if err != nil {

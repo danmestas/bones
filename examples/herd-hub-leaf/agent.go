@@ -83,7 +83,7 @@ func runTask(
 	}
 
 	commitStart := time.Now()
-	cerr := l.Commit(ctx, cl, files)
+	_, cerr := l.Commit(ctx, cl, files)
 	res.AddLatency(time.Since(commitStart))
 	if cerr != nil {
 		_ = cl.Release()
