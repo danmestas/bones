@@ -10,6 +10,7 @@ import (
 
 	"github.com/danmestas/libfossil"
 
+	ifossil "github.com/danmestas/agent-infra/internal/fossil"
 	"github.com/danmestas/agent-infra/internal/testutil/natstest"
 )
 
@@ -51,11 +52,13 @@ func TestMerge_BranchNotFound(t *testing.T) {
 	ctx := context.Background()
 
 	// Seed with one commit on trunk so the repo is non-empty.
+	// Coord.Commit was deleted in the Phase 1 EdgeSync refactor;
+	// seed via the substrate's fossil Manager directly so the test
+	// remains free of any orchestrator dependency.
 	path := "/src/seed.go"
-	id := openClaim(t, c, "seed", path)
-	if _, err := c.Commit(ctx, id, "seed", []File{
+	if _, _, err := c.sub.fossil.Commit(ctx, "seed", []ifossil.File{
 		{Path: path, Content: []byte("seed\n")},
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatalf("seed Commit: %v", err)
 	}
 
