@@ -16,18 +16,24 @@ git cleanup tax that multi-agent divergence imposes on branch-based VCS.
 ```bash
 git clone https://github.com/danmestas/agent-infra
 cd agent-infra
-# Build EdgeSync's bin/leaf (sibling repo, see docs/adr/0018):
-cd ../EdgeSync && make leaf && cd ../agent-infra
+# Clone EdgeSync sibling repo (required for bin/leaf):
+cd .. && git clone https://github.com/danmestas/EdgeSync && cd agent-infra
 # Build agent-infra binaries:
 make
-# Initialize a workspace:
-bin/agent-init init
-# Bootstrap the hub:
-bash .orchestrator/scripts/hub-bootstrap.sh
+# One-command bootstrap: workspace + scaffold + bin/leaf + hub:
+bin/agent-init up
 # Add and inspect tasks:
 bin/agent-tasks add "my first task" --files src/foo.go
 bin/agent-tasks open
 bin/agent-tasks status
+```
+
+Or use fine-grained control (`agent-init up` is equivalent to):
+
+```bash
+bin/agent-init init
+bin/agent-init orchestrator
+bash .orchestrator/scripts/hub-bootstrap.sh
 ```
 
 See `bin/agent-tasks --help` for the full subcommand list (`add`, `claim`,
@@ -371,6 +377,24 @@ tempted to "just reach in."
 **Future git init note**: when this project is eventually `git init`'d,
 the `reference/` subtrees should go in `.gitignore` — we don't want
 nested git repos tracked as ghost submodules.
+
+---
+
+## Configuration
+
+All environment variables consumed by agent-infra binaries and scripts are
+documented in [`docs/configuration.md`](docs/configuration.md), including
+defaults and which binary reads each variable.
+
+Quick reference of the most common knobs:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AGENT_INFRA_LOG` | text | Set to `json` for JSON log output |
+| `LEAF_BIN` | (resolved) | Absolute path to the `leaf` binary |
+| `EDGESYNC_DIR` | `../EdgeSync` | Path to EdgeSync sibling repo |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | (disabled) | OTLP collector endpoint |
+| `HERD_AGENTS` | `16` | Agent count for herd trial harness |
 
 ---
 
