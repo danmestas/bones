@@ -4,14 +4,16 @@
 **Branch:** `hub-leaf-orchestrator` (worktree at `/Users/dmestas/projects/agent-infra-hub-leaf`)
 **PR:** https://github.com/danmestas/agent-infra/pull/14
 **Harness:** `examples/herd-hub-leaf/` (16 agents × 30 tasks = 480 ops)
-**OTLP endpoint:** `https://signoz-vm.tail51604c.ts.net` (Tailscale)
+**OTLP endpoint:** `http://signoz-vm.tail51604c.ts.net:4318` (Tailscale; otlphttp on the SigNoz collector port). **Trials 1–8 used `https://signoz-vm.tail51604c.ts.net` (port 443) by mistake — that path returns the SigNoz UI HTML with 200, which the otlphttp client treats as success while silently dropping spans. No telemetry from trials 1–8 reached SigNoz. See finding #9.**
 **Architecture under test:** per-agent libfossil + per-agent SQLite + hub fossil HTTP server + NATS broadcast (per `docs/superpowers/specs/2026-04-25-hub-leaf-orchestrator-design.md`)
 
 ## What we set out to learn
 
 After PR #14 landed the hub-and-leaf architecture, the question was: does the strict spec assertion `fossil_commits == tasks` hold under realistic concurrency? The 3×3 e2e (`examples/hub-leaf-e2e/TestE2E_3x3`) passes deterministically at 80ms but is too small to surface contention. The user's request: "bigger target, more complex tasks, run trials, observe outcomes, iterate."
 
-Five trials ran, each tweaking one architectural lever to isolate which constraint dominates throughput.
+**Note on what these trials are actually testing.** The 16-agent × 30-task herd is deliberately worst-case stress: 16 leaves in tight commit loops sharing one hub trunk, no human-paced think time, no cross-leaf workload differentiation. The intent is to surface architectural ceilings, not to model production. Realistic workloads are likely 2–5 leaves committing on minute timescales rather than 50ms tight loops; the friendly 3×3 e2e (production-shape) passes cleanly and represents the actual deployment target. The trials below explore "where does the architecture break, and which lever moves the break-point" — they are not "is the architecture fit for purpose." The friendly case answers the latter affirmatively.
+
+Trials each tweak one architectural lever to isolate which constraint dominates throughput in this stress regime.
 
 ## Trial table
 
@@ -25,10 +27,41 @@ Five trials ran, each tweaking one architectural lever to isolate which constrai
 | 6 | libfossil v0.4.1 (spec baseline + leaf busy_timeout, no autosync, no lease) | 17/480 | 2862 | 318 | 1042/1224 | 32.9s | leaf SQLITE_BUSY (5) on `processResponse round 3` (Pull) |
 | 7 | + lease + bounded-N (5) retry on v0.4.1 | 15/480 | 590 | 58 | 9374/42920 | 5m58s | leaf SQLITE_BUSY (517) on `manifest.Checkin: blob.Store` |
 | 8 | + leaf-local mutex + scoped lease (commit+push only) on v0.4.1 | 4/480 | 4284 | 476 | 5736/5861 | 2m54s | none terminal — bounded-N retry exhausts on every commit; agents reach max retries with WouldFork still true |
+| 9a | (PR #16 architecture, **OTLP disabled**) | 55/480 | 3830 | 425 | 5848/9292 | 3m1s | none |
+| 9b | (PR #16 architecture, **correct OTLP at port 4318**) | **131/480** | 3152 | 349 | 6299/**20600** | 3m27s | none |
 
 Aggregation step (verifier-clone of hub) on a separate trial #5 run returned `sync.Clone: exceeded 100 rounds` — the hub repo accumulated enough sibling branches that libfossil's clone protocol couldn't reconcile them within its round budget.
 
 ## Findings
+
+### Finding #11 — Throughput is hyper-sensitive to fine-grained inter-agent timing
+
+Trial 9a (PR #16 architecture, OTLP disabled) and 9b (same architecture, real OTLP at port 4318) used the IDENTICAL coord/fossil code. The only difference is whether each span emission costs ~ms of HTTP round-trip to the collector. Outcome:
+
+- 9a (no OTLP): **55/480** hub commits, 425 unrecoverable forks, P99 9.3s, runtime 3m1s
+- 9b (real OTLP): **131/480** hub commits (2.4× higher), 349 unrecoverable forks, P99 20.6s (2.2× higher), runtime 3m27s
+
+Telemetry on is *better*, with P99 latency *worse*. The mechanism: every span emission introduces a few ms of jitter inside `coord.Commit`. Under 16-way contention the architecture suffers from "all agents pile on at the same moment" — they all observe hub-tip-T0, all queue for the lease, all pre-flight Pull at T0, the first to grab the lease commits to T1, and the rest WouldFork-fail in lockstep. Random jitter from OTLP emission breaks the lockstep; some agents observe T1 instead of T0 because their span emission stalled them past the commit window. This *reduces* sympathetic-failure clustering even as it raises absolute latency.
+
+Operational implication: the architecture is solving the wrong race. WouldFork-gated commits at the coord layer don't tolerate burst contention well — any deliberate per-leaf jitter (a few-ms randomized backoff inside `coord.Commit` between holds and the lease attempt) might recover much of trial 9b's throughput WITHOUT requiring OTLP. Future trial #10 should test this hypothesis cheaply.
+
+But it's worth re-emphasizing the framing: 16 leaves in tight commit loops on one hub trunk is a stress regime, not a production model. The 3×3 e2e is the production-shape and works cleanly. These trials probe the failure envelope rather than the operating envelope.
+
+### Finding #10 — OTLP exporter overhead is real but secondary; misconfigured endpoint was the dominant signal-eater
+
+Earlier hypothesis: trials 1–8's poor numbers were dominated by OTLP exporter HTTP round-trips against the misconfigured SigNoz UI URL. Trial 9a (no OTLP at all, PR #16 architecture) tests this directly. Result: 55/480 — better than trials 6–8 (4-17/480) but nowhere near the step change. So OTLP overhead WAS a contributing factor (the PR #16 architecture wasn't actually as bad as trial #8's 4/480 suggested) but not the dominant bottleneck. The architecture's WouldFork-frame issue is.
+
+The real win from finding #9: telemetry is now usable. Trial 9b's spans landed in SigNoz under service `herd-hub-leaf-trial9b`. Inspecting `coord.Commit` and `coord.SyncOnBroadcast` spans there will show the actual time distribution per phase (Pull, lease wait, WouldFork, Commit, Push, broadcast) — diagnostic material the prior trials lacked.
+
+### Finding #9 — Trials 1–8 emitted spans into the void; SigNoz endpoint was the SPA frontend, not the OTLP collector
+
+Every trial through #8 set `OTEL_EXPORTER_OTLP_ENDPOINT=https://signoz-vm.tail51604c.ts.net` (port 443, the SigNoz UI route). That URL accepts every POST including `/v1/traces` and returns `200 OK text/html` (the SPA bootstrap page). The otlphttp client treats 200 as success and silently drops batched spans; no warnings, no exporter errors, no retries. **No trace data from trials 1–8 reached SigNoz storage.**
+
+The actual OTLP HTTP collector lives at `http://signoz-vm.tail51604c.ts.net:4318` (plain HTTP over Tailscale; TLS terminated at the SPA frontend on 443 only). A POST of `{"resourceSpans":[]}` to that endpoint returns `200 OK application/json {"partialSuccess":{}}` — the genuine OTLP receiver shape. Verified with a minimal `otlptracehttp.New` probe that landed `otel-probe-correct-endpoint` in the SigNoz Services UI within seconds.
+
+Mitigation in this PR: the harness's `setupTelemetry` now pre-flights the endpoint with an empty-resource POST and refuses to start if the response shape isn't OTLP-collector. README and trial-report header point at the corrected endpoint. Future trials (`#9` onward) populate SigNoz; any future endpoint typo aborts the harness instead of silently no-op-ing.
+
+The trial #1–#8 metrics tables are still trustworthy — those numbers come from in-process atomic counters, not OTel. What was missing is the per-span detail (commit.local_tip_before/after, pull_rounds, push_rounds, SyncOnBroadcast attributes) that would have made the architectural mismatches in findings #3, #7, #8 diagnosable from traces instead of from log inference. Trial #9 onward will have it.
 
 ### Finding #8 — leaf-local mutex + scoped lease: **regressed throughput further**, exposing a deeper architectural mismatch
 
