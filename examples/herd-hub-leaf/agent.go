@@ -15,24 +15,16 @@ import (
 
 // runAgent drives one slot through k tasks via coord.Leaf. Each leaf
 // owns its own libfossil repo + leaf.Agent — there is no shared *Coord.
-//
-// hubLeafUpstream is the hub mesh leaf-node URL (Hub.LeafUpstream());
-// hubNATSClient is the hub mesh client URL (Hub.NATSURL()) for coord's
-// claim/task KV traffic; hubHTTPAddr is the hub HTTP xfer endpoint
-// (Hub.HTTPAddr()) used to clone leaf.fossil at OpenLeaf time.
 func runAgent(
 	ctx context.Context, slotIdx int, cfg Config,
-	hubLeafUpstream, hubNATSClient, hubHTTPAddr string, res *Result,
+	hub *coord.Hub, res *Result,
 ) (*coord.Leaf, error) {
 	assert.NotNil(ctx, "runAgent: ctx is nil")
 	assert.NotNil(res, "runAgent: res is nil")
-	assert.NotEmpty(hubLeafUpstream, "runAgent: hubLeafUpstream is empty")
-	assert.NotEmpty(hubNATSClient, "runAgent: hubNATSClient is empty")
-	assert.NotEmpty(hubHTTPAddr, "runAgent: hubHTTPAddr is empty")
+	assert.NotNil(hub, "runAgent: hub is nil")
 
 	slotID := fmt.Sprintf("herd-slot-%d", slotIdx)
-	l, err := coord.OpenLeaf(ctx, cfg.WorkDir, slotID,
-		hubLeafUpstream, hubNATSClient, hubHTTPAddr)
+	l, err := coord.OpenLeaf(ctx, coord.LeafConfig{Hub: hub, Workdir: cfg.WorkDir, SlotID: slotID})
 	if err != nil {
 		return nil, fmt.Errorf("agent-%d open: %w", slotIdx, err)
 	}

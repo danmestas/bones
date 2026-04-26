@@ -18,8 +18,7 @@ func TestLeaf_Close(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = hub.Stop() })
 
-	l, err := OpenLeaf(ctx, t.TempDir(), "slot-C",
-		hub.LeafUpstream(), hub.NATSURL(), hub.HTTPAddr())
+	l, err := OpenLeaf(ctx, LeafConfig{Hub: hub, Workdir: t.TempDir(), SlotID: "slot-C"})
 	if err != nil {
 		t.Fatalf("OpenLeaf: %v", err)
 	}

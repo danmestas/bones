@@ -199,8 +199,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			l, rerr := runAgent(ctx, i, cfg,
-				hub.LeafUpstream(), hub.NATSURL(), hub.HTTPAddr(), res)
+			l, rerr := runAgent(ctx, i, cfg, hub, res)
 			if l != nil {
 				leavesMu.Lock()
 				leaves = append(leaves, l)

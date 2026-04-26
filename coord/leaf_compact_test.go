@@ -31,8 +31,7 @@ func TestLeaf_Compact_WritesArtifact(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = hub.Stop() })
 
-	l, err := OpenLeaf(ctx, t.TempDir(), "slot-K",
-		hub.LeafUpstream(), hub.NATSURL(), hub.HTTPAddr())
+	l, err := OpenLeaf(ctx, LeafConfig{Hub: hub, Workdir: t.TempDir(), SlotID: "slot-K"})
 	if err != nil {
 		t.Fatalf("OpenLeaf: %v", err)
 	}

@@ -24,7 +24,7 @@ func TestLeaf_OpenStopTipWT(t *testing.T) {
 
 	leafDir := t.TempDir()
 	slotID := "slot-0"
-	l, err := OpenLeaf(ctx, leafDir, slotID, hub.LeafUpstream(), hub.NATSURL(), hub.HTTPAddr())
+	l, err := OpenLeaf(ctx, LeafConfig{Hub: hub, Workdir: leafDir, SlotID: slotID})
 	if err != nil {
 		t.Fatalf("OpenLeaf: %v", err)
 	}
