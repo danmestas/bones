@@ -30,10 +30,33 @@ Trials each tweak one architectural lever to isolate which constraint dominates 
 | 9a | (PR #16 architecture, **OTLP disabled**) | 55/480 | 3830 | 425 | 5848/9292 | 3m1s | none |
 | 9b | (PR #16 architecture, **correct OTLP at port 4318**) | **131/480** | 3152 | 349 | 6299/**20600** | 3m27s | none |
 | 10 | fork+merge model: delete lease, delete retry, auto-merge fork branches | 22-24/480 | 0 | 0 | 128-139/449-458 | 893-896ms | leaf "blob not found" during pre-flight Update (libfossil substrate, not coord) |
+| 11 | (regressed: PR #16 was actually trial #8 lease+retry; trial #10's fork+merge code never landed on main; this row is trial #8 architecture re-tested on libfossil v0.4.2 substrate) | 42/480 | 3946 | 438 | 5797/7807 | 2m58s | none |
+| 11b | fork+merge model (cherry-picked from `b9cba0d`) on libfossil v0.4.2 substrate, 16×30 stress | 699 hub events / 369 task completions in 5m46s (killed) | 0 | 0 | 14936/31271 | 5m46s (killed) | none — architecture correct; latency climbing unbounded due to broadcast-Pull amplification |
+| 12 | fork+merge model on libfossil v0.4.2 substrate, **4×30 (realistic concurrency)** | **235 hub events / 120/120 task completions** | 0 | 0 | **49/1137** | **8.755s** | none — production-shape works perfectly |
 
 Aggregation step (verifier-clone of hub) on a separate trial #5 run returned `sync.Clone: exceeded 100 rounds` — the hub repo accumulated enough sibling branches that libfossil's clone protocol couldn't reconcile them within its round budget.
 
 ## Findings
+
+### Finding #14 — Fork+merge architecture works perfectly at production-shape concurrency; broadcast-Pull amplification is the 16×30 bottleneck
+
+Trial #12 ran the cherry-picked fork+merge architecture on libfossil v0.4.2 substrate with **HERD_AGENTS=4, HERD_TASKS_PER_AGENT=30** — modeling the user's framing of realistic workloads (2–5 leaves on minute timescales, not the 16×30 stress). Result: **120/120 task completions in 8.755 seconds**, P50 49ms, P99 1137ms, 0 forks-from-the-harness, 0 unrecoverable. 235 hub events from 120 tasks ≈ 2:1 ratio (most commits forked-and-merged; some landed straight to trunk). The architecture is fit for the designed workload.
+
+Trial 11b (16×30 same code, killed at 5m46s) had reached 369/480 task completions before kill, with P50 14.9s and latency climbing unbounded over time per the SigNoz dashboard (Apdex falling from 0.55 → 0.25, p99 climbing 9s → 30s+, ops/s falling 7.5 → 3 — a queueing pattern, not steady state). SigNoz showed `coord.SyncOnBroadcast` had 1461 calls vs 369 commits — broadcasts are firing 4× per commit (and would be 15× per commit with full fan-out, but the queue was building faster than draining when killed).
+
+The mechanism: each commit broadcasts `tip.changed`; all peers' subscribers wake up and run a Pull. Each Pull holds the leaf's `writeMu` (added in trial #8 to fix intra-leaf SQLITE_BUSY between Commit and broadcast-driven Pull). Under 16-way concurrency, broadcast-Pulls queue up at the leaf-mutex, and the Commit goroutine waits. Per-commit P50 of 15s is dominated by mutex wait time, not actual fossil work (Pulls themselves take ~1s P50).
+
+Total broadcast work scales as N²-per-leaf (each commit broadcasts N-1 times → each leaf receives N-1 broadcasts per peer commit). At N=4: 3 broadcasts × ~1s = 3s of broadcast work per peer commit, across 4 peers = 12 broadcast-seconds per commit ≈ 0.75s of mutex contention per commit. At N=16: 15 broadcasts × ~1s = 15s × 16 peers = 240 broadcast-seconds per commit ≈ 15s of mutex contention per commit. The dashboard's 14.9s P50 is consistent with this scaling.
+
+The fix candidates rank in this order: (a) coalesce broadcast-Pulls — if a Pull is in flight, drop new broadcasts since the in-flight Pull will catch the latest hub state anyway. (b) drop broadcast-Pulls entirely; the next commit's pre-flight Pull catches up. (c) reduce broadcast fan-out (per-slot or per-task scoping). Option (a) is the smallest change and tests the hypothesis directly.
+
+### Finding #13 — Trial #10's fork+merge model never made it to main
+
+Investigation while diagnosing trial #11's bad numbers revealed that PR #16 was merged with parent `Merge: 9c1176f 3573329` — meaning the branch-side parent was `3573329` (the OTLP endpoint fix), not `c90f996` (trial #10 docs) or `b9cba0d` (trial #10 fork+merge implementation). Those two commits exist as dangling refs but are not in main's history. They were pushed to the branch AFTER the merge was clicked in GitHub, OR rebased away, OR the merge was based on an earlier branch tip than expected.
+
+Consequence: trials #10 and #11 reported metrics from DIFFERENT codebases. Trial #10 ran the fork+merge model and died fast on the v0.4.1 substrate "blob not found" error at 22/480. Trial #11 ran on v0.4.2 substrate but, unbeknownst to the trial, was actually executing trial #8's lease+retry architecture — explaining its 42/480 result (a marginal improvement over trial #8's v0.4.1 numbers because the substrate was fixed but the architecture was unchanged).
+
+Trial 11b cherry-picked `b9cba0d` and `c90f996` onto branch `trial-11-libfossil-v0.4.2`, restoring the fork+merge architecture, and re-ran the 16×30 herd. That's the trial that produced 369/480 in 5m46s with 0 unrecoverable, and it's the one the broadcast-amplification analysis applies to.
 
 ### Finding #12 — Fork+merge model is architecturally correct; the throughput ceiling moved off coord and onto libfossil's blob-transfer machinery
 
