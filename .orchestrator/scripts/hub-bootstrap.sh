@@ -22,7 +22,7 @@ fi
 if [[ -f "$PID_DIR/fossil.pid" ]] && kill -0 "$(cat "$PID_DIR/fossil.pid")" 2>/dev/null; then
     echo "fossil server already running (pid=$(cat "$PID_DIR/fossil.pid"))"
 else
-    fossil server "$HUB_REPO" --localhost --port 8765 >"$ORCH_DIR/fossil.log" 2>&1 &
+    fossil server "$HUB_REPO" --localhost --port 8765 --busytimeout 30000 >"$ORCH_DIR/fossil.log" 2>&1 &
     echo $! >"$PID_DIR/fossil.pid"
     sleep 0.3
 fi
