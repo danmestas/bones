@@ -3,6 +3,8 @@ package coord
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,13 +52,14 @@ func (c *Claim) Release() error {
 // paths route through it. The substrate (l.coord.sub) does NOT carry
 // its own fossil field.
 type Leaf struct {
-	agent    *agent.Agent
-	coord    *Coord
-	repoPath string
-	wtPath   string
-	slotID   string
-	mu       sync.Mutex
-	stopped  bool
+	agent       *agent.Agent
+	coord       *Coord
+	repoPath    string
+	wtPath      string
+	slotID      string
+	hubHTTPAddr string
+	mu          sync.Mutex
+	stopped     bool
 }
 
 // OpenLeaf starts a leaf at workdir/<slotID>/leaf.fossil that joins
@@ -79,14 +82,23 @@ func OpenLeaf(ctx context.Context, workdir, slotID, hubNATSURL, hubHTTPAddr stri
 	repoPath := filepath.Join(slotDir, "leaf.fossil")
 	wtPath := filepath.Join(slotDir, "wt")
 
-	// Pre-create the leaf repo so it exists when leaf.Agent opens it.
-	// The hub project-code is propagated by the first sync round; tests
-	// and harnesses that need stricter early-handshake semantics
-	// pre-seed the project-code separately.
+	// Clone the hub repo at OpenLeaf time so leaf.fossil and hub.fossil
+	// share the same project-code. NATS sync subjects are
+	// "<prefix>.<project-code>.sync"; without matching codes the hub's
+	// serve-nats subscriber and the leaf's sync publisher land on
+	// different subjects and the leaf gets "no responders" errors.
+	// Idempotent: skip the clone if leaf.fossil already exists.
 	if _, err := os.Stat(repoPath); os.IsNotExist(err) {
-		r, cerr := libfossil.Create(repoPath, libfossil.CreateOpts{User: slotID})
+		// Clone with no User so libfossil skips the login card and the
+		// hub authenticates as "nobody" (which OpenHub grants 'gio').
+		// Passing User: slotID would emit a login card the hub can't
+		// verify (slotID isn't in the user table) and clone fails with
+		// "authentication failed". See internal/sync/clone.go round-1
+		// login-card logic.
+		transport := libfossil.NewHTTPTransport(hubHTTPAddr)
+		r, _, cerr := libfossil.Clone(ctx, repoPath, transport, libfossil.CloneOpts{})
 		if cerr != nil {
-			return nil, fmt.Errorf("coord.OpenLeaf: create repo: %w", cerr)
+			return nil, fmt.Errorf("coord.OpenLeaf: clone hub: %w", cerr)
 		}
 		_ = r.Close()
 	}
@@ -115,11 +127,12 @@ func OpenLeaf(ctx context.Context, workdir, slotID, hubNATSURL, hubHTTPAddr stri
 	}
 
 	return &Leaf{
-		agent:    a,
-		coord:    cc,
-		repoPath: repoPath,
-		wtPath:   wtPath,
-		slotID:   slotID,
+		agent:       a,
+		coord:       cc,
+		repoPath:    repoPath,
+		wtPath:      wtPath,
+		slotID:      slotID,
+		hubHTTPAddr: hubHTTPAddr,
 	}, nil
 }
 
@@ -192,7 +205,9 @@ func (l *Leaf) Claim(ctx context.Context, taskID TaskID) (*Claim, error) {
 // ErrConflict is a defense-in-depth assertion: the disjoint-slot
 // validator should make this unreachable. There is no auto-recovery
 // (fork+merge has been deleted); callers treat it as planner failure.
-func (l *Leaf) Commit(ctx context.Context, claim *Claim, files []File) error {
+//
+// On success, returns the manifest UUID of the new checkin.
+func (l *Leaf) Commit(ctx context.Context, claim *Claim, files []File) (string, error) {
 	assert.NotNil(l, "coord.Leaf.Commit: receiver is nil")
 	assert.NotNil(ctx, "coord.Leaf.Commit: ctx is nil")
 	assert.NotNil(claim, "coord.Leaf.Commit: claim is nil")
@@ -200,17 +215,17 @@ func (l *Leaf) Commit(ctx context.Context, claim *Claim, files []File) error {
 
 	// Hold-gate (Invariant 20) and epoch-gate (Invariant 24).
 	if err := l.coord.checkHolds(ctx, files); err != nil {
-		return err
+		return "", err
 	}
 	if err := l.coord.checkEpoch(ctx, claim.TaskID()); err != nil {
-		return err
+		return "", err
 	}
 
 	// Capture parent tip before the write so we can detect post-sync
 	// divergence (the new ErrConflict signal that replaces fork+merge).
 	parent, err := l.Tip(ctx)
 	if err != nil {
-		return fmt.Errorf("coord.Leaf.Commit: pre-tip: %w", err)
+		return "", fmt.Errorf("coord.Leaf.Commit: pre-tip: %w", err)
 	}
 
 	// Write through the agent's repo handle — the only *libfossil.Repo
@@ -224,28 +239,42 @@ func (l *Leaf) Commit(ctx context.Context, claim *Claim, files []File) error {
 			Content: f.Content,
 		})
 	}
-	if _, _, err := repo.Commit(libfossil.CommitOpts{
+	_, uuid, err := repo.Commit(libfossil.CommitOpts{
 		Files:   toCommit,
 		Comment: commitMessage(claim),
 		User:    l.slotID,
-	}); err != nil {
-		return fmt.Errorf("coord.Leaf.Commit: %w", err)
+	})
+	if err != nil {
+		return "", fmt.Errorf("coord.Leaf.Commit: %w", err)
 	}
 
-	// Trigger an explicit sync round so peer leaves see the commit.
-	l.agent.SyncNow()
+	// Push the new commit to the hub via HTTP. Direct HTTP push
+	// avoids EdgeSync's NATS-only outgoing sync transport, which
+	// requires two-hop interest propagation across the leaf↔hub NATS
+	// leaf-node connection that doesn't reliably establish in time
+	// for our request/reply pattern. The leaf.Agent.Repo() handle is
+	// shared between this push and the autosync poll loop, so the
+	// "exactly one *libfossil.Repo" invariant holds. Phase 2 trials
+	// will revisit whether NATS-driven sync becomes viable.
+	httpTransport := libfossil.NewHTTPTransport(l.hubHTTPAddr)
+	if _, err := repo.Sync(ctx, httpTransport, libfossil.SyncOpts{
+		Push: true,
+		Pull: false,
+	}); err != nil {
+		return "", fmt.Errorf("coord.Leaf.Commit: push to hub: %w", err)
+	}
 
 	// Post-sync divergence check: if the local tip's parent chain does
 	// not include `parent`, the commit went onto a sibling fork and the
 	// planner overlapped slots. This is ErrConflict; no recovery.
 	post, err := l.Tip(ctx)
 	if err != nil {
-		return fmt.Errorf("coord.Leaf.Commit: post-tip: %w", err)
+		return "", fmt.Errorf("coord.Leaf.Commit: post-tip: %w", err)
 	}
 	if parent != "" && post == parent {
-		return fmt.Errorf("coord.Leaf.Commit: %w: tip did not advance", ErrConflict)
+		return "", fmt.Errorf("coord.Leaf.Commit: %w: tip did not advance", ErrConflict)
 	}
-	return nil
+	return uuid, nil
 }
 
 // commitMessage builds a default commit message for a Leaf.Commit. Kept
@@ -278,9 +307,14 @@ func (l *Leaf) Tip(ctx context.Context) (string, error) {
 		WHERE e.type='ci'
 		ORDER BY e.mtime DESC, l.rid DESC LIMIT 1
 	`).Scan(&uuid)
-	if err != nil {
-		// sql.ErrNoRows on a fresh repo is empty-tip, not an error.
+	// sql.ErrNoRows on a fresh repo is empty-tip, not an error.
+	// Other errors (DB faults, schema corruption) must propagate so
+	// Commit's post-sync divergence check sees them.
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("coord.Leaf.Tip: %w", err)
 	}
 	return uuid, nil
 }

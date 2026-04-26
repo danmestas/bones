@@ -241,7 +241,7 @@ func runSlot(
 	}
 	defer func() { _ = cl.Release() }()
 
-	if err := l.Commit(ctx, cl,
+	if _, err := l.Commit(ctx, cl,
 		[]coord.File{{Path: path, Content: []byte(fmt.Sprintf("v%d", i))}},
 	); err != nil {
 		return fmt.Errorf("commit %d: %w", i, err)
