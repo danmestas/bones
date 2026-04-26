@@ -3,7 +3,6 @@ package coord
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -82,7 +81,7 @@ func (l *Leaf) Compact(ctx context.Context, opts CompactOptions) (CompactResult,
 	if nowFn == nil {
 		nowFn = func() time.Time { return time.Now().UTC() }
 	}
-	records, err := l.coord.sub.tasks.List(ctx)
+	records, err := l.coord.listTasks(ctx)
 	if err != nil {
 		return CompactResult{}, fmt.Errorf("coord.Leaf.Compact: %w", err)
 	}
@@ -165,7 +164,7 @@ func (l *Leaf) compactOne(
 	if err != nil {
 		return CompactedTask{}, fmt.Errorf("coord.Leaf.Compact: original size %s: %w", rec.ID, err)
 	}
-	if err := l.coord.sub.tasks.Update(ctx, rec.ID, func(cur tasks.Task) (tasks.Task, error) {
+	if err := l.coord.updateTask(ctx, rec.ID, func(cur tasks.Task) (tasks.Task, error) {
 		if cur.Status != tasks.StatusClosed {
 			return cur, ErrTaskAlreadyClosed
 		}
@@ -198,17 +197,8 @@ func (l *Leaf) compactOne(
 func (l *Leaf) archiveAndPurgeCompactedTask(
 	ctx context.Context, id string,
 ) error {
-	archived, _, err := l.coord.sub.tasks.Get(ctx, id)
-	if err != nil {
-		return fmt.Errorf("coord.Leaf.Compact: archive load %s: %w", id, err)
-	}
-	if err := l.coord.sub.archive.Create(ctx, archived); err != nil {
-		if !errors.Is(err, tasks.ErrAlreadyExists) {
-			return fmt.Errorf("coord.Leaf.Compact: archive create %s: %w", id, err)
-		}
-	}
-	if err := l.coord.sub.tasks.Purge(ctx, id); err != nil {
-		return fmt.Errorf("coord.Leaf.Compact: purge %s: %w", id, err)
+	if err := l.coord.getAndArchiveTask(ctx, id); err != nil {
+		return fmt.Errorf("coord.Leaf.Compact: archive/purge %s: %w", id, err)
 	}
 	return nil
 }

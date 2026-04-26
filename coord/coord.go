@@ -663,3 +663,45 @@ func (c *Coord) Answer(
 	}
 	return unsub, nil
 }
+
+// listTasks returns every task record currently readable in the hot
+// tasks bucket. Used by Leaf.Compact to build the eligible-task set;
+// unexported so substrate remains opaque to Leaf code.
+func (c *Coord) listTasks(ctx context.Context) ([]tasks.Task, error) {
+	return c.sub.tasks.List(ctx)
+}
+
+// updateTask performs a revision-gated CAS update on a task record.
+// Used by Leaf.Compact to stamp compaction metadata on a closed record;
+// unexported so substrate remains opaque to Leaf code.
+func (c *Coord) updateTask(
+	ctx context.Context,
+	id string,
+	mutate func(tasks.Task) (tasks.Task, error),
+) error {
+	return c.sub.tasks.Update(ctx, id, mutate)
+}
+
+// getAndArchiveTask reads the hot task record for id, writes it into
+// the archive bucket (idempotent on ErrAlreadyExists), then purges it
+// from the hot bucket. Used by Leaf.Compact when opts.Prune is true;
+// unexported so substrate remains opaque to Leaf code.
+func (c *Coord) getAndArchiveTask(ctx context.Context, id string) error {
+	archived, _, err := c.sub.tasks.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := c.sub.archive.Create(ctx, archived); err != nil {
+		if !errors.Is(err, tasks.ErrAlreadyExists) {
+			return err
+		}
+	}
+	return c.sub.tasks.Purge(ctx, id)
+}
+
+// sendChat publishes body to the chat thread identified by thread.
+// Used by Leaf.PostMedia to write the in-band media envelope; unexported
+// so substrate remains opaque to Leaf code.
+func (c *Coord) sendChat(ctx context.Context, thread, body string) error {
+	return c.sub.chat.Send(ctx, thread, body)
+}
