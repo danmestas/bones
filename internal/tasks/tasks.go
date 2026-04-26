@@ -201,13 +201,17 @@ func (m *Manager) Update(
 	if m.done.Load() {
 		return ErrClosed
 	}
-	for attempt := 0; attempt < jskv.MaxRetries; attempt++ {
+	var attempt int
+	for attempt = 0; attempt < jskv.MaxRetries; attempt++ {
+		assert.Precondition(attempt < jskv.MaxRetries, "tasks.Update: CAS attempt exceeded bound")
 		done, err := m.updateAttempt(ctx, id, mutate)
 		if done {
 			return err
 		}
 		casRetryHook()
 	}
+	assert.Postcondition(attempt == jskv.MaxRetries,
+		"tasks.Update: exited CAS loop without exhausting retries or returning")
 	return ErrCASConflict
 }
 
