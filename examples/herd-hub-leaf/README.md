@@ -24,7 +24,7 @@ and emits OTLP traces to a configurable endpoint.
 
 ### Full trial (16 x 30 = 480 commits, OTLP to SigNoz)
 
-    OTEL_EXPORTER_OTLP_ENDPOINT=https://signoz-vm.tail51604c.ts.net \
+    OTEL_EXPORTER_OTLP_ENDPOINT=http://signoz-vm.tail51604c.ts.net:4318 \
     OTEL_SERVICE_NAME=herd-hub-leaf \
       go run ./examples/herd-hub-leaf/
 
