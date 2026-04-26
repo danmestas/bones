@@ -25,7 +25,13 @@ func (c *Coord) PostMedia(
 	assert.Precondition(len(data) > 0, "coord.PostMedia: data is empty")
 	now := time.Now().UTC()
 	path := mediaArtifactPath(c.cfg.AgentID, now)
-	rev, err := c.sub.fossil.Commit(
+	// Media commits are always trunk; PostMedia callers do not hold the
+	// task-level invariants Commit's fork+merge model defends, and the
+	// chat-side artifact is independent of trunk topology. Discard
+	// forkBranch — fossil layer auto-forks when WouldFork is true, and
+	// for the media path the rev is the only handle the chat substrate
+	// needs.
+	rev, _, err := c.sub.fossil.Commit(
 		ctx,
 		fmt.Sprintf("post media to %s (%s)", thread, mimeType),
 		[]ifossil.File{{Path: path, Content: data}},
