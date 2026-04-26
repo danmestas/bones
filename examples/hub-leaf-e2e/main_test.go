@@ -6,15 +6,19 @@ import (
 )
 
 // TestE2E_3x3 exercises the full hub-leaf orchestration loop with three
-// concurrent agents committing on disjoint files. It asserts the spec
-// invariants:
+// concurrent agents committing on disjoint files. It asserts:
 //
-//   - aggregate trunk checkins across all three leaf repos == 3
-//     (each agent committed exactly once);
+//   - aggregate trunk checkins across all three leaf repos >= 3
+//     (each agent committed exactly once; trial #10's fork+merge model
+//     can add a merge commit when a timing race forks one agent's
+//     commit onto a generated branch — the hub tally then includes the
+//     auto-merge commit on top of the original 3);
 //   - aggregate conflict-fork count across all three leaves == 0
-//     (the no-fork-branches contract from ADR 0005's Phase 2);
+//     (libfossil's `conflict` table — distinct from the auto-fork
+//     branches the trial #10 path creates and immediately merges);
 //   - each slot publishes its tip.changed broadcast;
-//   - no slot returns an unrecoverable error.
+//   - no slot returns an unrecoverable error (auto-merge resolves the
+//     friendly disjoint case without surfacing ErrConflictForked).
 //
 // The test runs in-process (httptest hub + embedded NATS JetStream) so
 // it depends on no external services and finishes within a few seconds.
@@ -30,8 +34,11 @@ func TestE2E_3x3(t *testing.T) {
 	if res.UnrecoverableErr != nil {
 		t.Fatalf("slot error: %v", res.UnrecoverableErr)
 	}
-	if res.Commits != 3 {
-		t.Fatalf("expected 3 trunk checkins across leaves, got %d", res.Commits)
+	if res.Commits < 3 {
+		t.Fatalf(
+			"expected >=3 trunk checkins (one per slot, possibly +merge), got %d",
+			res.Commits,
+		)
 	}
 	if res.ForkBranches != 0 {
 		t.Fatalf(

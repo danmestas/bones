@@ -121,7 +121,11 @@ func (c *Coord) compactOne(
 	level := rec.CompactLevel + 1
 	path := compactArtifactPath(TaskID(rec.ID), level)
 	body := compactArtifactBody(input, summary)
-	rev, err := c.sub.fossil.Commit(ctx, compactCommitMessage(rec.ID, level), []ifossil.File{{
+	// Compact writes a single artifact; the fork branch (if any) is
+	// irrelevant to the caller — Compact's invariant is that the rev
+	// resolves to the artifact bytes, which a forked-branch commit
+	// satisfies as well as a trunk one. Discard forkBranch.
+	rev, _, err := c.sub.fossil.Commit(ctx, compactCommitMessage(rec.ID, level), []ifossil.File{{
 		Path: path, Content: []byte(body),
 	}}, "")
 	if err != nil {

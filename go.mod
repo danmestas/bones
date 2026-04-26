@@ -10,7 +10,7 @@ replace github.com/danmestas/EdgeSync/leaf => ../EdgeSync/leaf
 
 require (
 	github.com/danmestas/EdgeSync/leaf v0.0.1
-	github.com/danmestas/libfossil v0.4.1
+	github.com/danmestas/libfossil v0.4.2
 	github.com/danmestas/libfossil/db/driver/modernc v0.1.0
 	github.com/google/uuid v1.6.0
 	github.com/nats-io/nats-server/v2 v2.12.6

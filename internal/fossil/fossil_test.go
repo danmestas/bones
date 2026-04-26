@@ -38,7 +38,7 @@ func commit(
 	t *testing.T, m *Manager, msg string, files ...File,
 ) string {
 	t.Helper()
-	rev, err := m.Commit(context.Background(), msg, files, "")
+	rev, _, err := m.Commit(context.Background(), msg, files, "")
 	if err != nil {
 		t.Fatalf("Commit %q: %v", msg, err)
 	}
@@ -474,7 +474,7 @@ func TestCommit_AfterClose_Errors(t *testing.T) {
 	if err := m.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	_, err := m.Commit(context.Background(), "after close", []File{
+	_, _, err := m.Commit(context.Background(), "after close", []File{
 		{Path: "x.txt", Content: []byte("x\n")},
 	}, "")
 	if !errors.Is(err, ErrClosed) {
@@ -552,7 +552,7 @@ func TestWouldFork_TwoManagersSharedRepo(t *testing.T) {
 	ctx := context.Background()
 
 	// A commits first; checkout not yet attached.
-	if _, err := mA.Commit(ctx, "a1", []File{
+	if _, _, err := mA.Commit(ctx, "a1", []File{
 		{Path: "a.go", Content: []byte("a1\n")},
 	}, ""); err != nil {
 		t.Fatalf("A commit 1: %v", err)
@@ -578,7 +578,7 @@ func TestWouldFork_TwoManagersSharedRepo(t *testing.T) {
 	// B commits; this should advance trunk past A1 (B's commit
 	// references A1 as parent since tipRID returns A1). Now A1
 	// becomes internal; B1 is the only leaf. No fork yet.
-	if _, err := mB.Commit(ctx, "b1", []File{
+	if _, _, err := mB.Commit(ctx, "b1", []File{
 		{Path: "b.go", Content: []byte("b1\n")},
 	}, ""); err != nil {
 		t.Fatalf("B commit 1: %v", err)
@@ -617,7 +617,7 @@ func TestManager_AbsolutePaths_CheckoutSucceeds(t *testing.T) {
 
 	bodyA := []byte("package src // a.go\n")
 	bodyB := []byte("package pkg // b.go\n")
-	rev, err := m.Commit(ctx, "absolute paths", []File{
+	rev, _, err := m.Commit(ctx, "absolute paths", []File{
 		{Path: "/src/a.go", Content: bodyA},
 		{Path: "/pkg/b.go", Content: bodyB},
 	}, "")
@@ -669,7 +669,7 @@ func TestManager_RelativePath_RoundTrip(t *testing.T) {
 	m := newTestManager(t)
 	ctx := context.Background()
 	body := []byte("relative\n")
-	rev, err := m.Commit(ctx, "relative path", []File{
+	rev, _, err := m.Commit(ctx, "relative path", []File{
 		{Path: "src/c.go", Content: body},
 	}, "")
 	if err != nil {
@@ -696,13 +696,18 @@ func TestCommit_WithBranch_PlacesOnBranch(t *testing.T) {
 	}
 	// Commit again with an explicit branch name.
 	branch := "agent-a-task1-12345"
-	rev, err := m.Commit(
+	rev, gotBranch, err := m.Commit(
 		context.Background(), "forked",
 		[]File{{Path: "x.txt", Content: []byte("2\n")}},
 		branch,
 	)
 	if err != nil {
 		t.Fatalf("Commit with branch: %v", err)
+	}
+	// Caller-pinned branch: the auto-fork path is bypassed, so the
+	// returned forkBranch must be empty.
+	if gotBranch != "" {
+		t.Fatalf("Commit with explicit branch: forkBranch=%q, want empty", gotBranch)
 	}
 	if rev == "" {
 		t.Fatal("Commit with branch: empty rev")
@@ -817,7 +822,7 @@ func TestManager_Tip_AfterCommitReturnsUUID(t *testing.T) {
 	// docstring). Tip just reads repo state, so the checkout is
 	// irrelevant here.
 	files := []File{{Path: "/a.txt", Content: []byte("a")}}
-	if _, err := mgr.Commit(ctx, "seed", files, ""); err != nil {
+	if _, _, err := mgr.Commit(ctx, "seed", files, ""); err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
 	uuid, err := mgr.Tip(ctx)

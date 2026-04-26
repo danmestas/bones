@@ -14,7 +14,9 @@ package fossil
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -206,7 +208,10 @@ func (m *Manager) CreateCheckout(ctx context.Context) error {
 
 // Commit writes files into the repo as a new checkin authored by
 // cfg.AgentID, chaining off the current branch tip. Returns the opaque
-// UUID of the new checkin.
+// UUID of the new checkin and, when the commit landed on a fork branch
+// (because WouldFork reported true at the moment of commit), the name
+// of that fork branch. forkBranch is empty when the commit landed on
+// the current branch (the trunk-commit path).
 //
 // The commit is made directly against the repo blob store, without
 // routing through the checkout's vfile layer. This keeps Commit usable
@@ -215,27 +220,55 @@ func (m *Manager) CreateCheckout(ctx context.Context) error {
 // checkout is synced forward after the commit via Extract so on-disk
 // state matches.
 //
-// If branch is non-empty, the new commit is placed on that named branch
-// via a propagating "branch" tag on the artifact. Callers compose this
-// with WouldFork to implement fork-on-conflict semantics at the coord
-// layer (ADR 0010 §4-5). Pass "" to commit on the current branch.
+// If the caller passes a non-empty branch, that branch name is used
+// verbatim (a propagating "branch" tag is written on the artifact).
+// When branch is empty, Commit checks WouldFork on the attached
+// checkout: if a sibling leaf already exists on the current branch a
+// unique fork branch name is generated (`fork-<agent>-<8 hex>`) and
+// the commit lands on that fork branch. The returned forkBranch is the
+// generated name in that case, or empty when the commit landed cleanly
+// on the current branch.
+//
+// This is the substrate half of the fork+merge model from
+// docs/trials/2026-04-25/trial-report.md trial #10: forks are expected
+// rare-but-recoverable state, not a precondition violation. The coord
+// layer reads forkBranch and, when non-empty, drives Pull → Merge →
+// Push → notify (see coord.Commit).
 func (m *Manager) Commit(
 	ctx context.Context, message string, files []File, branch string,
-) (string, error) {
+) (string, string, error) {
 	assert.NotNil(ctx, "fossil.Commit: ctx is nil")
 	assert.NotEmpty(message, "fossil.Commit: message is empty")
 	assert.Precondition(
 		len(files) > 0, "fossil.Commit: files is empty",
 	)
 	if m.done.Load() {
-		return "", ErrClosed
+		return "", "", ErrClosed
 	}
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
 
 	parent, _, err := m.tipRID()
 	if err != nil {
-		return "", fmt.Errorf("fossil.Commit: tip: %w", err)
+		return "", "", fmt.Errorf("fossil.Commit: tip: %w", err)
+	}
+
+	// Auto-fork when the caller did not pin a branch and a sibling leaf
+	// already exists on the current branch. WouldFork is a read-only
+	// SELECT against the leaf's tagxref/leaf tables and is safe to call
+	// inside writeMu (which guards writers, not readers). Branch
+	// detection is best-effort: if WouldFork errors or returns false on
+	// a fresh-repo-no-checkout, the commit lands on the current branch.
+	forkBranch := ""
+	if branch == "" && m.checkout != nil {
+		fork, ferr := m.checkout.WouldFork()
+		if ferr != nil {
+			return "", "", fmt.Errorf("fossil.Commit: wouldfork: %w", ferr)
+		}
+		if fork {
+			forkBranch = generateForkBranchName(m.cfg.AgentID)
+			branch = forkBranch
+		}
 	}
 
 	toCommit := make([]libfossil.FileToCommit, 0, len(files))
@@ -259,7 +292,7 @@ func (m *Manager) Commit(
 	}
 	rid, uuid, err := m.repo.Commit(opts)
 	if err != nil {
-		return "", fmt.Errorf("fossil.Commit: %w", err)
+		return "", "", fmt.Errorf("fossil.Commit: %w", err)
 	}
 
 	// If a checkout is attached, best-effort sync on-disk state forward
@@ -274,7 +307,18 @@ func (m *Manager) Commit(
 			rid, libfossil.ExtractOpts{Force: true},
 		)
 	}
-	return uuid, nil
+	return uuid, forkBranch, nil
+}
+
+// generateForkBranchName produces a unique branch name for a fork
+// commit. Format: "fork-<agentID>-<8 hex random>". The agent ID
+// breadcrumb makes the merge commits self-explanatory in fossil
+// timeline UIs; the random suffix avoids collision when the same agent
+// forks twice in close succession.
+func generateForkBranchName(agentID string) string {
+	var buf [4]byte
+	_, _ = rand.Read(buf[:])
+	return fmt.Sprintf("fork-%s-%s", agentID, hex.EncodeToString(buf[:]))
 }
 
 // Pull fetches commits from the hub at hubURL and applies them to this
