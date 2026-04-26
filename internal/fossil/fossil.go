@@ -107,6 +107,16 @@ func Open(ctx context.Context, cfg Config) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fossil.Open: %w", err)
 	}
+	// Leaf SQLite gets a 30-second busy_timeout. Two writers race on the
+	// same leaf DB in the hub-leaf model: the agent's Commit goroutine and
+	// the broadcast-driven tipSubscriber.pullFn. Without this pragma each
+	// fails fast with SQLITE_BUSY (5) on the first lock contention. With
+	// it, writers wait instead of dropping the work. See
+	// docs/trials/2026-04-25/trial-report.md finding #2.
+	if _, err := repo.DB().Exec("PRAGMA busy_timeout = 30000"); err != nil {
+		_ = repo.Close()
+		return nil, fmt.Errorf("fossil.Open: leaf busy_timeout: %w", err)
+	}
 
 	return &Manager{
 		cfg:  cfg,
@@ -246,6 +256,96 @@ func (m *Manager) Commit(
 		_ = m.checkout.Extract(
 			rid, libfossil.ExtractOpts{Force: true},
 		)
+	}
+	return uuid, nil
+}
+
+// Pull fetches commits from the hub at hubURL and applies them to this
+// Manager's repo. Repo-only — never touches the working tree. Idempotent
+// on a repo already at hub's tip.
+func (m *Manager) Pull(ctx context.Context, hubURL string) error {
+	assert.NotNil(ctx, "fossil.Pull: ctx is nil")
+	assert.NotEmpty(hubURL, "fossil.Pull: hubURL is empty")
+	if m.done.Load() {
+		return ErrClosed
+	}
+	// libfossil.PullOpts has no ServerCode field, so we drop down to
+	// Sync directly to set ServerCode=AgentID. With both ServerCode and
+	// ProjectCode empty, libfossil v0.4.0's xfer encoder emits
+	// `pull  \n` and the server rejects the card as 0 args (encoder
+	// uses strings.Fields which collapses consecutive spaces). See
+	// Push for the matching workaround.
+	transport := libfossil.NewHTTPTransport(hubURL)
+	if _, err := m.repo.Sync(ctx, transport, libfossil.SyncOpts{
+		Push:       false,
+		Pull:       true,
+		ServerCode: m.cfg.AgentID,
+	}); err != nil {
+		return fmt.Errorf("fossil.Pull: %w", err)
+	}
+	return nil
+}
+
+// Push sends this Manager's local commits to the hub at hubURL. Repo-only
+// — never touches the working tree. Idempotent on a hub already at this
+// leaf's tip.
+//
+// libfossil v0.4.0 lacks a public Repo.Push URL-convenience wrapper
+// symmetric with Repo.Pull, so we reach into Repo.Sync directly through
+// libfossil.NewHTTPTransport(hubURL). This keeps internal/fossil as the
+// only place transport-construction details live; coord callers stay
+// URL-only.
+//
+// libfossil v0.4.1's Sync round-loop continues based on pending work
+// regardless of the user's Pull flag, so Push: true alone drives the
+// gimme/igot exchange that delivers blobs to the hub. Empty ServerCode
+// is accepted by v0.4.1's xfer encoder.
+func (m *Manager) Push(ctx context.Context, hubURL string) error {
+	assert.NotNil(ctx, "fossil.Push: ctx is nil")
+	assert.NotEmpty(hubURL, "fossil.Push: hubURL is empty")
+	if m.done.Load() {
+		return ErrClosed
+	}
+	transport := libfossil.NewHTTPTransport(hubURL)
+	if _, err := m.repo.Sync(ctx, transport, libfossil.SyncOpts{
+		Push: true,
+	}); err != nil {
+		return fmt.Errorf("fossil.Push: %w", err)
+	}
+	return nil
+}
+
+// Update merges repo-level changes into the attached working tree. Must be
+// called after Pull and after CreateCheckout. Returns ErrNoCheckout if the
+// checkout has not been created yet (Update needs a worktree to merge into).
+// TargetRID=0 means "update to current branch tip", which is what coord
+// uses for the retry-on-fork path.
+func (m *Manager) Update(ctx context.Context) error {
+	assert.NotNil(ctx, "fossil.Update: ctx is nil")
+	if m.done.Load() {
+		return ErrClosed
+	}
+	if m.checkout == nil {
+		return ErrNoCheckout
+	}
+	if err := m.checkout.Update(libfossil.UpdateOpts{TargetRID: 0}); err != nil {
+		return fmt.Errorf("fossil.Update: %w", err)
+	}
+	return nil
+}
+
+// Tip returns the manifest UUID at the head of the current branch's leaf
+// commit, or "" if the repo has no checkins yet. Wraps the existing
+// private tipRID helper. Used by the tip-broadcast subscriber to compare
+// the broadcast manifest hash against local state for idempotency.
+func (m *Manager) Tip(ctx context.Context) (string, error) {
+	assert.NotNil(ctx, "fossil.Tip: ctx is nil")
+	if m.done.Load() {
+		return "", ErrClosed
+	}
+	_, uuid, err := m.tipRID()
+	if err != nil {
+		return "", fmt.Errorf("fossil.Tip: %w", err)
 	}
 	return uuid, nil
 }
