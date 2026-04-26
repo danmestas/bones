@@ -3,9 +3,9 @@ package coord
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/danmestas/agent-infra/internal/assert"
+	"github.com/danmestas/agent-infra/internal/chat"
 	"github.com/danmestas/agent-infra/internal/tasks"
 )
 
@@ -21,17 +21,10 @@ type PrimeResult struct {
 }
 
 // ChatThread is a read-only view of a chat thread for PrimeResult.
-type ChatThread struct {
-	threadShort  string
-	lastActivity time.Time
-	messageCount int
-	lastBody     string
-}
-
-func (c ChatThread) ThreadShort() string     { return c.threadShort }
-func (c ChatThread) LastActivity() time.Time { return c.lastActivity }
-func (c ChatThread) MessageCount() int       { return c.messageCount }
-func (c ChatThread) LastBody() string        { return c.lastBody }
+// It is a type alias for chat.ThreadSummary — the two types are
+// identical at the reflect layer, eliminating the translation loop
+// in Prime and the duplicate field-for-field copy.
+type ChatThread = chat.ThreadSummary
 
 // Prime returns a full snapshot of the workspace: open tasks, tasks ready
 // for this agent, tasks claimed by this agent, recent chat threads this
@@ -61,19 +54,11 @@ func (c *Coord) Prime(ctx context.Context) (PrimeResult, error) {
 	result.ReadyTasks = ready
 
 	// 3. Recent chat threads this agent participates in.
-	threadSummaries, err := c.sub.chat.ThreadsForAgent(ctx, c.cfg.AgentID, 20)
+	threads, err := c.sub.chat.ThreadsForAgent(ctx, c.cfg.AgentID, 20)
 	if err != nil {
 		return result, fmt.Errorf("coord.Prime: threads: %w", err)
 	}
-	result.Threads = make([]ChatThread, 0, len(threadSummaries))
-	for _, t := range threadSummaries {
-		result.Threads = append(result.Threads, ChatThread{
-			threadShort:  t.ThreadShort(),
-			lastActivity: t.LastActivity(),
-			messageCount: t.MessageCount(),
-			lastBody:     t.LastBody(),
-		})
-	}
+	result.Threads = threads
 
 	// 4. Live peers.
 	peers, err := c.Who(ctx)
