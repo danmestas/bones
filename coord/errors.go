@@ -158,3 +158,11 @@ var ErrInvalidEdgeType = errors.New("coord: invalid edge type")
 // is already the current claimed_by — self-reclaim is nonsensical.
 // ADR 0013.
 var ErrAlreadyClaimer = errors.New("coord: caller is already the claimer")
+
+// ErrConflict is a defense-in-depth assertion: post-SyncNow, Leaf.Commit
+// detected that the local tip diverged from the parent expected at
+// commit time. Disjoint-slot orchestrator-validator contracts make this
+// impossible in practice; if it fires at runtime the planner missed an
+// overlap. There is no auto-recovery (fork+merge has been deleted).
+// Callers treat it as planner failure and stop the run.
+var ErrConflict = errors.New("coord: commit conflict (planner overlap)")

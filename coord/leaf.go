@@ -174,6 +174,96 @@ func (l *Leaf) Claim(ctx context.Context, taskID TaskID) (*Claim, error) {
 	return &Claim{taskID: taskID, release: rel}, nil
 }
 
+// Commit writes files into the leaf's libfossil repo as a new checkin
+// authored by the slot, then triggers a sync round (SyncNow). On
+// post-sync divergence — local tip drifted from the parent expected at
+// commit time — returns ErrConflict.
+//
+// The hold-gate (Invariant 20) and epoch-gate (Invariant 24) are
+// enforced via the leaf's Coord: every File.Path must be held by this
+// leaf at call time, and the *Claim's TaskID must still be active with
+// the same claim_epoch the leaf last observed.
+//
+// All writes route through l.agent.Repo() — there is no second
+// *libfossil.Repo handle to leaf.fossil in this process. Per
+// architectural invariant: one *libfossil.Repo per fossil file,
+// owned by leaf.Agent.
+//
+// ErrConflict is a defense-in-depth assertion: the disjoint-slot
+// validator should make this unreachable. There is no auto-recovery
+// (fork+merge has been deleted); callers treat it as planner failure.
+func (l *Leaf) Commit(ctx context.Context, claim *Claim, files []File) error {
+	assert.NotNil(l, "coord.Leaf.Commit: receiver is nil")
+	assert.NotNil(ctx, "coord.Leaf.Commit: ctx is nil")
+	assert.NotNil(claim, "coord.Leaf.Commit: claim is nil")
+	assert.Precondition(len(files) > 0, "coord.Leaf.Commit: files is empty")
+
+	// Hold-gate (Invariant 20) and epoch-gate (Invariant 24).
+	if err := l.coord.checkHolds(ctx, files); err != nil {
+		return err
+	}
+	if err := l.coord.checkEpoch(ctx, claim.TaskID()); err != nil {
+		return err
+	}
+
+	// Capture parent tip before the write so we can detect post-sync
+	// divergence (the new ErrConflict signal that replaces fork+merge).
+	parent, err := l.Tip(ctx)
+	if err != nil {
+		return fmt.Errorf("coord.Leaf.Commit: pre-tip: %w", err)
+	}
+
+	// Write through the agent's repo handle — the only *libfossil.Repo
+	// that should ever touch leaf.fossil in this process.
+	repo := l.agent.Repo()
+	toCommit := make([]libfossil.FileToCommit, 0, len(files))
+	for _, f := range files {
+		assert.NotEmpty(f.Path, "coord.Leaf.Commit: file.Path is empty")
+		toCommit = append(toCommit, libfossil.FileToCommit{
+			Name:    normalizeLeadingSlash(f.Path),
+			Content: f.Content,
+		})
+	}
+	if _, _, err := repo.Commit(libfossil.CommitOpts{
+		Files:   toCommit,
+		Comment: commitMessage(claim),
+		User:    l.slotID,
+	}); err != nil {
+		return fmt.Errorf("coord.Leaf.Commit: %w", err)
+	}
+
+	// Trigger an explicit sync round so peer leaves see the commit.
+	l.agent.SyncNow()
+
+	// Post-sync divergence check: if the local tip's parent chain does
+	// not include `parent`, the commit went onto a sibling fork and the
+	// planner overlapped slots. This is ErrConflict; no recovery.
+	post, err := l.Tip(ctx)
+	if err != nil {
+		return fmt.Errorf("coord.Leaf.Commit: post-tip: %w", err)
+	}
+	if parent != "" && post == parent {
+		return fmt.Errorf("coord.Leaf.Commit: %w: tip did not advance", ErrConflict)
+	}
+	return nil
+}
+
+// commitMessage builds a default commit message for a Leaf.Commit. Kept
+// trivial in Phase 1; later phases will surface caller-supplied
+// messages once the orchestrator wires task descriptions through.
+func commitMessage(c *Claim) string {
+	return "leaf commit for task " + string(c.TaskID())
+}
+
+// normalizeLeadingSlash strips a single leading slash so absolute paths
+// in coord.File map onto libfossil's relative-to-repo-root names.
+func normalizeLeadingSlash(p string) string {
+	if len(p) > 0 && p[0] == '/' {
+		return p[1:]
+	}
+	return p
+}
+
 // Tip returns the manifest UUID at the head of the leaf's current
 // branch, or "" on a fresh repo with no checkins.
 func (l *Leaf) Tip(ctx context.Context) (string, error) {

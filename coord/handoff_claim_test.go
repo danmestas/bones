@@ -80,13 +80,17 @@ func TestHandoffClaim_Success(t *testing.T) {
 	if !ok || hold.AgentID != "worker-agent" {
 		t.Fatalf("hold=%+v ok=%v, want worker-agent", hold, ok)
 	}
-	_, err = parent.Commit(ctx, id, "parent stale", []File{
-		{Path: "/a.go", Content: []byte("p\n")},
-	})
-	if !errors.Is(err, ErrNotHeld) && !errors.Is(err, ErrEpochStale) {
+	// Coord.Commit was deleted in the Phase 1 EdgeSync refactor;
+	// asserts the same hold-gate / epoch-gate invariant against the
+	// underlying helpers that Leaf.Commit composes. The parent's view
+	// after a successful HandoffClaim must fail one of the two gates.
+	files := []File{{Path: "/a.go", Content: []byte("p\n")}}
+	holdsErr := parent.checkHolds(ctx, files)
+	epochErr := parent.checkEpoch(ctx, id)
+	if !errors.Is(holdsErr, ErrNotHeld) && !errors.Is(epochErr, ErrEpochStale) {
 		t.Fatalf(
-			"parent stale commit err=%v, want ErrNotHeld or ErrEpochStale",
-			err,
+			"parent stale gates: holds=%v epoch=%v, want ErrNotHeld or ErrEpochStale",
+			holdsErr, epochErr,
 		)
 	}
 	if err := worker.CloseTask(ctx, id, "done"); err != nil {

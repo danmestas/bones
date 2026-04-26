@@ -151,7 +151,10 @@ func aggregate(
 	}
 	res.Commits = hubCount
 	for i := 0; i < n; i++ {
-		leafPath := filepath.Join(dir, fmt.Sprintf("leaf-%d.fossil", i))
+		// Phase 1: leaf paths now live under dir/<slotID>/leaf.fossil
+		// because OpenLeaf owns the layout. Match runSlot's slotID.
+		slotID := fmt.Sprintf("e2e-agent-%d", i)
+		leafPath := filepath.Join(dir, slotID, "leaf.fossil")
 		forks, ferr := inspectLeafForks(leafPath)
 		if ferr != nil {
 			return fmt.Errorf("inspect leaf-%d: %w", i, ferr)
@@ -197,84 +200,66 @@ func countTimeline(r *libfossil.Repo) (int, error) {
 	return n, nil
 }
 
-// runSlot drives one agent through Open -> OpenTask -> Claim -> Commit
-// -> CloseTask. Each slot writes to a disjoint file path so concurrent
-// commits do not contend on holds. The retry path inside coord.Commit
-// handles transient WouldFork via pull+update; the test does not need
-// to retry at this layer.
+// runSlot drives one agent through OpenLeaf -> OpenTask -> Claim ->
+// Commit -> Release. Each slot writes to a disjoint file path so
+// concurrent commits do not contend on holds.
+//
+// Phase 1 (Task 4): migrated from coord.Open/Coord.Commit to
+// coord.OpenLeaf/Leaf.Commit. Task 7 of the EdgeSync refactor will
+// rewrite this whole harness to drop the httptest+libfossil hub in
+// favor of coord.Hub.
 func runSlot(
 	ctx context.Context, t *testing.T, i int, dir, natsURL, hubURL string, res *runResult,
 ) error {
 	t.Helper()
-	leafPath := filepath.Join(dir, fmt.Sprintf("leaf-%d.fossil", i))
-	cfg := coord.Config{
-		AgentID:            fmt.Sprintf("e2e-agent-%d", i),
-		NATSURL:            natsURL,
-		HubURL:             hubURL,
-		EnableTipBroadcast: true,
-		FossilRepoPath:     leafPath,
-		CheckoutRoot:       filepath.Join(dir, fmt.Sprintf("wt-%d", i)),
-		ChatFossilRepoPath: filepath.Join(
-			dir, fmt.Sprintf("chat-%d.fossil", i),
-		),
-		HoldTTLDefault:    30 * time.Second,
-		HoldTTLMax:        60 * time.Second,
-		MaxHoldsPerClaim:  8,
-		MaxSubscribers:    8,
-		MaxTaskFiles:      8,
-		MaxReadyReturn:    32,
-		MaxTaskValueSize:  8192,
-		TaskHistoryDepth:  8,
-		OperationTimeout:  30 * time.Second,
-		HeartbeatInterval: 5 * time.Second,
-		NATSReconnectWait: 100 * time.Millisecond,
-		NATSMaxReconnects: 10,
-	}
-	c, err := coord.Open(ctx, cfg)
+	slotID := fmt.Sprintf("e2e-agent-%d", i)
+	leafDir := filepath.Join(dir, slotID)
+
+	l, err := coord.OpenLeaf(ctx, leafDir, slotID, natsURL, hubURL)
 	if err != nil {
 		return fmt.Errorf("open agent-%d: %w", i, err)
 	}
-	closed := false
+	stopped := false
 	defer func() {
-		if !closed {
-			_ = c.Close()
+		if !stopped {
+			_ = l.Stop()
 		}
 	}()
 
 	// File paths must be absolute (coord.OpenTask precondition).
 	// Each slot's path is unique so commits do not contend on holds.
 	path := filepath.Join("/", fmt.Sprintf("slot-%d", i), "file.txt")
-	taskID, err := c.OpenTask(
+	taskID, err := l.OpenTask(
 		ctx, fmt.Sprintf("task-%d", i), []string{path},
 	)
 	if err != nil {
 		return fmt.Errorf("opentask %d: %w", i, err)
 	}
-	rel, err := c.Claim(ctx, taskID, 30*time.Second)
+	cl, err := l.Claim(ctx, taskID)
 	if err != nil {
 		return fmt.Errorf("claim %d: %w", i, err)
 	}
-	defer func() { _ = rel() }()
+	defer func() { _ = cl.Release() }()
 
-	if _, err := c.Commit(ctx, taskID, fmt.Sprintf("E2E %d", i),
+	if err := l.Commit(ctx, cl,
 		[]coord.File{{Path: path, Content: []byte(fmt.Sprintf("v%d", i))}},
 	); err != nil {
 		return fmt.Errorf("commit %d: %w", i, err)
 	}
 	atomic.AddInt32(&res.TipChangedSeen, 1)
 
-	if err := c.CloseTask(
-		ctx, taskID, fmt.Sprintf("e2e slot %d done", i),
-	); err != nil {
-		return fmt.Errorf("closetask %d: %w", i, err)
+	// Phase 1: Leaf.Close lands in Task 5; until then drop the
+	// hold immediately so the next OpenTask on this slot is unblocked.
+	if err := cl.Release(); err != nil {
+		return fmt.Errorf("release %d: %w", i, err)
 	}
-	// Close coord here so the leaf's fossil repo is not held open
-	// when Run later opens it read-only via inspectLeaf. SQLite WAL
-	// commits are durable across handles, but the explicit Close
-	// keeps the read-side free of any contention.
-	if err := c.Close(); err != nil {
-		return fmt.Errorf("close %d: %w", i, err)
+	// Stop the leaf here so its fossil repo is not held open when
+	// Run later opens it read-only via inspectLeaf. SQLite WAL commits
+	// are durable across handles, but the explicit Stop keeps the
+	// read-side free of any contention.
+	if err := l.Stop(); err != nil {
+		return fmt.Errorf("stop %d: %w", i, err)
 	}
-	closed = true
+	stopped = true
 	return nil
 }
