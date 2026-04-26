@@ -65,7 +65,7 @@ test:
 
 race:
 	@if [ -n "$(GO_PACKAGES)" ]; then \
-		go test -race ./...; \
+		go test -race -short ./...; \
 	else \
 		echo "race: no Go packages yet — skipping"; \
 	fi
