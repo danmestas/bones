@@ -2,8 +2,6 @@ package coord
 
 import (
 	"fmt"
-	"net/url"
-	"strings"
 	"time"
 )
 
@@ -83,23 +81,16 @@ type Config struct {
 	// concurrent Coords on one substrate from colliding on the repo.
 	ChatFossilRepoPath string
 
-	// FossilRepoPath is the absolute filesystem path to the shared Fossil
-	// repo DB used for the code-artifact substrate per ADR 0010. The
-	// operator owns cleanup; coord never calls RemoveAll. Distinct from
-	// ChatFossilRepoPath: chat messages and code commits live in separate
-	// Fossil repos so their replay streams stay untangled.
-	FossilRepoPath string
-
 	// CheckoutRoot is the absolute directory under which per-agent
 	// working-copy checkouts live per ADR 0010. Coord writes to
 	// CheckoutRoot/<AgentID>/. In tests, pass t.TempDir().
+	//
+	// Note: CheckoutRoot remains on Config because chat (still using
+	// direct libfossil per ADR 0010 carve-out) opens its own repo
+	// underneath it. The coord-level fossil substrate has been removed
+	// in Task 10 of the EdgeSync refactor — code-artifact commits go
+	// through *Leaf, which owns its own libfossil repo via leaf.Agent.
 	CheckoutRoot string
-
-	// HubURL is the http base URL of the orchestrator's fossil server.
-	// When non-empty, coord enables hub-pull on tip.changed broadcasts
-	// and pull+update+retry on commit fork detection. When empty, coord
-	// behaves as in v0.x — local-only, no hub interaction.
-	HubURL string
 }
 
 // Validate checks every Config field against its documented bounds and
@@ -159,35 +150,9 @@ func (c Config) Validate() error {
 			"coord.Config: ChatFossilRepoPath: must be non-empty",
 		)
 	}
-	if c.FossilRepoPath == "" {
-		return fmt.Errorf(
-			"coord.Config: FossilRepoPath: must be non-empty",
-		)
-	}
 	if c.CheckoutRoot == "" {
 		return fmt.Errorf(
 			"coord.Config: CheckoutRoot: must be non-empty",
-		)
-	}
-	if err := validateHubURL(c.HubURL); err != nil {
-		return err
-	}
-	return nil
-}
-
-// validateHubURL enforces the HubURL contract: empty is fine (local-only
-// mode); otherwise the value must parse as a valid URI and use http(s).
-func validateHubURL(hubURL string) error {
-	if hubURL == "" {
-		return nil
-	}
-	if _, err := url.ParseRequestURI(hubURL); err != nil {
-		return fmt.Errorf("coord.Config: HubURL: %w", err)
-	}
-	if !strings.HasPrefix(hubURL, "http://") &&
-		!strings.HasPrefix(hubURL, "https://") {
-		return fmt.Errorf(
-			"coord.Config: HubURL: must start with http:// or https://",
 		)
 	}
 	return nil

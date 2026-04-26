@@ -13,7 +13,6 @@ import (
 
 	"github.com/danmestas/agent-infra/internal/assert"
 	"github.com/danmestas/agent-infra/internal/chat"
-	"github.com/danmestas/agent-infra/internal/fossil"
 	"github.com/danmestas/agent-infra/internal/holds"
 	"github.com/danmestas/agent-infra/internal/presence"
 	"github.com/danmestas/agent-infra/internal/tasks"
@@ -112,7 +111,7 @@ func openSubstrate(
 	if err != nil {
 		return nil, fmt.Errorf("coord.Open: nats connect: %w", err)
 	}
-	s := &substrate{nc: nc, hubURL: cfg.HubURL}
+	s := &substrate{nc: nc}
 	if s.holds, err = holds.Open(ctx, nc, holds.Config{
 		Bucket:     holdsBucket,
 		HoldTTLMax: cfg.HoldTTLMax,
@@ -159,14 +158,6 @@ func openSubstrate(
 	}); err != nil {
 		s.close()
 		return nil, fmt.Errorf("coord.Open: presence: %w", err)
-	}
-	if s.fossil, err = fossil.Open(ctx, fossil.Config{
-		AgentID:      cfg.AgentID,
-		RepoPath:     cfg.FossilRepoPath,
-		CheckoutRoot: cfg.CheckoutRoot,
-	}); err != nil {
-		s.close()
-		return nil, fmt.Errorf("coord.Open: fossil: %w", err)
 	}
 	return s, nil
 }

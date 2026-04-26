@@ -6,54 +6,72 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/danmestas/libfossil"
+
 	"github.com/danmestas/agent-infra/internal/assert"
-	ifossil "github.com/danmestas/agent-infra/internal/fossil"
 )
 
-// PostMedia stores opaque bytes in the shared Fossil repo and publishes an
-// in-band media reference on the chat thread. Subscribers receive a
-// MediaMessage event and may call OpenFile with the returned rev/path.
-func (c *Coord) PostMedia(
+// PostMedia stores opaque bytes in the leaf's libfossil repo and
+// publishes an in-band media reference on the chat thread. Subscribers
+// receive a MediaMessage event.
+//
+// All writes route through l.agent.Repo() — the only *libfossil.Repo
+// handle to leaf.fossil in this process. After the commit, SyncNow
+// triggers a sync round so the artifact propagates to the hub before
+// the chat reference is published; subscribers can then resolve the
+// reference against any peer that has caught up.
+//
+// Invariants asserted (panics on violation — programmer errors):
+// 1 (ctx non-nil), receiver non-nil, thread/mimeType non-empty, data
+// non-empty.
+//
+// Operator errors returned: any error from the libfossil commit, the
+// JSON envelope encode, or the chat substrate Send — surfaced wrapped
+// with the coord.Leaf.PostMedia prefix.
+func (l *Leaf) PostMedia(
 	ctx context.Context,
 	thread, mimeType string,
 	data []byte,
 ) error {
-	c.assertOpen("PostMedia")
-	assert.NotNil(ctx, "coord.PostMedia: ctx is nil")
-	assert.NotEmpty(thread, "coord.PostMedia: thread is empty")
-	assert.NotEmpty(mimeType, "coord.PostMedia: mimeType is empty")
-	assert.Precondition(len(data) > 0, "coord.PostMedia: data is empty")
+	assert.NotNil(l, "coord.Leaf.PostMedia: receiver is nil")
+	assert.NotNil(ctx, "coord.Leaf.PostMedia: ctx is nil")
+	assert.NotEmpty(thread, "coord.Leaf.PostMedia: thread is empty")
+	assert.NotEmpty(mimeType, "coord.Leaf.PostMedia: mimeType is empty")
+	assert.Precondition(len(data) > 0, "coord.Leaf.PostMedia: data is empty")
 	now := time.Now().UTC()
-	path := mediaArtifactPath(c.cfg.AgentID, now)
-	// Media commits are always trunk; PostMedia callers do not hold the
-	// task-level invariants Commit's fork+merge model defends, and the
-	// chat-side artifact is independent of trunk topology. Discard
-	// forkBranch — fossil layer auto-forks when WouldFork is true, and
-	// for the media path the rev is the only handle the chat substrate
-	// needs.
-	rev, _, err := c.sub.fossil.Commit(
-		ctx,
-		fmt.Sprintf("post media to %s (%s)", thread, mimeType),
-		[]ifossil.File{{Path: path, Content: data}},
-		"",
-	)
+	path := mediaArtifactPath(l.slotID, now)
+	repo := l.agent.Repo()
+	_, uuid, err := repo.Commit(libfossil.CommitOpts{
+		Files: []libfossil.FileToCommit{
+			{Name: normalizeLeadingSlash(path), Content: data},
+		},
+		Comment: fmt.Sprintf("post media to %s (%s)", thread, mimeType),
+		User:    l.slotID,
+	})
 	if err != nil {
-		return fmt.Errorf("coord.PostMedia: commit media: %w", err)
+		return fmt.Errorf("coord.Leaf.PostMedia: commit media: %w", err)
 	}
-	body, err := mediaBody(rev, path, mimeType, len(data))
+	l.agent.SyncNow()
+	body, err := mediaBody(uuid, path, mimeType, len(data))
 	if err != nil {
-		return fmt.Errorf("coord.PostMedia: encode body: %w", err)
+		return fmt.Errorf("coord.Leaf.PostMedia: encode body: %w", err)
 	}
-	if err := c.sub.chat.Send(ctx, thread, body); err != nil {
-		return fmt.Errorf("coord.PostMedia: %w", err)
+	if err := l.coord.sub.chat.Send(ctx, thread, body); err != nil {
+		return fmt.Errorf("coord.Leaf.PostMedia: %w", err)
 	}
 	return nil
 }
 
-func mediaArtifactPath(agentID string, now time.Time) string {
-	return fmt.Sprintf("media/%s/%d.bin", agentID, now.UnixNano())
+// mediaArtifactPath builds a unique repo-relative path under
+// `media/<slotID>/<unix-nanos>.bin` so concurrent PostMedia calls in
+// the same slot do not collide.
+func mediaArtifactPath(slotID string, now time.Time) string {
+	return fmt.Sprintf("media/%s/%d.bin", slotID, now.UnixNano())
 }
 
+// mediaBody renders the in-band chat envelope referencing the
+// just-committed media artifact. The mediaBodyPrefix sentinel lets
+// chat subscribers detect the envelope and decode the JSON tail.
 func mediaBody(rev, path, mimeType string, size int) (string, error) {
 	payload, err := json.Marshal(mediaEnvelope{
 		Rev:      rev,

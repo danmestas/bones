@@ -35,7 +35,6 @@ func newCoordOnURLWithHeartbeat(
 		NATSMaxReconnects:  5,
 		NATSURL:            url,
 		ChatFossilRepoPath: filepath.Join(t.TempDir(), fileID+"-chat.fossil"),
-		FossilRepoPath:     filepath.Join(t.TempDir(), fileID+"-code.fossil"),
 		CheckoutRoot:       filepath.Join(t.TempDir(), fileID+"-checkouts"),
 	}
 	c, err := coord.Open(context.Background(), cfg)

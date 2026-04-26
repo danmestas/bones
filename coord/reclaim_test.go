@@ -116,7 +116,6 @@ func newCoordOnURLWithHeartbeat(
 	// HoldTTLDefault must not exceed HoldTTLMax; keep defaults valid.
 	dir := t.TempDir()
 	cfg.ChatFossilRepoPath = filepath.Join(dir, agentID+"-chat.fossil")
-	cfg.FossilRepoPath = filepath.Join(dir, agentID+"-code.fossil")
 	cfg.CheckoutRoot = filepath.Join(dir, agentID+"-checkouts")
 	c, err := Open(context.Background(), cfg)
 	if err != nil {

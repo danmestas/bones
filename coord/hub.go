@@ -66,8 +66,14 @@ func OpenHub(ctx context.Context, workdir, httpAddr string) (*Hub, error) {
 	}
 
 	cfg := agent.Config{
-		RepoPath:         repoPath,
-		NATSUpstream:     "", // hub's mesh runs standalone — peer leaves solicit it
+		RepoPath:     repoPath,
+		NATSUpstream: "", // hub's mesh runs standalone — peer leaves solicit it
+		// Pin the JetStream store dir to the workdir so two Hubs (e.g.
+		// from different tests) do not share state via the
+		// CWD-relative default `<cwd>/.nats-store`. Without this, the
+		// tasks/holds/presence KV buckets persist across tests and
+		// rooms records leak between fresh `t.TempDir()` workdirs.
+		NATSStoreDir:     filepath.Join(workdir, ".nats-store"),
 		ServeHTTPAddr:    httpAddr,
 		ServeNATSEnabled: true,
 		Pull:             false,

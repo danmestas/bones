@@ -25,7 +25,6 @@ func baselineConfig() Config {
 		NATSMaxReconnects:  5,
 		NATSURL:            "nats://127.0.0.1:4222",
 		ChatFossilRepoPath: "/tmp/coord-baseline-chat.fossil",
-		FossilRepoPath:     "/tmp/coord-baseline-code.fossil",
 		CheckoutRoot:       "/tmp/coord-baseline-checkouts",
 	}
 }
@@ -147,11 +146,6 @@ func TestConfigValidate_Invalid(t *testing.T) {
 			wantKey: "ChatFossilRepoPath",
 		},
 		{
-			name:    "empty FossilRepoPath",
-			mutate:  func(c *Config) { c.FossilRepoPath = "" },
-			wantKey: "FossilRepoPath",
-		},
-		{
 			name:    "empty CheckoutRoot",
 			mutate:  func(c *Config) { c.CheckoutRoot = "" },
 			wantKey: "CheckoutRoot",
@@ -178,25 +172,5 @@ func TestConfigValidate_Invalid(t *testing.T) {
 				)
 			}
 		})
-	}
-}
-
-func TestConfig_HubURLOptional(t *testing.T) {
-	cfg := validConfig(t)
-	cfg.HubURL = ""
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("empty HubURL should validate (broadcast disabled), got: %v", err)
-	}
-	cfg.HubURL = "http://127.0.0.1:8765/"
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("non-empty HubURL should validate, got: %v", err)
-	}
-}
-
-func TestConfig_HubURLMustBeURLOrEmpty(t *testing.T) {
-	cfg := validConfig(t)
-	cfg.HubURL = "not a url"
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected Validate to reject non-URL HubURL, got nil")
 	}
 }

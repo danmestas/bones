@@ -146,17 +146,15 @@ func OpenLeaf(
 
 // openLeafCoord builds the *Coord that backs a Leaf's claim/task work.
 // The Coord's substrate is the same NATS the leaf agent points at.
-// CheckoutRoot/ChatFossilRepoPath are bound to the slot's directory tree.
-//
-// Note: as of Task 10, FossilRepoPath is dropped from Config — the
-// substrate no longer opens its own fossil handle. Until Task 10
-// lands, an interim Config field is tolerated; Task 10 removes it.
+// CheckoutRoot/ChatFossilRepoPath are bound to the slot's directory
+// tree. There is no FossilRepoPath: the Coord substrate carries no
+// libfossil handle as of Task 10. Code-artifact commits go through
+// *Leaf, which writes via leaf.Agent's repo handle.
 func openLeafCoord(ctx context.Context, slotID, natsURL, slotDir string) (*Coord, error) {
 	cfg := Config{
 		AgentID:            slotID + "-leaf",
 		NATSURL:            natsURL,
 		CheckoutRoot:       slotDir,
-		FossilRepoPath:     filepath.Join(slotDir, "coord.fossil"),
 		ChatFossilRepoPath: filepath.Join(slotDir, "chat.fossil"),
 		HoldTTLDefault:     30 * time.Second,
 		HoldTTLMax:         5 * time.Minute,
