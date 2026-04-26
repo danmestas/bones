@@ -10,29 +10,29 @@ import (
 	"time"
 
 	"github.com/danmestas/agent-infra/coord"
+	"github.com/danmestas/agent-infra/internal/assert"
 )
 
 // runAgent drives one slot through k tasks via coord.Leaf. Each leaf
-// owns its own libfossil repo + leaf.Agent.
+// owns its own libfossil repo + leaf.Agent — there is no shared *Coord.
 //
-// Phase 1 (Task 4): migrated from coord.Open(*Coord) to coord.OpenLeaf(*Leaf).
-// Task 6 of the EdgeSync refactor will replace this whole harness with
-// a coord.Hub-driven topology; this Phase-4 stub only does the minimum
-// to keep make check green after Coord.Commit is gone.
+// hubLeafUpstream is the hub mesh leaf-node URL (Hub.LeafUpstream());
+// hubNATSClient is the hub mesh client URL (Hub.NATSURL()) for coord's
+// claim/task KV traffic; hubHTTPAddr is the hub HTTP xfer endpoint
+// (Hub.HTTPAddr()) used to clone leaf.fossil at OpenLeaf time.
 func runAgent(
 	ctx context.Context, slotIdx int, cfg Config,
-	natsURL, hubURL string, res *Result,
+	hubLeafUpstream, hubNATSClient, hubHTTPAddr string, res *Result,
 ) error {
-	dir := cfg.WorkDir
-	slotID := fmt.Sprintf("herd-slot-%d", slotIdx)
-	leafDir := filepath.Join(dir, slotID)
+	assert.NotNil(ctx, "runAgent: ctx is nil")
+	assert.NotNil(res, "runAgent: res is nil")
+	assert.NotEmpty(hubLeafUpstream, "runAgent: hubLeafUpstream is empty")
+	assert.NotEmpty(hubNATSClient, "runAgent: hubNATSClient is empty")
+	assert.NotEmpty(hubHTTPAddr, "runAgent: hubHTTPAddr is empty")
 
-	// Task 6 will rewrite this to use coord.Hub which exposes both
-	// LeafUpstream() and NATSURL(). Phase-1 stub passes natsURL for
-	// both — the test harness's standalone NATS server doesn't have a
-	// leaf-node port, so this won't fully sync, but make check still
-	// builds.
-	l, err := coord.OpenLeaf(ctx, leafDir, slotID, natsURL, natsURL, hubURL)
+	slotID := fmt.Sprintf("herd-slot-%d", slotIdx)
+	l, err := coord.OpenLeaf(ctx, cfg.WorkDir, slotID,
+		hubLeafUpstream, hubNATSClient, hubHTTPAddr)
 	if err != nil {
 		return fmt.Errorf("agent-%d open: %w", slotIdx, err)
 	}
@@ -57,11 +57,13 @@ func runAgent(
 }
 
 // runTask runs one OpenTask -> Claim -> Commit -> Close cycle on the
-// per-slot Leaf.
+// per-slot Leaf. ErrConflict from Commit is surfaced to runAgent which
+// counts it as an unrecoverable planner failure.
 func runTask(
 	ctx context.Context, l *coord.Leaf,
 	slotIdx, taskIdx int, cfg Config, rng *rand.Rand, res *Result,
 ) error {
+	assert.NotNil(l, "runTask: leaf is nil")
 	files, paths := buildTaskFiles(slotIdx, taskIdx, cfg, rng)
 
 	taskID, err := l.OpenTask(ctx, fmt.Sprintf("task-%d-%d", slotIdx, taskIdx), paths)
@@ -96,11 +98,8 @@ func runTask(
 			slotIdx, taskIdx, cerr)
 	}
 
-	// Phase 1: there is no Leaf.Close yet (lands in Task 5). Until
-	// then, drop the claim's holds with Release and let the underlying
-	// Coord task record close in Task 5's migration.
-	if err := cl.Release(); err != nil {
-		return fmt.Errorf("agent-%d task-%d release: %w",
+	if err := l.Close(ctx, cl); err != nil {
+		return fmt.Errorf("agent-%d task-%d close: %w",
 			slotIdx, taskIdx, err)
 	}
 	return nil
