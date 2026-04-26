@@ -100,12 +100,6 @@ type Config struct {
 	// and pull+update+retry on commit fork detection. When empty, coord
 	// behaves as in v0.x — local-only, no hub interaction.
 	HubURL string
-
-	// EnableTipBroadcast, when true and HubURL is non-empty, makes
-	// coord.Commit publish a tip.changed message on NATS after every
-	// successful commit, and makes coord.Open subscribe to it. Default
-	// (false) preserves the v0.x no-broadcast behavior.
-	EnableTipBroadcast bool
 }
 
 // Validate checks every Config field against its documented bounds and
