@@ -116,9 +116,10 @@ benefit.
 
 ## Implementation
 
-Phased over 12 TDD tasks per
-`docs/superpowers/plans/2026-04-26-edgesync-refactor.md`. All landed
-in branch `refactor-use-edgesync-leaf` (commits `bf147f7..a9313cd`).
+Phased over 12 TDD tasks (plan compressed into this ADR; see git
+history of `docs/superpowers/plans/2026-04-26-edgesync-refactor.md`
+on branch `refactor-use-edgesync-leaf`). All landed in commits
+`bf147f7..a9313cd`.
 
 EdgeSync upstream changes required:
 - PR #77 (merged): `(*Agent).MeshClientURL` and `(*Agent).MeshLeafAddr`

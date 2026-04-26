@@ -20,7 +20,7 @@ At this point the cost of keeping beads in the repo — two auto-run hooks, four
 4. **Preserve context that was only in beads** via two artifacts:
    - the remaining-work roadmap in §Remaining work below,
    - Claude-memory notes under `/Users/dmestas/.claude/projects/-Users-dmestas-projects-agent-infra/memory/` for the non-obvious cross-session insights (see §Migrated memories).
-5. **Do not edit historical mentions** in `reference/CAPABILITIES.md`, `docs/adr/0014-typed-edges.md`, or the `docs/superpowers/plans/` ADRs/plans — those are design history and should remain as written. `README.md`'s "Why this project exists" section likewise stays intact: beads is genuinely the audit target that motivates the project design, even though it is no longer the installed tracker.
+5. **Do not edit historical mentions** in `reference/CAPABILITIES.md` or `docs/adr/0014-typed-edges.md` — those are design history and should remain as written. `README.md`'s "Why this project exists" section likewise stays intact: beads is genuinely the audit target that motivates the project design, even though it is no longer the installed tracker. (The earlier `docs/superpowers/plans/` directory was compressed into ADRs 0019–0023 on 2026-04-26 and removed.)
 6. **`reference/beads/`** (the read-only source clone under `reference/`) also stays — it is the audit-target role from `GETTING_STARTED.md` §3, not the task-tracker role.
 
 ## Consequences
