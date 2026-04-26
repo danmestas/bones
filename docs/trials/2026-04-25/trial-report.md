@@ -24,10 +24,21 @@ Five trials ran, each tweaking one architectural lever to isolate which constrai
 | 5 | + hub-wide commit lease (NATS-KV) | 53/480 | 3573 | 397 | 1378/6381 | 67.9s | leaf SQLITE_BUSY (5) on `blob.Store` |
 | 6 | libfossil v0.4.1 (spec baseline + leaf busy_timeout, no autosync, no lease) | 17/480 | 2862 | 318 | 1042/1224 | 32.9s | leaf SQLITE_BUSY (5) on `processResponse round 3` (Pull) |
 | 7 | + lease + bounded-N (5) retry on v0.4.1 | 15/480 | 590 | 58 | 9374/42920 | 5m58s | leaf SQLITE_BUSY (517) on `manifest.Checkin: blob.Store` |
+| 8 | + leaf-local mutex + scoped lease (commit+push only) on v0.4.1 | 4/480 | 4284 | 476 | 5736/5861 | 2m54s | none terminal — bounded-N retry exhausts on every commit; agents reach max retries with WouldFork still true |
 
 Aggregation step (verifier-clone of hub) on a separate trial #5 run returned `sync.Clone: exceeded 100 rounds` — the hub repo accumulated enough sibling branches that libfossil's clone protocol couldn't reconcile them within its round budget.
 
 ## Findings
+
+### Finding #8 — leaf-local mutex + scoped lease: **regressed throughput further**, exposing a deeper architectural mismatch
+
+Trial #8 implemented the two follow-ups Finding #7 named: a leaf-local `sync.Mutex` on `internal/fossil.Manager` that serializes the agent's Commit goroutine against `tipSubscriber.pullFn`'s broadcast-driven Pulls within a single leaf process, plus a tightly-scoped hub-wide JetStream KV lease (`COORD_COMMIT_LEASE`) that wraps ONLY the `WouldFork` check + commit + push within each retry iteration. Pre-flight Pull/Update happens above the lease; inter-retry Pull/Update happens with the lease released so other leaves can land commits during a leaf's backoff. Both changes built clean, `make check` green, `TestE2E_3x3` passes 3/3 with `-race`.
+
+Outcome on the 16×30 herd: **4/480 hub commits, 4284 fork retries, 476 unrecoverable forks, runtime 2m54s, P50 5.7s, P99 5.9s.** Worse than trial #6 (no lease, 17/480) and worse than trial #7 (lease across all retries, 15/480). The latency variance collapsing (P50 ≈ P99 ≈ 5.8s) is telling: virtually every commit is exhausting the bounded-N retry loop in roughly the same wall-clock budget — `5 attempts × ~50-150ms backoff + ~1s lease wait + Pull/WouldFork roundtrip per attempt`. There are no terminal SQLITE_BUSY failures: the leaf-local mutex closes that race, but the hub-wide lease + bounded retry combination cannot land any but a handful of commits before WouldFork persistently reports true on every attempt.
+
+The deeper finding: **scoped lease + bounded retry is incompatible with `WouldFork` semantics under high concurrency.** Each leaf's pre-flight Pull lands at hub-tip-T0. Lease acquisition takes ~1s under 16-way contention. By the time leaf-A holds the lease, T1 leaves have committed and the hub is at hub-tip-T1. Leaf-A's WouldFork=true (its checkout's parent RID is hub-tip-T0, which is now a sibling of T1's tip). Leaf-A releases the lease and re-pulls; the cycle repeats with leaf-B holding the lease while T2-N commits land. Lease serialization without checkout-state advancement under the lease (the trial #7 shape) is also wrong because retries within the lease leave the state in a known position. Neither shape works because **the lease serializes commits but not the WouldFork frame of reference**: the Pull/WouldFork window is open for hundreds of milliseconds during which the hub moves multiple times.
+
+Reading: the v1.1 step change requires either (a) doing the Pull-then-WouldFork-then-Commit-then-Push loop entirely under the lease so the WouldFork frame is fixed for the lease holder (trial #7's shape, but with a fix for the SQLITE_BUSY race that finding #3 named — which is what the leaf-local mutex addressed in trial #8); OR (b) abandoning WouldFork-gated commits at the coord layer entirely and trusting Fossil's own merge-on-conflict at the hub. The trial #7 lease-across-all-retries shape regressed because of the SQLITE_BUSY race; with the mutex closing that race, the trial #7 shape may now work — that's trial #9. Trial #8's symmetry — scoped lease + bounded retry — is provably wrong shape regardless of mutex.
 
 ### Finding #1 — The spec's "single retry, then surface" model collapses under iterated commits
 
@@ -99,18 +110,19 @@ The friendly 3×3 case (and any low-concurrency production workload) is correct 
 3. **Wire harness counters** — `BroadcastsPulled`/`BroadcastsSkippedIdempotent` should increment from the actual `coord.SyncOnBroadcast` span attributes (or a side counter the subscriber updates).
 4. **Re-baseline 3×3 e2e** — once libfossil v0.4.1 lands and finding #3 is closed, the trial commits' WouldFork-without-retry strictness may be tolerable. If not, restore the bounded-retry path.
 
-## Recommended path (updated 2026-04-25 post-trial #7)
+## Recommended path (updated 2026-04-25 post-trial #8)
 
 libfossil v0.4.1 shipped (xfer encoder, multi-round sync, server-side crosslink) and was merged into agent-infra (PR #14). Trial #6 confirms the substrate is reliable — `TestE2E_3x3` passes against the hub's `event` table directly with no verifier-clone, and the three workarounds documented earlier (`ServerCode = AgentID`, `Pull:true` co-flag, `precreateLeaves`) are gone.
 
-But trial #6 confirmed v0.4.1 alone does not lift the architecture's throughput ceiling (17/480), and trial #7 — bounded-N retry inside a hub-wide lease — regressed it further (15/480, 5m58s). Two follow-ups appear necessary together to deliver the step change:
+Three coord-layer trials on top of v0.4.1 (#6, #7, #8) all sit between 4/480 and 17/480 hub commits. Each varies retry+lease shape: no lease (#6, 17/480), lease across all retries (#7, 15/480), scoped lease + bounded retry with lease release between attempts (#8, 4/480). Trial #8's leaf-local mutex closes the SQLITE_BUSY (517) race that finding #3 and #7 named — confirmed by the absence of terminal substrate failures in the trial #8 run — but the lease-release-between-retries shape regresses throughput further because every leaf's WouldFork frame of reference drifts during the lease-released backoff window.
 
-1. **Leaf-local serialization** between `coord.Commit` and `tipSubscriber.pullFn` — a leaf-local mutex, or a single goroutine per leaf processing both commit and broadcast-driven pull serially. Without this, hub-wide serialization is undermined by intra-process races (trial #7's terminal SQLITE_BUSY 517 was intra-leaf, not cross-leaf).
-2. **Lease released between retries** — either move the bounded retry outside the lease (acquire-pull-update-release-evaluate-reacquire-commit), or shrink the lease scope to just the commit + push window so the pre-flight Pull/Update doesn't hold it.
+The signal across the three coord-layer trials: **WouldFork-gated commits at the coord layer cannot achieve high throughput against a moving hub.** Two architectural pivots remain:
 
-Both are coord-layer changes that don't need libfossil work. Trial #8 would be the next experiment with these shapes.
+1. **Trial #9: lease across all retries + leaf-local mutex.** Trial #7's shape (lease wraps the entire retry loop, including Pull+Update between attempts) regressed because of the SQLITE_BUSY race the mutex now closes. With the mutex, this shape may pass: the lease holder gets a stable WouldFork frame because it owns commit serialization end-to-end, and intra-leaf races no longer corrupt that state. Risk: lease tenure stretches to 5×(Pull+WouldFork+Commit+Push)/lease-hold which serializes 16 agents into a chain that may exceed reasonable wall-clock budgets.
 
-In the interim, PR #14's merged architecture is *correct, scale-limited at 16+ concurrent leaves on the same hub trunk*. The 3×3 e2e demonstrates the design works at the friendly case. Production deployments under low concurrency (single-digit leaves on the same trunk) are unaffected. The strict 16×30 assertion is a v1.1 deliverable gated on the leaf-local serialization + lease-scope refactor.
+2. **Pivot away from WouldFork at the coord layer.** Trust Fossil's own merge-on-conflict at the hub: each leaf commits unconditionally, the hub absorbs sibling leaves, a periodic merge service reconciles. Retries happen at the merge layer, not the commit layer. Higher throughput potential at the cost of a richer hub topology and longer post-commit reconciliation latency.
+
+In the interim, PR #14's merged architecture is *correct, scale-limited at 16+ concurrent leaves on the same hub trunk*. The 3×3 e2e demonstrates the design works at the friendly case. Production deployments under low concurrency (single-digit leaves on the same trunk) are unaffected. The strict 16×30 assertion is a v1.1 deliverable gated on the trial #9 (lease-across-all-retries + mutex) outcome or the merge-service architectural pivot.
 
 ## Trial commits
 
@@ -130,6 +142,7 @@ Trial #6 added no new commits — it ran the as-merged main (post PR #14) agains
 - `herd-hub-leaf-trial3`
 - `herd-hub-leaf-trial5` (no `trial4` — leaf busy_timeout used same service name as trial #3 for direct comparison)
 - `herd-hub-leaf-trial6` (post-PR #14 merge, against libfossil v0.4.1)
+- `herd-hub-leaf-trial8` (leaf-local mutex + scoped lease on v0.4.1)
 
 Span operations of interest:
 
