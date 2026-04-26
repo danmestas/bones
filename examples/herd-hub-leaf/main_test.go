@@ -7,13 +7,13 @@ import (
 )
 
 // TestSmoke_4x5 is the CI sanity check: a small 4-agent x 5-task trial
-// (= 20 commits) that exercises the same hub bring-up, JetStream setup,
-// per-agent fossil + worktree path, and verifier-clone aggregation as
-// the full 16x30 trial. Runs under go test so build verification
-// catches regressions before anyone runs the binary.
+// (= 20 commits) that exercises the same hub bring-up, per-agent fossil
+// + worktree path, and post-run hub commit count as the full 16x30
+// trial. Runs under go test so build verification catches regressions
+// before anyone runs the binary.
 //
-// The smoke test validates the harness wiring (hub bring-up, JetStream
-// boot, leaf precreation, verifier-clone aggregation) — NOT correctness
+// The smoke test validates the harness wiring (coord.OpenHub bring-up,
+// per-leaf coord.OpenLeaf, post-run hub.fossil count) — NOT correctness
 // of the architecture under load, which is what the trial reveals. With
 // 4 agents x 5 tasks under the current at-most-one-retry coord.Commit
 // path, the architecture surfaces structural fork unrecoverables (an
