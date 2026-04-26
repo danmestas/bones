@@ -421,6 +421,11 @@ var errClaimCASNoOp = errors.New(
 // swallows so deferred release-after-shutdown stays silent. It is also
 // safe after CloseTask: a closed task is terminal, so the un-claim
 // step is a silent no-op and only the hold releases run.
+// releaseTimeout caps how long the release closure will wait for NATS
+// round-trips at shutdown. Bounded so a stalled broker cannot block
+// deferred cleanup forever.
+const releaseTimeout = 5 * time.Second
+
 func (c *Coord) releaseClosure(
 	taskID TaskID, held []string,
 ) func() error {
@@ -428,10 +433,12 @@ func (c *Coord) releaseClosure(
 	var firstErr error
 	return func() error {
 		once.Do(func() {
-			// Background — release must run to completion even when
-			// the claim's ctx has been canceled, and deferred rel()
-			// sites typically have no ctx of their own to thread in.
-			ctx := context.Background()
+			// Use a bounded context so that a stalled or unreachable
+			// NATS broker cannot block deferred release indefinitely.
+			// context.Background() is the root so cancellation of the
+			// caller's ctx (e.g. at shutdown) does not abort the release.
+			ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
+			defer cancel()
 			if err := c.releaseTaskCAS(ctx, taskID); err != nil {
 				firstErr = err
 			}
