@@ -194,20 +194,22 @@ func TestCheckout_AfterCommit_WithAbsolutePaths(t *testing.T) {
 	}
 }
 
-// Behavior change: Phase 2 of hub-leaf-orchestrator replaced fork-branch
-// with pull+update+retry. ErrConflictForked now surfaces only on
-// double-fork and never carries a Branch. The previous
-// TestCommit_ForkOnConflict_ChatNotify exercised fork-branch creation
-// and the chat notify on `task-<id>`; both behaviors are gone.
-// Coverage of the new contract lives in commit_retry_test.go and is
-// gated until Phase 3 publisher/subscriber lands.
+// Behavior change: trial #10 (fork+merge model) replaced the lease +
+// bounded-N retry with substrate auto-fork + auto-merge. When fossil
+// detects WouldFork at commit time it places the new commit on a
+// generated fork branch; coord then merges that branch back into
+// trunk locally and returns the merge rev. ErrConflictForked is now
+// reserved for the case where the merge itself produces a real
+// file-content conflict (= planner failure / overlapping slots).
+// See docs/trials/2026-04-25/trial-report.md.
 //
-// TestCommit_ForkUnrecoverable_NoHub asserts the local-only fallback:
-// when HubURL is empty and WouldFork fires, Commit returns
-// ErrConflictForked with empty Branch and empty Rev and no commit
-// lands. This holds today against a shared local repo, so it is not
-// gated like the integration tests.
-func TestCommit_ForkUnrecoverable_NoHub(t *testing.T) {
+// TestCommit_ForkAutoMerge_NoHub asserts the local-only happy path:
+// even with HubURL empty, two agents on the same shared repo
+// committing disjoint paths produce a fork on the second agent's
+// second commit; the new model auto-merges that fork into trunk and
+// returns the merge rev. No ErrConflictForked surfaces because
+// /src/a.go and /src/b.go are disjoint.
+func TestCommit_ForkAutoMerge_NoHub(t *testing.T) {
 	nc, _ := natstest.NewJetStreamServer(t)
 	dir := t.TempDir()
 	sharedRepo := filepath.Join(dir, "shared-code.fossil")
@@ -237,27 +239,17 @@ func TestCommit_ForkUnrecoverable_NoHub(t *testing.T) {
 		t.Fatalf("agentB.Commit: %v", err)
 	}
 
-	// Step 3: A's second commit sees a sibling leaf from its
-	// post-first-commit checkout. With HubURL empty, the retry path
-	// is skipped and the fork is treated as unrecoverable.
-	_, err := agentA.Commit(ctx, idA, "a second", []File{
+	// Step 3: A's second commit sees a sibling leaf (B1). The
+	// fossil layer auto-forks; coord auto-merges. The returned rev
+	// is the merge commit.
+	rev, err := agentA.Commit(ctx, idA, "a second", []File{
 		{Path: pathA, Content: []byte("a2\n")},
 	})
-	if err == nil {
-		t.Fatalf("agentA.Commit #2: expected ConflictForkedError, got nil")
+	if err != nil {
+		t.Fatalf("agentA.Commit #2: expected success after fork+merge, got %v", err)
 	}
-	if !errors.Is(err, ErrConflictForked) {
-		t.Fatalf("agentA.Commit #2: err = %v, want errors.Is ErrConflictForked", err)
-	}
-	var cfe *ConflictForkedError
-	if !errors.As(err, &cfe) {
-		t.Fatalf("agentA.Commit #2: err = %v, want errors.As *ConflictForkedError", err)
-	}
-	if cfe.Branch != "" {
-		t.Fatalf("ConflictForkedError.Branch = %q, want empty", cfe.Branch)
-	}
-	if cfe.Rev != "" {
-		t.Fatalf("ConflictForkedError.Rev = %q, want empty (no commit landed)", cfe.Rev)
+	if rev == "" {
+		t.Fatal("agentA.Commit #2: expected non-empty merge rev")
 	}
 }
 
