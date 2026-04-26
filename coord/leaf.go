@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/danmestas/EdgeSync/leaf/agent"
 	"github.com/danmestas/libfossil"
@@ -14,6 +15,26 @@ import (
 
 	"github.com/danmestas/agent-infra/internal/assert"
 )
+
+// Claim is the handle a Leaf returns from Claim. It carries the TaskID
+// and the release closure so callers can rel() at end-of-scope. The
+// release closure is idempotent.
+type Claim struct {
+	taskID  TaskID
+	release func() error
+}
+
+// TaskID returns the claimed task's identifier.
+func (c *Claim) TaskID() TaskID { return c.taskID }
+
+// Release un-claims the task and releases held files. Safe to call more
+// than once.
+func (c *Claim) Release() error {
+	if c == nil || c.release == nil {
+		return nil
+	}
+	return c.release()
+}
 
 // Leaf is a per-slot wrapper around leaf.Agent + a *Coord for claim/task
 // scheduling. Each Leaf owns a libfossil repo at workdir/<slotID>/leaf.fossil
@@ -87,12 +108,70 @@ func OpenLeaf(ctx context.Context, workdir, slotID, hubNATSURL, hubHTTPAddr stri
 		return nil, fmt.Errorf("coord.OpenLeaf: agent.Start: %w", err)
 	}
 
+	cc, err := openLeafCoord(ctx, slotID, hubNATSURL, slotDir)
+	if err != nil {
+		_ = a.Stop()
+		return nil, fmt.Errorf("coord.OpenLeaf: coord: %w", err)
+	}
+
 	return &Leaf{
 		agent:    a,
+		coord:    cc,
 		repoPath: repoPath,
 		wtPath:   wtPath,
 		slotID:   slotID,
 	}, nil
+}
+
+// openLeafCoord builds the *Coord that backs a Leaf's claim/task work.
+// The Coord's substrate is the same NATS the leaf agent points at.
+// CheckoutRoot/ChatFossilRepoPath are bound to the slot's directory tree.
+//
+// Note: as of Task 10, FossilRepoPath is dropped from Config — the
+// substrate no longer opens its own fossil handle. Until Task 10
+// lands, an interim Config field is tolerated; Task 10 removes it.
+func openLeafCoord(ctx context.Context, slotID, natsURL, slotDir string) (*Coord, error) {
+	cfg := Config{
+		AgentID:            slotID + "-leaf",
+		NATSURL:            natsURL,
+		CheckoutRoot:       slotDir,
+		FossilRepoPath:     filepath.Join(slotDir, "coord.fossil"),
+		ChatFossilRepoPath: filepath.Join(slotDir, "chat.fossil"),
+		HoldTTLDefault:     30 * time.Second,
+		HoldTTLMax:         5 * time.Minute,
+		MaxHoldsPerClaim:   16,
+		MaxSubscribers:     8,
+		MaxTaskFiles:       16,
+		MaxReadyReturn:     32,
+		MaxTaskValueSize:   16384,
+		TaskHistoryDepth:   8,
+		OperationTimeout:   60 * time.Second,
+		HeartbeatInterval:  5 * time.Second,
+		NATSReconnectWait:  100 * time.Millisecond,
+		NATSMaxReconnects:  10,
+	}
+	return Open(ctx, cfg)
+}
+
+// OpenTask is a thin shim onto the leaf's substrate Coord so harnesses
+// and Phase 1 callers can open tasks without reaching into private
+// fields. Phase 2 may relocate task lifecycle entirely onto Leaf.
+func (l *Leaf) OpenTask(ctx context.Context, title string, files []string) (TaskID, error) {
+	assert.NotNil(l, "coord.Leaf.OpenTask: receiver is nil")
+	return l.coord.OpenTask(ctx, title, files)
+}
+
+// Claim atomically acquires taskID for this leaf. The returned *Claim
+// carries an idempotent release closure. Delegates to the underlying
+// Coord; Phase 1 keeps the existing claim semantics intact.
+func (l *Leaf) Claim(ctx context.Context, taskID TaskID) (*Claim, error) {
+	assert.NotNil(l, "coord.Leaf.Claim: receiver is nil")
+	assert.NotNil(ctx, "coord.Leaf.Claim: ctx is nil")
+	rel, err := l.coord.Claim(ctx, taskID, 30*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return &Claim{taskID: taskID, release: rel}, nil
 }
 
 // Tip returns the manifest UUID at the head of the leaf's current
