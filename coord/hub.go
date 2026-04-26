@@ -7,9 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
-
-	natsserver "github.com/nats-io/nats-server/v2/server"
 
 	"github.com/danmestas/EdgeSync/leaf/agent"
 	"github.com/danmestas/libfossil"
@@ -18,28 +15,26 @@ import (
 )
 
 // Hub owns the orchestrator's hub fossil repo + HTTP xfer endpoint and
-// runs an embedded NATS JetStream server. Leaves point at HTTPAddr() for
-// fossil clone/sync and at NATSURL() for leaf-to-leaf NATS sync.
+// exposes the leaf.Agent's embedded NATS mesh as the hub's NATS bus.
 //
 // Hub wraps a *leaf.Agent with serve flags set (Pull=false, Push=false,
 // Autosync=AutosyncOff). The agent's serve_http handler exposes
 // repo.XferHandler() so a stock fossil client can pull/push. The
-// embedded NATS server is run by Hub itself (not the agent's mesh)
-// because leaves need a NATS URL they can dial without solving
-// EdgeSync's leaf-mode handshake from outside the process.
+// agent's mesh runs a standalone NATS server (no upstream); peer
+// leaves solicit it via NATSUpstream and publish/subscribe land
+// directly on the hub's mesh — single-hop subject-interest
+// propagation. See EdgeSync PR #77 (MeshClientURL/MeshLeafAddr).
 type Hub struct {
 	agent    *agent.Agent
-	natsSrv  *natsserver.Server
-	storeDir string
 	httpAddr string
 	mu       sync.Mutex
 	stopped  bool
 }
 
 // OpenHub starts a hub at workdir/hub.fossil that serves HTTP on
-// httpAddr (e.g. "127.0.0.1:8765") and runs an embedded NATS JetStream
-// server bound to a random localhost port. The hub is a passive
-// receiver of pushes from peer leaves.
+// httpAddr (e.g. "127.0.0.1:8765") and runs the embedded leaf.Agent
+// mesh NATS as the hub's NATS bus. The hub is a passive receiver of
+// pushes from peer leaves; it never client-syncs out.
 //
 // workdir is created if missing; hub.fossil is created if missing.
 // Caller owns workdir and is responsible for cleanup.
@@ -70,15 +65,9 @@ func OpenHub(ctx context.Context, workdir, httpAddr string) (*Hub, error) {
 		_ = r.Close()
 	}
 
-	natsStoreDir := filepath.Join(workdir, "nats-store")
-	srv, err := startEmbeddedNATS(natsStoreDir)
-	if err != nil {
-		return nil, fmt.Errorf("coord.OpenHub: nats: %w", err)
-	}
-
 	cfg := agent.Config{
 		RepoPath:         repoPath,
-		NATSUpstream:     srv.ClientURL(),
+		NATSUpstream:     "", // hub's mesh runs standalone — peer leaves solicit it
 		ServeHTTPAddr:    httpAddr,
 		ServeNATSEnabled: true,
 		Pull:             false,
@@ -87,54 +76,38 @@ func OpenHub(ctx context.Context, workdir, httpAddr string) (*Hub, error) {
 	}
 	a, err := agent.New(cfg)
 	if err != nil {
-		srv.Shutdown()
 		return nil, fmt.Errorf("coord.OpenHub: agent.New: %w", err)
 	}
 	if err := a.Start(); err != nil {
 		_ = a.Stop()
-		srv.Shutdown()
 		return nil, fmt.Errorf("coord.OpenHub: agent.Start: %w", err)
 	}
 	return &Hub{
 		agent:    a,
-		natsSrv:  srv,
-		storeDir: natsStoreDir,
 		httpAddr: httpAddr,
 	}, nil
 }
 
-// startEmbeddedNATS launches a localhost-only JetStream NATS server with
-// state under storeDir. The store dir must persist across hub restarts
-// in production; tests pass a t.TempDir() and let cleanup handle it.
-func startEmbeddedNATS(storeDir string) (*natsserver.Server, error) {
-	if err := os.MkdirAll(storeDir, 0o755); err != nil {
-		return nil, fmt.Errorf("mkdir store: %w", err)
-	}
-	opts := &natsserver.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		NoLog:     true,
-		NoSigs:    true,
-		JetStream: true,
-		StoreDir:  storeDir,
-	}
-	srv, err := natsserver.NewServer(opts)
-	if err != nil {
-		return nil, fmt.Errorf("new server: %w", err)
-	}
-	go srv.Start()
-	if !srv.ReadyForConnections(5 * time.Second) {
-		srv.Shutdown()
-		return nil, fmt.Errorf("nats not ready")
-	}
-	return srv, nil
-}
-
-// NATSURL returns the embedded NATS server's client URL. Leaves use this
-// as `OpenLeaf`'s hubNATSURL argument.
+// NATSURL returns the hub's NATS client URL — the agent's mesh accepts
+// regular client connections here. Use this for non-agent NATS clients
+// (e.g. coord's claim/task KV traffic from the same process). For
+// remote agents joining the hub's mesh upstream, see LeafUpstream.
 func (h *Hub) NATSURL() string {
 	assert.NotNil(h, "coord.Hub.NATSURL: receiver is nil")
-	return h.natsSrv.ClientURL()
+	return h.agent.MeshClientURL()
+}
+
+// LeafUpstream returns the URL remote agents pass as NATSUpstream to
+// peer their meshes into the hub's mesh as leaf nodes. The hub mesh
+// accepts these solicits on its leaf-node port (separate from the
+// client port returned by NATSURL).
+func (h *Hub) LeafUpstream() string {
+	assert.NotNil(h, "coord.Hub.LeafUpstream: receiver is nil")
+	addr := h.agent.MeshLeafAddr()
+	if addr == "" {
+		return ""
+	}
+	return "nats://" + addr
 }
 
 // HTTPAddr returns the hub's HTTP listen address, suitable as the
@@ -144,8 +117,8 @@ func (h *Hub) HTTPAddr() string {
 	return "http://" + h.httpAddr
 }
 
-// Stop shuts down the agent and the embedded NATS server. Safe to call
-// more than once; subsequent calls are no-ops.
+// Stop shuts down the agent (which also shuts down its embedded NATS
+// mesh). Safe to call more than once; subsequent calls are no-ops.
 func (h *Hub) Stop() error {
 	assert.NotNil(h, "coord.Hub.Stop: receiver is nil")
 	h.mu.Lock()
@@ -154,18 +127,10 @@ func (h *Hub) Stop() error {
 		return nil
 	}
 	h.stopped = true
-	var firstErr error
 	if h.agent != nil {
 		if err := h.agent.Stop(); err != nil {
-			firstErr = fmt.Errorf("coord.Hub.Stop: agent: %w", err)
+			return fmt.Errorf("coord.Hub.Stop: agent: %w", err)
 		}
 	}
-	if h.natsSrv != nil {
-		h.natsSrv.Shutdown()
-		h.natsSrv.WaitForShutdown()
-	}
-	if h.storeDir != "" {
-		_ = os.RemoveAll(h.storeDir)
-	}
-	return firstErr
+	return nil
 }

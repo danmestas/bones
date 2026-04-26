@@ -19,7 +19,8 @@ func TestLeaf_Claim(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = hub.Stop() })
 
-	l, err := OpenLeaf(ctx, t.TempDir(), "slot-A", hub.NATSURL(), hub.HTTPAddr())
+	l, err := OpenLeaf(ctx, t.TempDir(), "slot-A",
+		hub.LeafUpstream(), hub.NATSURL(), hub.HTTPAddr())
 	if err != nil {
 		t.Fatalf("OpenLeaf: %v", err)
 	}
