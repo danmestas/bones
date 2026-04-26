@@ -156,7 +156,7 @@ won't approach.
 
 ## Phase 3 readiness
 
-Gate criteria from spec (`docs/superpowers/specs/2026-04-26-edgesync-refactor-design.md`):
+Gate criteria from ADR 0018 (`docs/adr/0018-edgesync-refactor.md`):
 
 - [x] N=4 at human-paced cadence (≤4 commits/min total) sustains 100%
       completion: **passed (40/40 at zero think; massively under cadence
