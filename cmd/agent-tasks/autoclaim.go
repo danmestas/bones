@@ -44,6 +44,14 @@ func autoclaimCmd(ctx context.Context, info workspace.Info, args []string) error
 		if err != nil {
 			return err
 		}
+		// When a task was claimed, the release closure keeps holds from
+		// being orphaned if the caller exits without completing the task.
+		// The autoclaim command hands off to the agent process, so we do
+		// not release here — but we must not silently discard the closure.
+		// A nil check is the minimum contract assertion.
+		if res.Action == autoclaim.ActionClaimed && res.Release == nil {
+			panic("autoclaim.Tick: ActionClaimed but Release is nil")
+		}
 
 		fmt.Print(formatAutoClaimResult(res))
 		return nil
