@@ -218,7 +218,7 @@ func precreateLeaves(dir, hubProjectCode string, n int) error {
 // calling so spans land in the configured exporter.
 func Run(ctx context.Context, cfg Config) (*Result, error) {
 	if cfg.Agents <= 0 || cfg.TasksPerAgent <= 0 {
-		return nil, fmt.Errorf("Agents and TasksPerAgent must be > 0")
+		return nil, fmt.Errorf("agents and tasksPerAgent must be > 0")
 	}
 	start := time.Now()
 

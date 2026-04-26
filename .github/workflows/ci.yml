@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 # EdgeSync is still private and is consumed via a local replace directive
-# in go.mod (`replace github.com/dmestas/edgesync/leaf => ../EdgeSync/leaf`),
+# in go.mod (`replace github.com/danmestas/EdgeSync/leaf => ../EdgeSync/leaf`),
 # so CI has to check it out alongside agent-infra. libfossil is now
 # open-source, so no PAT rewrite for public modules is needed.
 #
