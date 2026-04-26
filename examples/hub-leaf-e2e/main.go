@@ -215,7 +215,11 @@ func runSlot(
 	slotID := fmt.Sprintf("e2e-agent-%d", i)
 	leafDir := filepath.Join(dir, slotID)
 
-	l, err := coord.OpenLeaf(ctx, leafDir, slotID, natsURL, hubURL)
+	// Task 7 will rewrite this around coord.Hub. Phase-1 stub passes
+	// natsURL for both upstream and client; the harness's standalone
+	// NATS doesn't expose leaf-node port, so sync won't work end-to-end
+	// here — already gated by t.Skip in main_test.go.
+	l, err := coord.OpenLeaf(ctx, leafDir, slotID, natsURL, natsURL, hubURL)
 	if err != nil {
 		return fmt.Errorf("open agent-%d: %w", i, err)
 	}

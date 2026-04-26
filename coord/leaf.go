@@ -52,27 +52,36 @@ func (c *Claim) Release() error {
 // paths route through it. The substrate (l.coord.sub) does NOT carry
 // its own fossil field.
 type Leaf struct {
-	agent       *agent.Agent
-	coord       *Coord
-	repoPath    string
-	wtPath      string
-	slotID      string
-	hubHTTPAddr string
-	mu          sync.Mutex
-	stopped     bool
+	agent    *agent.Agent
+	coord    *Coord
+	repoPath string
+	wtPath   string
+	slotID   string
+	mu       sync.Mutex
+	stopped  bool
 }
 
 // OpenLeaf starts a leaf at workdir/<slotID>/leaf.fossil that joins
-// hubNATSURL as upstream and pulls from hubHTTPAddr. The slot's worktree
-// is at workdir/<slotID>/wt.
+// hubNATSUpstream as the leaf-node upstream for its mesh and uses
+// hubNATSClient as the regular NATS client URL for coord's claim/task
+// KV traffic. Clones leaf.fossil from hubHTTPAddr at open time. The
+// slot's worktree is at workdir/<slotID>/wt.
 //
-// Phase 1 wires only the leaf.Agent; the *Coord (claim/task scheduling)
-// is added in Tasks 3-5 as Claim/Commit/Close are migrated.
-func OpenLeaf(ctx context.Context, workdir, slotID, hubNATSURL, hubHTTPAddr string) (*Leaf, error) {
+// Two NATS URLs are required because the hub's mesh exposes separate
+// client and leaf-node ports:
+//   - hubNATSUpstream → mesh leaf-node port (for agent peering)
+//   - hubNATSClient   → mesh client port (for coord KV)
+//
+// Hub.LeafUpstream() and Hub.NATSURL() return these respectively.
+func OpenLeaf(
+	ctx context.Context,
+	workdir, slotID, hubNATSUpstream, hubNATSClient, hubHTTPAddr string,
+) (*Leaf, error) {
 	assert.NotNil(ctx, "coord.OpenLeaf: ctx is nil")
 	assert.NotEmpty(workdir, "coord.OpenLeaf: workdir is empty")
 	assert.NotEmpty(slotID, "coord.OpenLeaf: slotID is empty")
-	assert.NotEmpty(hubNATSURL, "coord.OpenLeaf: hubNATSURL is empty")
+	assert.NotEmpty(hubNATSUpstream, "coord.OpenLeaf: hubNATSUpstream is empty")
+	assert.NotEmpty(hubNATSClient, "coord.OpenLeaf: hubNATSClient is empty")
 	assert.NotEmpty(hubHTTPAddr, "coord.OpenLeaf: hubHTTPAddr is empty")
 
 	slotDir := filepath.Join(workdir, slotID)
@@ -105,7 +114,7 @@ func OpenLeaf(ctx context.Context, workdir, slotID, hubNATSURL, hubHTTPAddr stri
 
 	cfg := agent.Config{
 		RepoPath:     repoPath,
-		NATSUpstream: hubNATSURL,
+		NATSUpstream: hubNATSUpstream,
 		PeerID:       slotID,
 		Pull:         true,
 		Push:         true,
@@ -120,19 +129,18 @@ func OpenLeaf(ctx context.Context, workdir, slotID, hubNATSURL, hubHTTPAddr stri
 		return nil, fmt.Errorf("coord.OpenLeaf: agent.Start: %w", err)
 	}
 
-	cc, err := openLeafCoord(ctx, slotID, hubNATSURL, slotDir)
+	cc, err := openLeafCoord(ctx, slotID, hubNATSClient, slotDir)
 	if err != nil {
 		_ = a.Stop()
 		return nil, fmt.Errorf("coord.OpenLeaf: coord: %w", err)
 	}
 
 	return &Leaf{
-		agent:       a,
-		coord:       cc,
-		repoPath:    repoPath,
-		wtPath:      wtPath,
-		slotID:      slotID,
-		hubHTTPAddr: hubHTTPAddr,
+		agent:    a,
+		coord:    cc,
+		repoPath: repoPath,
+		wtPath:   wtPath,
+		slotID:   slotID,
 	}, nil
 }
 
@@ -248,21 +256,12 @@ func (l *Leaf) Commit(ctx context.Context, claim *Claim, files []File) (string, 
 		return "", fmt.Errorf("coord.Leaf.Commit: %w", err)
 	}
 
-	// Push the new commit to the hub via HTTP. Direct HTTP push
-	// avoids EdgeSync's NATS-only outgoing sync transport, which
-	// requires two-hop interest propagation across the leaf↔hub NATS
-	// leaf-node connection that doesn't reliably establish in time
-	// for our request/reply pattern. The leaf.Agent.Repo() handle is
-	// shared between this push and the autosync poll loop, so the
-	// "exactly one *libfossil.Repo" invariant holds. Phase 2 trials
-	// will revisit whether NATS-driven sync becomes viable.
-	httpTransport := libfossil.NewHTTPTransport(l.hubHTTPAddr)
-	if _, err := repo.Sync(ctx, httpTransport, libfossil.SyncOpts{
-		Push: true,
-		Pull: false,
-	}); err != nil {
-		return "", fmt.Errorf("coord.Leaf.Commit: push to hub: %w", err)
-	}
+	// Trigger an explicit sync round so the hub receives the commit.
+	// SyncNow uses leaf.Agent's NATS transport; the leaf's mesh joins
+	// the hub's mesh as a leaf-node (single hop), so subject-interest
+	// propagation reaches the hub's serve-nats subscriber on the
+	// fossil.<projectcode>.sync subject.
+	l.agent.SyncNow()
 
 	// Post-sync divergence check: if the local tip's parent chain does
 	// not include `parent`, the commit went onto a sibling fork and the

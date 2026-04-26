@@ -27,7 +27,12 @@ func runAgent(
 	slotID := fmt.Sprintf("herd-slot-%d", slotIdx)
 	leafDir := filepath.Join(dir, slotID)
 
-	l, err := coord.OpenLeaf(ctx, leafDir, slotID, natsURL, hubURL)
+	// Task 6 will rewrite this to use coord.Hub which exposes both
+	// LeafUpstream() and NATSURL(). Phase-1 stub passes natsURL for
+	// both — the test harness's standalone NATS server doesn't have a
+	// leaf-node port, so this won't fully sync, but make check still
+	// builds.
+	l, err := coord.OpenLeaf(ctx, leafDir, slotID, natsURL, natsURL, hubURL)
 	if err != nil {
 		return fmt.Errorf("agent-%d open: %w", slotIdx, err)
 	}
