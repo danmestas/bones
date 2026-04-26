@@ -36,7 +36,6 @@ func newCoordOnURL(t *testing.T, url, agentID string) *Coord {
 	cfg.ChatFossilRepoPath = filepath.Join(
 		dir, agentID+"-chat.fossil",
 	)
-	cfg.FossilRepoPath = filepath.Join(dir, agentID+"-code.fossil")
 	cfg.CheckoutRoot = filepath.Join(dir, agentID+"-checkouts")
 	c, err := Open(context.Background(), cfg)
 	if err != nil {

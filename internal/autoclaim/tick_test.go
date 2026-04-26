@@ -34,7 +34,6 @@ func newCoordOnURL(t *testing.T, url, agentID string) *coord.Coord {
 		NATSMaxReconnects:  5,
 		NATSURL:            url,
 		ChatFossilRepoPath: filepath.Join(t.TempDir(), agentID+"-chat.fossil"),
-		FossilRepoPath:     filepath.Join(t.TempDir(), agentID+"-code.fossil"),
 		CheckoutRoot:       filepath.Join(t.TempDir(), agentID+"-checkouts"),
 	}
 	c, err := coord.Open(context.Background(), cfg)
