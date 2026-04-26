@@ -22,10 +22,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -56,11 +59,21 @@ func run(ctx context.Context) error {
 
 	shutdown, err := setupTelemetry(ctx, serviceName, endpoint)
 	if err != nil {
-		// Non-fatal: log and continue without OTel. The trial still
-		// produces a stdout summary; only span export is lost.
-		slog.Warn("telemetry setup failed; continuing without OTLP",
-			"err", err)
-		shutdown = func(context.Context) error { return nil }
+		// Hard-fail: a misconfigured OTLP endpoint silently drops
+		// instrumentation while the exporter's per-batch HTTP round
+		// trips against the wrong server still impose overhead on
+		// every span emission. Trials 1–8 of the hub-leaf scaling
+		// investigation (see docs/trials/2026-04-25/trial-report.md
+		// finding #9) were dominated by this overhead — disabling
+		// the exporter entirely jumped throughput from 4–17 commits
+		// to 171/480 commits on the same architecture. Refuse to
+		// run with a partly-broken endpoint. Unset
+		// OTEL_EXPORTER_OTLP_ENDPOINT to run without telemetry.
+		fmt.Fprintf(os.Stderr,
+			"herd-hub-leaf: %v\n"+
+				"To run without telemetry, unset OTEL_EXPORTER_OTLP_ENDPOINT.\n",
+			err)
+		os.Exit(2)
 	}
 	defer func() {
 		// Give the BatchSpanProcessor a fair window to flush.
@@ -146,6 +159,10 @@ func printSummary(cfg Config, res *Result) {
 	p99 := res.Percentile(99).Milliseconds()
 	fmt.Printf("  P50/P99 commit ms:  %d / %d\n", p50, p99)
 	fmt.Printf("  total runtime:      %s\n", res.Runtime.Round(time.Millisecond))
+	if res.AggregateErr != nil {
+		fmt.Printf("  aggregate note:     %v (HubCommits sourced from direct hub-event count)\n",
+			res.AggregateErr)
+	}
 }
 
 // setupTelemetry installs an OTel TracerProvider exporting to the
@@ -153,11 +170,26 @@ func printSummary(cfg Config, res *Result) {
 // example does not pull in EdgeSync/leaf/telemetry's metric/log paths
 // (the trial only needs traces). If endpoint is empty, returns a no-op
 // shutdown.
+//
+// Pre-flight check: trials 1–8 of the hub-leaf scaling investigation
+// (see docs/trials/2026-04-25/trial-report.md finding #9) ran with
+// OTEL_EXPORTER_OTLP_ENDPOINT pointing at the SigNoz UI frontend (port
+// 443) instead of the OTLP collector (port 4318). The frontend returns
+// 200 OK text/html for every POST, which otlptracehttp treats as
+// success while silently dropping batched spans. This function POSTs
+// an empty-resource span batch and refuses to start unless the
+// response shape is the OTLP collector's
+// ("application/json"/"application/x-protobuf" with a
+// 200/400/401/403/429 status). Anything else — text/html, redirects,
+// 404 — means the URL is wrong and the trial would emit into the void.
 func setupTelemetry(ctx context.Context, serviceName, endpoint string) (
 	func(context.Context) error, error,
 ) {
 	if endpoint == "" {
 		return func(context.Context) error { return nil }, nil
+	}
+	if err := pingOTLPCollector(ctx, endpoint); err != nil {
+		return nil, fmt.Errorf("otlp endpoint pre-flight: %w", err)
 	}
 	res, err := resource.Merge(
 		resource.Default(),
@@ -167,9 +199,6 @@ func setupTelemetry(ctx context.Context, serviceName, endpoint string) (
 		return nil, fmt.Errorf("resource: %w", err)
 	}
 	opts := []otlptracehttp.Option{}
-	// otlptracehttp.WithEndpointURL accepts a full URL; the SigNoz
-	// HTTPS endpoint is configured this way so the path defaults to
-	// /v1/traces and TLS is on automatically.
 	opts = append(opts, otlptracehttp.WithEndpointURL(endpoint))
 	exp, err := otlptracehttp.New(ctx, opts...)
 	if err != nil {
@@ -181,4 +210,38 @@ func setupTelemetry(ctx context.Context, serviceName, endpoint string) (
 	)
 	otel.SetTracerProvider(tp)
 	return tp.Shutdown, nil
+}
+
+// pingOTLPCollector POSTs an empty resource-spans payload to endpoint's
+// /v1/traces path and returns nil only if the response shape matches an
+// OTLP HTTP collector. SigNoz UI frontends and other web servers that
+// blanket-200 every path return text/html and trip this check.
+func pingOTLPCollector(ctx context.Context, endpoint string) error {
+	url := strings.TrimRight(endpoint, "/") + "/v1/traces"
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(
+		pingCtx, http.MethodPost, url,
+		strings.NewReader(`{"resourceSpans":[]}`),
+	)
+	if err != nil {
+		return fmt.Errorf("build request to %s: %w", url, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("POST %s: %w", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "application/json") &&
+		!strings.Contains(ct, "application/x-protobuf") {
+		return fmt.Errorf(
+			"endpoint %s returned non-OTLP content-type %q (status %d, body prefix %q); "+
+				"likely pointing at a web frontend instead of the OTLP collector",
+			url, ct, resp.StatusCode, string(body),
+		)
+	}
+	return nil
 }

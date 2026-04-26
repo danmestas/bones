@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/danmestas/agent-infra/internal/assert"
 	"github.com/danmestas/agent-infra/internal/chat"
@@ -95,6 +96,25 @@ func Open(ctx context.Context, cfg Config) (*Coord, error) {
 	}
 	c := &Coord{cfg: cfg, sub: sub}
 	if cfg.EnableTipBroadcast && cfg.HubURL != "" {
+		// COORD_COMMIT_LEASE: hub-wide single-writer lease for the
+		// commit-and-push window. Per-Commit acquire/release; TTL
+		// reaps stale leases from crashed agents. Trial #8.
+		js, err := jetstream.New(c.sub.nc)
+		if err != nil {
+			c.sub.close()
+			return nil, fmt.Errorf("coord.Open: jetstream: %w", err)
+		}
+		kv, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
+			Bucket:       "COORD_COMMIT_LEASE",
+			TTL:          30 * time.Second,
+			MaxValueSize: 256,
+		})
+		if err != nil {
+			c.sub.close()
+			return nil, fmt.Errorf("coord.Open: lease bucket: %w", err)
+		}
+		c.sub.leaseKV = kv
+
 		c.tipSub = &tipSubscriber{
 			nc:     c.sub.nc,
 			hubURL: cfg.HubURL,
