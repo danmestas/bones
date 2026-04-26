@@ -6,7 +6,12 @@ bin/
 /two-agents
 /two-agents-commit
 /two-agents-chaos
+/herd-hub-leaf
+/hub-leaf-e2e
 /.nats-store/
+
+# osgrep scratch (semantic-grep tool cache)
+.osgrep/
 
 # Read-only reference clones — nested git repos; see README §Future git init note.
 # Ignore subdirectories only so our own docs (e.g. reference/CAPABILITIES.md) stay tracked.
