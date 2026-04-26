@@ -118,9 +118,7 @@ func RunN(ctx context.Context, t *testing.T, dir string, n int) (*runResult, err
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			l, serr := runSlot(ctx, t, i, dir,
-				hub.LeafUpstream(), hub.NATSURL(), hub.HTTPAddr(), res,
-			)
+			l, serr := runSlot(ctx, t, i, dir, hub, res)
 			if l != nil {
 				leavesMu.Lock()
 				leaves = append(leaves, l)
@@ -250,26 +248,18 @@ func waitHubCommits(
 // non-nil if OpenLeaf succeeded; the caller (RunN) owns the
 // l.Stop() lifecycle so SyncNow's async sync round can complete on
 // the leaf's pollLoop before the agent's NATS connection closes.
-//
-// hubLeafUpstream is hub.LeafUpstream() (mesh leaf-node URL);
-// hubNATSClient is hub.NATSURL() (mesh client URL for coord's
-// claim/task KV traffic); hubHTTPAddr is hub.HTTPAddr() (HTTP xfer
-// endpoint used to clone leaf.fossil at OpenLeaf time).
 func runSlot(
 	ctx context.Context, t *testing.T, i int, dir string,
-	hubLeafUpstream, hubNATSClient, hubHTTPAddr string,
+	hub *coord.Hub,
 	res *runResult,
 ) (*coord.Leaf, error) {
 	t.Helper()
 	assert.NotNil(ctx, "runSlot: ctx is nil")
 	assert.NotNil(res, "runSlot: res is nil")
-	assert.NotEmpty(hubLeafUpstream, "runSlot: hubLeafUpstream is empty")
-	assert.NotEmpty(hubNATSClient, "runSlot: hubNATSClient is empty")
-	assert.NotEmpty(hubHTTPAddr, "runSlot: hubHTTPAddr is empty")
+	assert.NotNil(hub, "runSlot: hub is nil")
 
 	slotID := fmt.Sprintf("e2e-slot-%d", i)
-	l, err := coord.OpenLeaf(ctx, dir, slotID,
-		hubLeafUpstream, hubNATSClient, hubHTTPAddr)
+	l, err := coord.OpenLeaf(ctx, coord.LeafConfig{Hub: hub, Workdir: dir, SlotID: slotID})
 	if err != nil {
 		return nil, fmt.Errorf("OpenLeaf %d: %w", i, err)
 	}

@@ -121,8 +121,11 @@ func run() error {
 
 	leaves := make([]*coord.Leaf, 0, len(slots))
 	for _, s := range slots {
-		l, err := coord.OpenLeaf(ctx, workdir, s.slotID,
-			hub.LeafUpstream(), hub.NATSURL(), hub.HTTPAddr())
+		l, err := coord.OpenLeaf(ctx, coord.LeafConfig{
+			Hub:     hub,
+			Workdir: workdir,
+			SlotID:  s.slotID,
+		})
 		if err != nil {
 			return fmt.Errorf("OpenLeaf %s: %w", s.slotID, err)
 		}

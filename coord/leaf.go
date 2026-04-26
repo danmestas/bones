@@ -61,30 +61,37 @@ type Leaf struct {
 	stopped  bool
 }
 
-// OpenLeaf starts a leaf at workdir/<slotID>/leaf.fossil that joins
-// hubNATSUpstream as the leaf-node upstream for its mesh and uses
-// hubNATSClient as the regular NATS client URL for coord's claim/task
-// KV traffic. Clones leaf.fossil from hubHTTPAddr at open time. The
-// slot's worktree is at workdir/<slotID>/wt.
-//
-// Two NATS URLs are required because the hub's mesh exposes separate
-// client and leaf-node ports:
-//   - hubNATSUpstream → mesh leaf-node port (for agent peering)
-//   - hubNATSClient   → mesh client port (for coord KV)
-//
-// Hub.LeafUpstream() and Hub.NATSURL() return these respectively.
-func OpenLeaf(
-	ctx context.Context,
-	workdir, slotID, hubNATSUpstream, hubNATSClient, hubHTTPAddr string,
-) (*Leaf, error) {
-	assert.NotNil(ctx, "coord.OpenLeaf: ctx is nil")
-	assert.NotEmpty(workdir, "coord.OpenLeaf: workdir is empty")
-	assert.NotEmpty(slotID, "coord.OpenLeaf: slotID is empty")
-	assert.NotEmpty(hubNATSUpstream, "coord.OpenLeaf: hubNATSUpstream is empty")
-	assert.NotEmpty(hubNATSClient, "coord.OpenLeaf: hubNATSClient is empty")
-	assert.NotEmpty(hubHTTPAddr, "coord.OpenLeaf: hubHTTPAddr is empty")
+// LeafConfig is the configuration passed to OpenLeaf. Hub is required and
+// provides all three URL fields (LeafUpstream, NATSURL, HTTPAddr) so
+// callers do not need to thread them individually.
+type LeafConfig struct {
+	// Hub is the hub this leaf peers against. Required.
+	Hub *Hub
 
-	slotDir := filepath.Join(workdir, slotID)
+	// Workdir is the root directory for per-slot state. Required.
+	Workdir string
+
+	// SlotID is the unique identifier for this leaf slot. Required.
+	SlotID string
+}
+
+// OpenLeaf starts a leaf at cfg.Workdir/<cfg.SlotID>/leaf.fossil that
+// joins cfg.Hub's mesh as a leaf-node and uses cfg.Hub's NATS client
+// URL for coord's claim/task KV traffic. Clones leaf.fossil from
+// cfg.Hub's HTTP endpoint at open time.
+//
+// The slot's worktree is at cfg.Workdir/<cfg.SlotID>/wt.
+func OpenLeaf(ctx context.Context, cfg LeafConfig) (*Leaf, error) {
+	assert.NotNil(ctx, "coord.OpenLeaf: ctx is nil")
+	assert.NotNil(cfg.Hub, "coord.OpenLeaf: cfg.Hub is nil")
+	assert.NotEmpty(cfg.Workdir, "coord.OpenLeaf: cfg.Workdir is empty")
+	assert.NotEmpty(cfg.SlotID, "coord.OpenLeaf: cfg.SlotID is empty")
+
+	hubNATSUpstream := cfg.Hub.LeafUpstream()
+	hubNATSClient := cfg.Hub.NATSURL()
+	hubHTTPAddr := cfg.Hub.HTTPAddr()
+
+	slotDir := filepath.Join(cfg.Workdir, cfg.SlotID)
 	if err := os.MkdirAll(slotDir, 0o755); err != nil {
 		return nil, fmt.Errorf("coord.OpenLeaf: mkdir slot: %w", err)
 	}
@@ -112,15 +119,15 @@ func OpenLeaf(
 		_ = r.Close()
 	}
 
-	cfg := agent.Config{
+	agentCfg := agent.Config{
 		RepoPath:     repoPath,
 		NATSUpstream: hubNATSUpstream,
-		PeerID:       slotID,
+		PeerID:       cfg.SlotID,
 		Pull:         true,
 		Push:         true,
 		Autosync:     agent.AutosyncOff,
 	}
-	a, err := agent.New(cfg)
+	a, err := agent.New(agentCfg)
 	if err != nil {
 		return nil, fmt.Errorf("coord.OpenLeaf: agent.New: %w", err)
 	}
@@ -149,7 +156,7 @@ func OpenLeaf(
 		return nil, fmt.Errorf("coord.OpenLeaf: busy_timeout: %w", err)
 	}
 
-	cc, err := openLeafCoord(ctx, slotID, hubNATSClient, slotDir)
+	cc, err := openLeafCoord(ctx, cfg.SlotID, hubNATSClient, slotDir)
 	if err != nil {
 		_ = a.Stop()
 		return nil, fmt.Errorf("coord.OpenLeaf: coord: %w", err)
@@ -160,7 +167,7 @@ func OpenLeaf(
 		coord:    cc,
 		repoPath: repoPath,
 		wtPath:   wtPath,
-		slotID:   slotID,
+		slotID:   cfg.SlotID,
 	}, nil
 }
 

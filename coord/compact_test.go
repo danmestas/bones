@@ -43,8 +43,7 @@ func openLeafFixture(t *testing.T, slotID string) (*Leaf, string) {
 		t.Fatalf("OpenHub: %v", err)
 	}
 	t.Cleanup(func() { _ = hub.Stop() })
-	l, err := OpenLeaf(ctx, t.TempDir(), slotID,
-		hub.LeafUpstream(), hub.NATSURL(), hub.HTTPAddr())
+	l, err := OpenLeaf(ctx, LeafConfig{Hub: hub, Workdir: t.TempDir(), SlotID: slotID})
 	if err != nil {
 		t.Fatalf("OpenLeaf: %v", err)
 	}
