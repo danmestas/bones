@@ -3,21 +3,19 @@
 // disjoint-file tasks against them, and asserts the spec invariants:
 //
 //   - every slot's coord.Commit returns no error and a non-empty rev;
-//   - a verifier clone of the hub records exactly n trunk commits
-//     (the strict spec assertion fossil_commits == tasks);
+//   - the hub records exactly n trunk commits (the strict spec
+//     assertion fossil_commits == tasks);
 //   - no leaf records any conflict-fork artifacts (single-trunk
 //     semantics; the no-fork-branch contract from ADR 0005's Phase 2
 //     commit-retry path);
 //   - every slot publishes a tip.changed broadcast (the production
 //     hub-pull trigger).
 //
-// The harness asserts via a verifier clone of the hub because libfossil
-// v0.4.0's server-side HandleSync stores received blobs but does not
-// crosslink them into event/leaf rows — that crosslink runs only on the
-// client (clone or pull). Cloning a fresh verifier from the hub
-// triggers crosslink locally, so its trunk timeline reflects the hub's
-// aggregated state. coord.Commit pushes to the hub after every
-// successful local commit (Task T21).
+// The harness asserts directly against the hub repo's event table:
+// libfossil v0.4.1's server-side HandleSync crosslinks incoming
+// manifests into event/leaf/plink/mlink, so the hub timeline reflects
+// the aggregated state without a verifier clone. coord.Commit pushes
+// to the hub after every successful local commit (Task T21).
 //
 // Conflict-fork detection still happens per-leaf because each leaf only
 // stores its own commit pre-push.
@@ -83,17 +81,9 @@ func RunN(ctx context.Context, t *testing.T, dir string, n int) (*runResult, err
 		return nil, fmt.Errorf("create hub: %w", err)
 	}
 	defer func() { _ = hubRepo.Close() }()
-	hubProjectCode, err := hubRepo.Config("project-code")
-	if err != nil {
-		return nil, fmt.Errorf("hub project-code: %w", err)
-	}
 
 	hubSrv := httptest.NewServer(hubRepo.XferHandler())
 	defer hubSrv.Close()
-
-	if err := precreateLeaves(dir, hubProjectCode, n); err != nil {
-		return nil, err
-	}
 
 	nc, _ := natstest.NewJetStreamServer(t)
 	natsURL := nc.ConnectedUrl()
@@ -137,7 +127,7 @@ func RunN(ctx context.Context, t *testing.T, dir string, n int) (*runResult, err
 		return res, nil
 	}
 	t.Logf("e2e: %d slots completed, TipChangedSeen=%d", n, res.TipChangedSeen)
-	if aerr := aggregate(ctx, dir, hubSrv.URL, n, res); aerr != nil {
+	if aerr := aggregate(dir, hubRepo, n, res); aerr != nil {
 		return res, aerr
 	}
 	t.Logf(
@@ -147,26 +137,17 @@ func RunN(ctx context.Context, t *testing.T, dir string, n int) (*runResult, err
 	return res, nil
 }
 
-// aggregate spins up a verifier clone of the hub and counts trunk
-// checkins there (libfossil v0.4.0's HandleSync stores blobs only;
-// crosslinking happens client-side, so a fresh clone is the cheapest
-// way to materialize the hub's aggregated event table). It also sums
-// per-leaf conflict-fork counts and writes both into res.
+// aggregate counts trunk checkins on the hub repo directly and sums
+// per-leaf conflict-fork counts, writing both into res. libfossil
+// v0.4.1's server-side HandleSync crosslinks incoming manifests into
+// event/leaf/plink/mlink, so the hub's own event table reflects the
+// aggregated state.
 func aggregate(
-	ctx context.Context, dir, hubURL string, n int, res *runResult,
+	dir string, hubRepo *libfossil.Repo, n int, res *runResult,
 ) error {
-	verifierPath := filepath.Join(dir, "verifier.fossil")
-	verifierTr := libfossil.NewHTTPTransport(hubURL)
-	verifier, _, err := libfossil.Clone(
-		ctx, verifierPath, verifierTr, libfossil.CloneOpts{},
-	)
-	if err != nil {
-		return fmt.Errorf("verifier clone: %w", err)
-	}
-	defer func() { _ = verifier.Close() }()
-	hubCount, herr := countTimeline(verifier)
+	hubCount, herr := countTimeline(hubRepo)
 	if herr != nil {
-		return fmt.Errorf("verifier timeline: %w", herr)
+		return fmt.Errorf("hub timeline: %w", herr)
 	}
 	res.Commits = hubCount
 	for i := 0; i < n; i++ {
@@ -176,33 +157,6 @@ func aggregate(
 			return fmt.Errorf("inspect leaf-%d: %w", i, ferr)
 		}
 		res.ForkBranches += forks
-	}
-	return nil
-}
-
-// precreateLeaves materializes each leaf's fossil repo file with the
-// hub's project-code so the leaf and hub agree on the project identity
-// at sync time. With mismatched project codes, libfossil v0.4.0's sync
-// still transfers blobs but parent-link resolution fails (manifests
-// crosslink as orphaned leaves) and the verifier clone sees fragmented
-// timelines. Pre-creation must happen before coord.Open since
-// internal/fossil.Manager.Open opens existing files in place.
-func precreateLeaves(dir, hubProjectCode string, n int) error {
-	for i := 0; i < n; i++ {
-		leafPath := filepath.Join(dir, fmt.Sprintf("leaf-%d.fossil", i))
-		r, err := libfossil.Create(leafPath, libfossil.CreateOpts{
-			User: fmt.Sprintf("e2e-agent-%d", i),
-		})
-		if err != nil {
-			return fmt.Errorf("create leaf-%d: %w", i, err)
-		}
-		if serr := r.SetConfig("project-code", hubProjectCode); serr != nil {
-			_ = r.Close()
-			return fmt.Errorf("leaf-%d set project-code: %w", i, serr)
-		}
-		if cerr := r.Close(); cerr != nil {
-			return fmt.Errorf("close leaf-%d: %w", i, cerr)
-		}
 	}
 	return nil
 }
@@ -229,9 +183,9 @@ func inspectLeafForks(repoPath string) (int, error) {
 // every checkin regardless of which leaf is current — Timeline starting
 // from BranchTip walks only the parent chain from the tip, so a repo
 // with multiple unmerged leaves on trunk would under-count. The hub
-// invariant is "every leaf's commit lands on the hub's event table"
-// (libfossil v0.4.0's server-side handler stores blobs but does not
-// crosslink; a verifier clone must crosslink locally before counting).
+// invariant is "every leaf's commit lands on the hub's event table".
+// libfossil v0.4.1's HandleSync crosslinks incoming manifests into
+// event/leaf/plink/mlink, so the count is meaningful on the hub repo.
 func countTimeline(r *libfossil.Repo) (int, error) {
 	var n int
 	err := r.DB().QueryRow(
