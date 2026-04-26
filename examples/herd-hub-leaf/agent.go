@@ -23,7 +23,7 @@ import (
 func runAgent(
 	ctx context.Context, slotIdx int, cfg Config,
 	hubLeafUpstream, hubNATSClient, hubHTTPAddr string, res *Result,
-) error {
+) (*coord.Leaf, error) {
 	assert.NotNil(ctx, "runAgent: ctx is nil")
 	assert.NotNil(res, "runAgent: res is nil")
 	assert.NotEmpty(hubLeafUpstream, "runAgent: hubLeafUpstream is empty")
@@ -34,15 +34,18 @@ func runAgent(
 	l, err := coord.OpenLeaf(ctx, cfg.WorkDir, slotID,
 		hubLeafUpstream, hubNATSClient, hubHTTPAddr)
 	if err != nil {
-		return fmt.Errorf("agent-%d open: %w", slotIdx, err)
+		return nil, fmt.Errorf("agent-%d open: %w", slotIdx, err)
 	}
-	defer func() { _ = l.Stop() }()
+	// Caller (RunN in harness.go) is responsible for Stop, after the
+	// hub has acknowledged every commit. Stopping here would cancel
+	// in-flight SyncNow RPCs and lose commits at teardown — same
+	// pattern as examples/hub-leaf-e2e/main.go::runSlot.
 
 	rng := rand.New(rand.NewSource(cfg.Seed + int64(slotIdx)))
 	for taskIdx := 0; taskIdx < cfg.TasksPerAgent; taskIdx++ {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return l, ctx.Err()
 		default:
 		}
 		if err := runTask(ctx, l, slotIdx, taskIdx, cfg, rng, res); err != nil {
@@ -50,10 +53,10 @@ func runAgent(
 				atomic.AddInt64(&res.ForkUnrecoverable, 1)
 				continue
 			}
-			return err
+			return l, err
 		}
 	}
-	return nil
+	return l, nil
 }
 
 // runTask runs one OpenTask -> Claim -> Commit -> Close cycle on the
