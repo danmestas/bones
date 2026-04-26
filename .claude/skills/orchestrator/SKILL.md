@@ -66,29 +66,32 @@ For each slot, invoke the Task tool with:
 The orchestrator dispatches subagents in parallel (single message with N
 Task tool calls).
 
-### Parallelism guidance (per docs/trials/2026-04-25/trial-report.md finding #15)
+### Parallelism guidance (per docs/trials/2026-04-26/trial-report.md)
 
-The architecture is hub-commit-rate-limited, not agent-count-limited.
-Production agents commit on minute timescales (during human-paced coding
-work) so per-agent commit rate is ~0.017 events/sec, leaving head-room
-for 100+ concurrent agents before hitting the hub's ~2 events/sec
-sustained ceiling.
+Post-EdgeSync-refactor: the architecture is no longer hub-rate-limited
+at orchestration scale. The trial sweep at zero think time (worst case)
+shows 100% completion through N=64 with sub-100ms P99; production
+agents commit on minute timescales (~0.017 events/sec) so even N=100+
+is comfortable. The old "100-round Pull-negotiation wall" is gone — the
+EdgeSync NATS mesh sync replaces it.
 
-Tier guidance for picking concurrency:
+Tier guidance for picking concurrency (zero-think trial numbers):
 
-- **Sweet spot (sub-second P50):** N ≤ 4 slots. Use for interactive
+- **Sweet spot (sub-second P99):** N ≤ 32 slots. Use for interactive
   tooling where latency matters.
-- **Acceptable (single-digit P99):** N ≤ 8 slots. Use for batch agents
+- **Acceptable (sub-100ms P99):** N ≤ 64 slots. Use for batch agents
   with bearable latency.
-- **Ceiling under tight-loop stress (50ms commit cadence):** N ≤ 12.
-  Beyond this libfossil's 100-round Pull-negotiation budget is the wall.
-- **Production cadence (1 commit/min/agent):** ~100+ agents fine; the
-  wall is hub-side rate, not agent count.
+- **Stress ceiling (tight-loop):** N ≤ 100 slots, P99 ~450ms,
+  ~98% commit propagation in 30s. Beyond this hub-side serve-nats
+  queueing dominates.
+- **Production cadence (1 commit/min/agent):** 100+ agents
+  comfortable.
 
 If the plan has more slots than fit your concurrency tier, dispatch in
 batches (N at a time, wait for each batch to drain before starting the
-next). The trial harness `examples/herd-hub-leaf/` reproduces the rate
-envelope; consult its README and the trial report for current numbers.
+next). The trial harness `examples/herd-hub-leaf/` reproduces the
+envelope; consult its README and `docs/trials/2026-04-26/trial-report.md`
+for current numbers.
 
 ## Step 5: Monitor
 
