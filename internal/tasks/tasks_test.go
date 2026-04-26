@@ -22,20 +22,26 @@ func openTestManager(
 	t *testing.T,
 ) (*tasks.Manager, *nats.Conn, func()) {
 	t.Helper()
-	nc, cleanup := natstest.NewJetStreamServer(t)
+	srv, cleanup := natstest.NewJetStreamServer(t)
+	nc, err := nats.Connect(srv.ConnectedUrl())
+	if err != nil {
+		cleanup()
+		t.Fatalf("nats.Connect: %v", err)
+	}
 	cfg := tasks.Config{
-		NATSURL:      nc.ConnectedUrl(),
 		BucketName:   "tasks-test",
 		HistoryDepth: 8,
 		MaxValueSize: 8 * 1024,
 	}
-	m, err := tasks.Open(context.Background(), cfg)
+	m, err := tasks.Open(context.Background(), nc, cfg)
 	if err != nil {
+		nc.Close()
 		cleanup()
 		t.Fatalf("tasks.Open: %v", err)
 	}
 	return m, nc, func() {
 		_ = m.Close()
+		nc.Close()
 		cleanup()
 	}
 }

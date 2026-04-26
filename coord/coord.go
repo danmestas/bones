@@ -120,8 +120,7 @@ func openSubstrate(
 		s.close()
 		return nil, fmt.Errorf("coord.Open: holds: %w", err)
 	}
-	if s.tasks, err = tasks.Open(ctx, tasks.Config{
-		NATSURL:      cfg.NATSURL,
+	if s.tasks, err = tasks.Open(ctx, nc, tasks.Config{
 		BucketName:   tasksBucket,
 		HistoryDepth: cfg.Tuning.TaskHistoryDepth,
 		MaxValueSize: int32(cfg.Tuning.MaxTaskValueSize),
@@ -129,8 +128,7 @@ func openSubstrate(
 		s.close()
 		return nil, fmt.Errorf("coord.Open: tasks: %w", err)
 	}
-	if s.archive, err = tasks.Open(ctx, tasks.Config{
-		NATSURL:      cfg.NATSURL,
+	if s.archive, err = tasks.Open(ctx, nc, tasks.Config{
 		BucketName:   archiveBucket,
 		HistoryDepth: cfg.Tuning.TaskHistoryDepth,
 		MaxValueSize: int32(cfg.Tuning.MaxTaskValueSize),
