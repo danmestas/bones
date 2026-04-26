@@ -27,8 +27,7 @@ what the [slot: name] format is.
 Check that the SessionStart hook ran successfully:
 
 ```
-test -f .orchestrator/pids/fossil.pid && \
-  test -f .orchestrator/pids/nats.pid && \
+test -f .orchestrator/pids/leaf.pid && \
   curl -fsS -X POST http://127.0.0.1:8765/xfer >/dev/null
 ```
 
