@@ -33,10 +33,11 @@ func staleCmd(ctx context.Context, info workspace.Info, args []string) error {
 		if err := fs.Parse(args); err != nil {
 			return err
 		}
-		mgr, err := openManager(ctx, info)
+		mgr, closeNC, err := openManager(ctx, info)
 		if err != nil {
 			return fmt.Errorf("open manager: %w", err)
 		}
+		defer closeNC()
 		defer func() { _ = mgr.Close() }()
 		allTasks, err := mgr.List(ctx)
 		if err != nil {
@@ -85,10 +86,11 @@ func preflightCmd(ctx context.Context, info workspace.Info, args []string) error
 		if err := fs.Parse(args); err != nil {
 			return err
 		}
-		mgr, err := openManager(ctx, info)
+		mgr, closeNC, err := openManager(ctx, info)
 		if err != nil {
 			return fmt.Errorf("open manager: %w", err)
 		}
+		defer closeNC()
 		defer func() { _ = mgr.Close() }()
 		allTasks, err := mgr.List(ctx)
 		if err != nil {
@@ -114,10 +116,11 @@ func preflightCmd(ctx context.Context, info workspace.Info, args []string) error
 }
 
 func loadOrphans(ctx context.Context, info workspace.Info) ([]tasks.Task, error) {
-	mgr, err := openManager(ctx, info)
+	mgr, closeNC, err := openManager(ctx, info)
 	if err != nil {
 		return nil, fmt.Errorf("open manager: %w", err)
 	}
+	defer closeNC()
 	defer func() { _ = mgr.Close() }()
 	allTasks, err := mgr.List(ctx)
 	if err != nil {

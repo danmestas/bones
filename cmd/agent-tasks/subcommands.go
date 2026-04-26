@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/danmestas/agent-infra/internal/tasks"
 	"github.com/danmestas/agent-infra/internal/workspace"
 	"github.com/google/uuid"
@@ -68,20 +70,27 @@ func runOp(ctx context.Context, op string, fn func(context.Context) error) error
 	return err
 }
 
-// openManager dials the tasks Manager for this workspace. Caller must Close.
-func openManager(ctx context.Context, info workspace.Info) (*tasks.Manager, error) {
-	return tasks.Open(ctx, newManagerConfig(info.NATSURL))
-}
-
-func newManagerConfig(natsURL string) tasks.Config {
-	return tasks.Config{
-		NATSURL:          natsURL,
-		BucketName:       "agent_tasks",
-		HistoryDepth:     10,
-		MaxValueSize:     64 * 1024,
-		OperationTimeout: 5 * time.Second,
-		ChanBuffer:       32,
+// openManager dials NATS and opens the tasks Manager for this workspace.
+// Caller must Close the returned Manager; the NATS connection is closed
+// inside Close via the returned closer func.
+func openManager(
+	ctx context.Context, info workspace.Info,
+) (*tasks.Manager, func(), error) {
+	nc, err := nats.Connect(info.NATSURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("openManager: nats connect: %w", err)
 	}
+	m, err := tasks.Open(ctx, nc, tasks.Config{
+		BucketName:   "agent_tasks",
+		HistoryDepth: 10,
+		MaxValueSize: 64 * 1024,
+		ChanBuffer:   32,
+	})
+	if err != nil {
+		nc.Close()
+		return nil, nil, fmt.Errorf("openManager: tasks.Open: %w", err)
+	}
+	return m, nc.Close, nil
 }
 
 // parseStatus validates a user-supplied status value against the fixed set.
@@ -177,10 +186,11 @@ func createCmd(ctx context.Context, info workspace.Info, args []string) error {
 		}
 		title := fs.Arg(0)
 
-		mgr, err := openManager(ctx, info)
+		mgr, closeNC, err := openManager(ctx, info)
 		if err != nil {
 			return fmt.Errorf("open manager: %w", err)
 		}
+		defer closeNC()
 		defer func() { _ = mgr.Close() }()
 
 		parsedDeferUntil, err := parseRFC3339Flag("defer-until", deferUntil)
@@ -243,10 +253,11 @@ func listCmd(ctx context.Context, info workspace.Info, args []string) error {
 			filterStatus = s
 		}
 
-		mgr, err := openManager(ctx, info)
+		mgr, closeNC, err := openManager(ctx, info)
 		if err != nil {
 			return fmt.Errorf("open manager: %w", err)
 		}
+		defer closeNC()
 		defer func() { _ = mgr.Close() }()
 
 		allTasks, err := mgr.List(ctx)
@@ -335,10 +346,11 @@ func updateCmd(ctx context.Context, info workspace.Info, args []string) error {
 			statusUpdate = s
 		}
 
-		mgr, err := openManager(ctx, info)
+		mgr, closeNC, err := openManager(ctx, info)
 		if err != nil {
 			return fmt.Errorf("open manager: %w", err)
 		}
+		defer closeNC()
 		defer func() { _ = mgr.Close() }()
 
 		parsedDeferUntil, err := parseRFC3339Flag("defer-until", deferUntil)
@@ -493,10 +505,11 @@ func claimCmd(ctx context.Context, info workspace.Info, args []string) error {
 			return err
 		}
 
-		mgr, err := openManager(ctx, info)
+		mgr, closeNC, err := openManager(ctx, info)
 		if err != nil {
 			return fmt.Errorf("open manager: %w", err)
 		}
+		defer closeNC()
 		defer func() { _ = mgr.Close() }()
 
 		var updated tasks.Task
@@ -551,10 +564,11 @@ func closeCmd(ctx context.Context, info workspace.Info, args []string) error {
 			return err
 		}
 
-		mgr, err := openManager(ctx, info)
+		mgr, closeNC, err := openManager(ctx, info)
 		if err != nil {
 			return fmt.Errorf("open manager: %w", err)
 		}
+		defer closeNC()
 		defer func() { _ = mgr.Close() }()
 
 		var updated tasks.Task
@@ -600,10 +614,11 @@ func showCmd(ctx context.Context, info workspace.Info, args []string) error {
 		}
 		id := fs.Arg(0)
 
-		mgr, err := openManager(ctx, info)
+		mgr, closeNC, err := openManager(ctx, info)
 		if err != nil {
 			return fmt.Errorf("open manager: %w", err)
 		}
+		defer closeNC()
 		defer func() { _ = mgr.Close() }()
 
 		t, _, err := mgr.Get(ctx, id)
