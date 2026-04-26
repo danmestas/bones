@@ -8,6 +8,7 @@ bin/
 /two-agents-chaos
 /herd-hub-leaf
 /hub-leaf-e2e
+/space-invaders-orchestrate
 /.nats-store/
 
 # osgrep scratch (semantic-grep tool cache)
