@@ -54,7 +54,6 @@ const presenceBucket = "agent-infra-presence"
 type Coord struct {
 	cfg    Config
 	sub    *substrate
-	tipSub *tipSubscriber
 	mu     sync.Mutex // protects closed
 	closed bool
 
@@ -94,30 +93,6 @@ func Open(ctx context.Context, cfg Config) (*Coord, error) {
 		return nil, err
 	}
 	c := &Coord{cfg: cfg, sub: sub}
-	if cfg.EnableTipBroadcast && cfg.HubURL != "" {
-		// tipSubscriber drives the broadcast-side Pull on every
-		// peer commit so this leaf's view stays roughly current —
-		// both for read paths and as the friendly-case input to
-		// Commit's pre-flight Pull. Trial #10 deletes the
-		// COORD_COMMIT_LEASE bucket and the bounded-N retry: the
-		// fork+merge model lets fossil place forks-as-branches
-		// and Merge them into trunk locally, so no hub-wide
-		// serialization is needed.
-		c.tipSub = &tipSubscriber{
-			nc:     c.sub.nc,
-			hubURL: cfg.HubURL,
-			pullFn: func(ctx context.Context, hubURL string) error {
-				return c.sub.fossil.Pull(ctx, hubURL)
-			},
-			localFn: func(ctx context.Context) (string, error) {
-				return c.sub.fossil.Tip(ctx)
-			},
-		}
-		if err := c.tipSub.Start(ctx); err != nil {
-			c.sub.close()
-			return nil, fmt.Errorf("coord.Open: tipSubscriber: %w", err)
-		}
-	}
 	return c, nil
 }
 
@@ -232,9 +207,6 @@ func (c *Coord) Close() error {
 		return nil
 	}
 	c.closed = true
-	if c.tipSub != nil {
-		c.tipSub.Close()
-	}
 	c.sub.close()
 	return nil
 }
