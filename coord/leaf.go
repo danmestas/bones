@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"github.com/danmestas/EdgeSync/leaf/agent"
 	"github.com/danmestas/libfossil"
@@ -202,7 +201,7 @@ func (l *Leaf) OpenTask(ctx context.Context, title string, files []string) (Task
 func (l *Leaf) Claim(ctx context.Context, taskID TaskID) (*Claim, error) {
 	assert.NotNil(l, "coord.Leaf.Claim: receiver is nil")
 	assert.NotNil(ctx, "coord.Leaf.Claim: ctx is nil")
-	rel, err := l.coord.Claim(ctx, taskID, 30*time.Second)
+	rel, err := l.coord.Claim(ctx, taskID, l.coord.cfg.Tuning.HoldTTLDefault)
 	if err != nil {
 		return nil, err
 	}
