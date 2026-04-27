@@ -91,14 +91,14 @@ When all subagents return:
    ```
 
 2. Materialize the merged tip into the host project's working tree
-   (per ADR 0024). The orchestrator's Fossil checkout is opened at the
-   project root by `hub-bootstrap.sh`; pulling and updating writes the
-   swarm's commits onto disk as ordinary file changes. Run from the
-   project root (where `.fslckout` lives):
+   (per ADR 0024). The orchestrator's Fossil checkout shares the hub
+   repo file directly (opened by `hub-bootstrap.sh`), so `fossil update`
+   reads the autosynced tip and rewrites the working tree as ordinary
+   file changes. Run from the project root (where `.fslckout` lives):
 
    ```
    ROOT="$(git rev-parse --show-toplevel)"
-   (cd "$ROOT" && fossil pull && fossil update && git status)
+   (cd "$ROOT" && fossil update && git status)
    ```
 
 3. Print a summary: slots completed, tasks per slot, fork retries (from
