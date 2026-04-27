@@ -35,6 +35,10 @@ func runOrchestrator(root string) error {
 	if err := mergeSettings(filepath.Join(root, ".claude", "settings.json")); err != nil {
 		return fmt.Errorf("settings: %w", err)
 	}
+	// 5) Ensure root .gitignore carries Fossil + orchestrator entries (ADR 0024).
+	if err := ensureGitignoreEntries(root); err != nil {
+		return fmt.Errorf("root gitignore: %w", err)
+	}
 	return nil
 }
 
