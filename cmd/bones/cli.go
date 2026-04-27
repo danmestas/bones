@@ -21,12 +21,14 @@ type CLI struct {
 	Notify edgecli.NotifyCmd `cmd:"" help:"Bidirectional notification messaging"`
 	Doctor edgecli.DoctorCmd `cmd:"" help:"Check development environment health"`
 
-	// agent-infra workspace + orchestrator (agent-infra/cli).
-	Init         bonescli.InitCmd         `cmd:"" help:"Create a new agent-infra workspace"`
-	Join         bonescli.JoinCmd         `cmd:"" help:"Locate and verify an existing workspace"`
-	Orchestrator bonescli.OrchestratorCmd `cmd:"" help:"Install hub-leaf orchestrator scripts, skills, and hooks"`
-	Up           bonescli.UpCmd           `cmd:"" help:"Full bootstrap: workspace + scaffold + bin/leaf + hub"`
-	ValidatePlan bonescli.ValidatePlanCmd `cmd:"" name:"validate-plan" help:"Validate a slot-annotated plan"`
+	// agent-infra workspace (agent-infra/cli).
+	Init bonescli.InitCmd `cmd:"" help:"Create a workspace"`
+	Join bonescli.JoinCmd `cmd:"" help:"Locate an existing workspace"`
+	Up   bonescli.UpCmd   `cmd:"" help:"Full bootstrap: workspace + scaffold + leaf + hub"`
+
+	// agent-infra orchestrator (agent-infra/cli).
+	Orchestrator bonescli.OrchestratorCmd `cmd:"" help:"Install orchestrator scaffolding"`
+	ValidatePlan bonescli.ValidatePlanCmd `cmd:"" name:"validate-plan" help:"Validate plan"`
 
 	// Workspace task operations (agent-infra/cli).
 	Tasks bonescli.TasksCmd `cmd:"" help:"Inspect and mutate runtime agent tasks"`

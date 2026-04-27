@@ -17,7 +17,7 @@ func main() {
 	var c CLI
 	ctx := kong.Parse(&c,
 		kong.Name("bones"),
-		kong.Description("agent-infra unified CLI — workspace, orchestrator, tasks, plus Fossil and EdgeSync"),
+		kong.Description("agent-infra unified CLI: workspace, orchestrator, tasks"),
 		kong.UsageOnError(),
 	)
 	err := ctx.Run(&c.Globals)
