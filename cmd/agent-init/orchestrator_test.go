@@ -120,3 +120,46 @@ func verifyHooks(t *testing.T, path string) {
 		t.Errorf("Stop hub-shutdown missing:\n%s", out)
 	}
 }
+
+func TestRunOrchestrator_HubBootstrapHasADR0024Seed(t *testing.T) {
+	dir := t.TempDir()
+	if err := runOrchestrator(dir); err != nil {
+		t.Fatalf("runOrchestrator: %v", err)
+	}
+	bootstrap, err := os.ReadFile(
+		filepath.Join(dir, ".orchestrator", "scripts", "hub-bootstrap.sh"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"git ls-files",        // seeds hub from git-tracked files (ADR 0024 §3)
+		"fossil open --force", // opens checkout at project root (ADR 0024 §1)
+		`$ROOT/.fslckout`,     // wipes checkout metadata on fresh start (ADR 0024 §2)
+	} {
+		if !strings.Contains(string(bootstrap), want) {
+			t.Errorf("hub-bootstrap.sh missing %q (ADR 0024)", want)
+		}
+	}
+}
+
+func TestRunOrchestrator_SkillHasADR0024Completion(t *testing.T) {
+	dir := t.TempDir()
+	if err := runOrchestrator(dir); err != nil {
+		t.Fatalf("runOrchestrator: %v", err)
+	}
+	skill, err := os.ReadFile(
+		filepath.Join(dir, ".claude", "skills", "orchestrator", "SKILL.md"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"fossil pull",   // pulls merged tip (ADR 0024 §4)
+		"fossil update", // materializes into worktree (ADR 0024 §4)
+	} {
+		if !strings.Contains(string(skill), want) {
+			t.Errorf("orchestrator SKILL.md missing %q (ADR 0024)", want)
+		}
+	}
+}
