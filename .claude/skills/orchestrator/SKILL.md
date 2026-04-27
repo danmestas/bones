@@ -41,8 +41,16 @@ bash .orchestrator/scripts/hub-bootstrap.sh
 
 ## Step 3: Extract slots and tasks
 
-Parse the plan again (mentally, or by re-running the validator with a
-flag once it grows one) to enumerate slots and the task list per slot.
+Run the validator with `--list-slots` to get a machine-readable slot→task
+mapping:
+
+```
+go run ./cmd/orchestrator-validate-plan/ --list-slots <plan-path> | jq
+```
+
+This emits JSON like `{"slots": [{"name": "alpha", "tasks": [...]}, ...]}`.
+Use the `tasks` array from each slot entry to build the dispatch prompt for
+Step 4 — no manual plan re-parsing needed.
 
 ## Step 4: Dispatch one subagent per slot
 
