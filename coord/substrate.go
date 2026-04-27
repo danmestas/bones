@@ -3,10 +3,10 @@ package coord
 import (
 	"github.com/nats-io/nats.go"
 
-	"github.com/danmestas/agent-infra/internal/chat"
-	"github.com/danmestas/agent-infra/internal/holds"
-	"github.com/danmestas/agent-infra/internal/presence"
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/chat"
+	"github.com/danmestas/bones/internal/holds"
+	"github.com/danmestas/bones/internal/presence"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // substrate aggregates the substrate-backed Managers behind coord's

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/coord"
-	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+	"github.com/danmestas/bones/coord"
+	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
 func newTestCoord(t *testing.T, agentID string) *coord.Coord {

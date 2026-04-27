@@ -8,7 +8,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
 // TestNewTestServer_PublishSubscribe exercises the fixture end-to-end:

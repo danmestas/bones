@@ -21,7 +21,7 @@ import (
 	_ "github.com/danmestas/libfossil/db/driver/modernc"
 	"github.com/nats-io/nats.go"
 
-	"github.com/danmestas/agent-infra/internal/assert"
+	"github.com/danmestas/bones/internal/assert"
 )
 
 // ErrClosed reports that a public method was called on a Manager whose
@@ -97,7 +97,7 @@ func openOrCreateRepo(path string) (*libfossil.Repo, error) {
 		return libfossil.Open(path)
 	case errors.Is(err, os.ErrNotExist):
 		return libfossil.Create(path, libfossil.CreateOpts{
-			User: "agent-infra",
+			User: "bones",
 		})
 	default:
 		return nil, err

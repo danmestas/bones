@@ -3,8 +3,8 @@ package coord
 import (
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/presence"
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/presence"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // TaskID uniquely identifies a task within the substrate. ADR 0005

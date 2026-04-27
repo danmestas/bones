@@ -3,7 +3,7 @@
 ## Status
 
 Accepted 2026-04-20. Phase 4 deliverable. Establishes the human-facing
-CLI surface for agent-infra workspaces; pairs with ADR 0005 (tasks in
+CLI surface for bones workspaces; pairs with ADR 0005 (tasks in
 NATS KV) and ADR 0007 (claim semantics) by giving operators a verb
 vocabulary to drive both. Compressed from three plan/spec pairs
 (`cmd/agent-init`, `cmd/agent-tasks`, `examples/two-agents`).
@@ -17,7 +17,7 @@ list, and packaging live under `cmd/bones/`.
 ## Context
 
 After ADRs 0005–0010 the coord package had a complete primitive surface
-but no CLI. Standing up an agent-infra workspace required writing Go
+but no CLI. Standing up an bones workspace required writing Go
 code; inspecting tasks required reading KV by hand. Phase 4's charter
 was to ship the operator-facing entry points so the project becomes
 usable without library-author knowledge.

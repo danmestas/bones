@@ -8,7 +8,7 @@ import (
 
 	"github.com/danmestas/libfossil"
 
-	"github.com/danmestas/agent-infra/internal/assert"
+	"github.com/danmestas/bones/internal/assert"
 )
 
 // PostMedia stores opaque bytes in the leaf's libfossil repo and

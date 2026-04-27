@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/danmestas/agent-infra/internal/assert"
+	"github.com/danmestas/bones/internal/assert"
 )
 
 // AskAdmin sends a synchronous question to a peer agent after first

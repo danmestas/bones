@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danmestas/agent-infra/coord"
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/coord"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // glyphFor mirrors bd's one-rune status markers.

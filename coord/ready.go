@@ -6,8 +6,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/assert"
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/assert"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // Ready returns open, unclaimed tasks eligible to be worked on, sorted

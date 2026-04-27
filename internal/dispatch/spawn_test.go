@@ -17,12 +17,12 @@ func hasEnv(env []string, want string) bool {
 
 func TestBuildWorkerCommand_EncodesSpecForChildProcess(t *testing.T) {
 	spec := Spec{
-		TaskID:        "agent-infra-abc12345",
+		TaskID:        "bones-abc12345",
 		Title:         "dispatch me",
 		Files:         []string{"/repo/a.go"},
-		Thread:        "agent-infra-abc12345",
+		Thread:        "bones-abc12345",
 		ParentAgentID: "parent-agent",
-		WorkerAgentID: "parent-agent/agent-infra-abc12345",
+		WorkerAgentID: "parent-agent/bones-abc12345",
 		WorkspaceDir:  "/workspace",
 	}
 	cmd, err := BuildWorkerCommand("/tmp/agent-tasks", spec)
@@ -35,7 +35,7 @@ func TestBuildWorkerCommand_EncodesSpecForChildProcess(t *testing.T) {
 	if cmd.Dir != "/workspace" {
 		t.Fatalf("Dir=%q", cmd.Dir)
 	}
-	if !hasEnv(cmd.Env, "AGENT_INFRA_WORKER_AGENT_ID=parent-agent/agent-infra-abc12345") {
+	if !hasEnv(cmd.Env, "AGENT_INFRA_WORKER_AGENT_ID=parent-agent/bones-abc12345") {
 		t.Fatalf("Env missing worker agent id: %#v", cmd.Env)
 	}
 }
@@ -45,11 +45,11 @@ func TestSpawnWorker_StartsProcess(t *testing.T) {
 		os.Exit(0)
 	}
 	spec := Spec{
-		TaskID:        "agent-infra-abc12345",
+		TaskID:        "bones-abc12345",
 		Title:         "dispatch me",
-		Thread:        "agent-infra-abc12345",
+		Thread:        "bones-abc12345",
 		ParentAgentID: "parent-agent",
-		WorkerAgentID: "parent-agent/agent-infra-abc12345",
+		WorkerAgentID: "parent-agent/bones-abc12345",
 		WorkspaceDir:  t.TempDir(),
 	}
 	cmd, err := BuildWorkerCommand(os.Args[0], spec)

@@ -9,8 +9,8 @@ import (
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
-	"github.com/danmestas/agent-infra/coord"
-	"github.com/danmestas/agent-infra/internal/autoclaim"
+	"github.com/danmestas/bones/coord"
+	"github.com/danmestas/bones/internal/autoclaim"
 )
 
 // TasksAutoclaimCmd runs a single autoclaim tick.

@@ -1,6 +1,6 @@
 # Configuration
 
-Environment variables consumed by agent-infra binaries and libraries.
+Environment variables consumed by bones binaries and libraries.
 Listed alphabetically by prefix.
 
 ## AGENT_INFRA_*
@@ -16,7 +16,7 @@ Listed alphabetically by prefix.
 ## EDGESYNC_*
 
 - `EDGESYNC_DIR` — path to the EdgeSync sibling repository.
-  Default: `$ROOT/../EdgeSync` (where `$ROOT` is the agent-infra workspace root).
+  Default: `$ROOT/../EdgeSync` (where `$ROOT` is the bones workspace root).
   Used by: `.orchestrator/scripts/hub-bootstrap.sh`, `bones up`.
 
 ## HERD_*
@@ -36,7 +36,7 @@ Listed alphabetically by prefix.
 ## LEAF_*
 
 Variables consumed by the `bin/leaf` daemon (EdgeSync upstream). The subset
-that `hub-bootstrap.sh` and agent-infra's workspace package use:
+that `hub-bootstrap.sh` and bones's workspace package use:
 
 - `LEAF_BIN` — absolute path to the `leaf` binary.
   If unset, `hub-bootstrap.sh` resolves the binary in priority order:
@@ -69,7 +69,7 @@ Full `LEAF_*` flag reference (EdgeSync upstream, affects `bin/leaf` directly):
 
 ## OTEL_*
 
-Standard OpenTelemetry env vars consumed by all agent-infra binaries. Telemetry
+Standard OpenTelemetry env vars consumed by all bones binaries. Telemetry
 is optional — when `OTEL_EXPORTER_OTLP_ENDPOINT` is unset the OTel exporter is
 disabled (no-op) and the binary runs normally.
 
@@ -92,7 +92,7 @@ disabled (no-op) and the binary runs normally.
 ## BRIDGE_*
 
 Variables for EdgeSync's `bridge` binary (NATS↔Fossil HTTP bridge). Not used
-by agent-infra scripts directly, but documented here for completeness since
+by bones scripts directly, but documented here for completeness since
 bridge is part of the EdgeSync dependency:
 
 - `BRIDGE_FOSSIL_URL` — Fossil HTTP server URL (`--fossil` flag).

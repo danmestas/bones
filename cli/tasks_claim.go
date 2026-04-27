@@ -8,7 +8,7 @@ import (
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // TasksClaimCmd claims a task as the current agent.

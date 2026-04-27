@@ -1,10 +1,10 @@
-# DX Audit: agent-infra as a Harness Plugin
+# DX Audit: bones as a Harness Plugin
 
 **Date:** 2026-04-26
 **Branch:** `refactor-use-edgesync-leaf`
-**Lens:** A developer building an agent harness (Claude Code, autonomous-agent runtime, custom coding-agent product) who wants agent-infra as their **coordination + commit-and-sync layer for parallel agents**. They are consuming agent-infra, not modifying it.
+**Lens:** A developer building an agent harness (Claude Code, autonomous-agent runtime, custom coding-agent product) who wants bones as their **coordination + commit-and-sync layer for parallel agents**. They are consuming bones, not modifying it.
 
-**What this is NOT:** a repeat of `2026-04-26-dx-audit.md` (beads vs agent-infra from the human-as-task-author lens). That audit found agent-tasks missing `add`/`close` verbs for humans and scored install at 4/10. Those findings are noted here only where they compound the harness perspective.
+**What this is NOT:** a repeat of `2026-04-26-dx-audit.md` (beads vs bones from the human-as-task-author lens). That audit found agent-tasks missing `add`/`close` verbs for humans and scored install at 4/10. Those findings are noted here only where they compound the harness perspective.
 
 ---
 
@@ -29,22 +29,22 @@
 
 ## 2. Per-Workflow Detail
 
-### W-Install: Install agent-infra plugin into a harness
+### W-Install: Install bones plugin into a harness
 
 **Steps a harness developer must take:**
 
-1. Clone `agent-infra` (no published release, no `go install` path).
+1. Clone `bones` (no published release, no `go install` path).
 2. Clone `EdgeSync` sibling repo to `../EdgeSync/` — required by the hardcoded `replace github.com/danmestas/EdgeSync/leaf => ../EdgeSync/leaf` directive in `go.mod:9`. Any other layout silently fails to build with a cryptic module resolution error.
 3. Build `bin/leaf` from EdgeSync: `cd ../EdgeSync && make leaf`.
-4. Build agent-infra tools: `cd agent-infra && make`.
+4. Build bones tools: `cd bones && make`.
 5. Run `agent-init up` OR manually run `agent-init init && agent-init orchestrator` to install hooks, scripts, and skills into `.claude/settings.json`.
 6. Verify `.claude/settings.json` now contains `SessionStart`, `Stop`, and `PreCompact` hooks.
 
 **Pain points:**
 
-- **No release artifact.** The `go.mod` `replace` directive is the primary install blocker. Any harness trying to `go get github.com/danmestas/agent-infra` fails because EdgeSync is private and the `replace` refers to a local path. This makes agent-infra impossible to add as a Go module dependency in the normal way. The existing audit (`2026-04-26-dx-audit.md §W1`) noted the 6-step setup problem from the solo-dev lens; from the harness lens it is worse because the harness may not even be in Go.
+- **No release artifact.** The `go.mod` `replace` directive is the primary install blocker. Any harness trying to `go get github.com/danmestas/bones` fails because EdgeSync is private and the `replace` refers to a local path. This makes bones impossible to add as a Go module dependency in the normal way. The existing audit (`2026-04-26-dx-audit.md §W1`) noted the 6-step setup problem from the solo-dev lens; from the harness lens it is worse because the harness may not even be in Go.
 - **`agent-init up` exists but isn't documented.** The command is listed in `cmd/agent-init/main.go:8` ("full bootstrap from a fresh clone") but the README and GETTING_STARTED.md do not surface it as the install path. A harness developer has to grep the source to find it.
-- **Plugin manifest is implicit.** There is no `plugin.json` or manifest file. The plugin install is `.claude/settings.json` + two skill files under `.claude/skills/`. A harness consuming agent-infra as a plugin has to know to copy these files; `agent-init orchestrator` does it, but only if the harness is also a Claude Code session running in the agent-infra working tree.
+- **Plugin manifest is implicit.** There is no `plugin.json` or manifest file. The plugin install is `.claude/settings.json` + two skill files under `.claude/skills/`. A harness consuming bones as a plugin has to know to copy these files; `agent-init orchestrator` does it, but only if the harness is also a Claude Code session running in the bones working tree.
 - **GOPRIVATE required for CI.** Since EdgeSync is private, any CI that tries to build the harness's Go code (which imports `coord`) needs `GOPRIVATE=github.com/danmestas/EdgeSync` plus either a replace directive or a local copy of EdgeSync. Not documented in a consumer-facing install guide.
 
 **Score: 2/10** — effectively blocked without reading ADR 0018 and go.mod carefully. One working command (`agent-init up`) exists but is undiscoverable.
@@ -202,7 +202,7 @@
 **Steps:**
 
 There is effectively no supported path. The harness cannot configure per-slot:
-- LLM model or system prompt (Claude Code's Task tool controls this, no API from agent-infra).
+- LLM model or system prompt (Claude Code's Task tool controls this, no API from bones).
 - Tool list per slot (same: Task tool).
 - Claim TTL (hard-coded to `HoldTTLDefault` in `coord/leaf.go:204`; no per-LeafConfig field).
 - Fossil user or credentials per slot (clone uses "nobody" auth, fixed in `coord/leaf.go:112-119`).
@@ -248,7 +248,7 @@ The only documented tuning surface is the `Tuning` field on `coord.Config` (appl
 
 ### What's broken for harness consumers
 
-**The `replace` directive kills module consumption.** `go.mod:9` — `replace github.com/danmestas/EdgeSync/leaf => ../EdgeSync/leaf` — makes agent-infra impossible to `go get` from any other project. A harness that wants to import `coord` must also vendor or locally clone EdgeSync at a relative path. This is the single highest-leverage blocker.
+**The `replace` directive kills module consumption.** `go.mod:9` — `replace github.com/danmestas/EdgeSync/leaf => ../EdgeSync/leaf` — makes bones impossible to `go get` from any other project. A harness that wants to import `coord` must also vendor or locally clone EdgeSync at a relative path. This is the single highest-leverage blocker.
 
 **No aggregation surface.** The daily workflows (W-Status, W-Debug, W-Aggregate) all require piecing together fossil CLI output, NATS KV queries, and log files. There is no "what happened in this run" readout from the harness perspective.
 

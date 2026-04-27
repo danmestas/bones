@@ -10,8 +10,8 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/danmestas/agent-infra/internal/assert"
-	"github.com/danmestas/agent-infra/internal/jskv"
+	"github.com/danmestas/bones/internal/assert"
+	"github.com/danmestas/bones/internal/jskv"
 )
 
 // Config configures Open. Every field is required; there are no silent
@@ -22,7 +22,7 @@ import (
 // CreateOrUpdateKeyValue call.
 type Config struct {
 	// BucketName is the JetStream KV bucket backing the task records.
-	// ADR 0005 pins the coord-visible name to "agent-infra-tasks"; this
+	// ADR 0005 pins the coord-visible name to "bones-tasks"; this
 	// package takes the name as input so tests can isolate by bucket.
 	BucketName string
 

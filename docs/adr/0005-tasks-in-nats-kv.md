@@ -50,8 +50,8 @@ Tasks are persisted in a NATS JetStream KV bucket. The README plan is
 superseded. Fossil enters the project for code artifacts in Phase 5+ and
 does not touch task state.
 
-**Bucket name.** `agent-infra-tasks`, parallel to the existing
-`agent-infra-holds`. Substrate detail, lives in `coord` package constants
+**Bucket name.** `bones-tasks`, parallel to the existing
+`bones-holds`. Substrate detail, lives in `coord` package constants
 per ADR 0003; never appears on `Config`.
 
 **Key shape.** The raw `TaskID` is the bucket key. No nested prefix — the
@@ -88,7 +88,7 @@ claimed (but not yet closed) task to the open pool (invariant 16).
 `closed` remains terminal; no edge out of it is legal. Enforced by
 invariant 13 (see docs/invariants.md).
 
-**TaskID shape.** `<proj>-<8 char nanoid>`, e.g. `agent-infra-k2h7zq3f`.
+**TaskID shape.** `<proj>-<8 char nanoid>`, e.g. `bones-k2h7zq3f`.
 Alphabet is lowercase alphanumeric (`abcdefghijklmnopqrstuvwxyz0123456789`,
 36 symbols). At 8 characters that is ~41 bits of entropy, which gives a
 ~1-in-2-trillion collision probability at 10,000 tasks — well past what

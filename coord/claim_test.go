@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
-	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+	"github.com/danmestas/bones/internal/tasks"
+	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
 // newTestCoord builds a Coord with a real embedded NATS + JetStream
@@ -160,7 +160,7 @@ func TestClaim_TaskNotFound(t *testing.T) {
 	c := newTestCoord(t, "agent-1")
 	ctx := context.Background()
 
-	rel, err := c.Claim(ctx, TaskID("agent-infra-ghost001"), claimTTL)
+	rel, err := c.Claim(ctx, TaskID("bones-ghost001"), claimTTL)
 	if !errors.Is(err, ErrTaskNotFound) {
 		t.Fatalf("Claim on ghost task: got %v, want ErrTaskNotFound", err)
 	}

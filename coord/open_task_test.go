@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // openTaskShape is the package-under-test regex reused by tests. Kept
@@ -16,7 +16,7 @@ import (
 // that matched the assertion but not ADR 0005's shape would still fail
 // here.
 var openTaskShape = regexp.MustCompile(
-	`^agent-infra-[a-z0-9]{8}$`,
+	`^bones-[a-z0-9]{8}$`,
 )
 
 // TestOpenTask_HappyPath covers the primary flow: non-empty title and
@@ -227,7 +227,7 @@ func TestOpenTask_GeneratedIDShape(t *testing.T) {
 		if !openTaskShape.MatchString(string(id)) {
 			t.Fatalf("iter %d: id %q violates shape", i, id)
 		}
-		if !strings.HasPrefix(string(id), "agent-infra-") {
+		if !strings.HasPrefix(string(id), "bones-") {
 			t.Fatalf("iter %d: id %q missing prefix", i, id)
 		}
 	}

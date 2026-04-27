@@ -8,7 +8,7 @@
 
 The `beads` (`bd`) CLI was adopted early in Phase 0 as the working task tracker for this repo — installed with `bd init`, backed by an embedded Dolt database under `.beads/`, auto-primed via SessionStart/PreCompact hooks, and referenced from `CLAUDE.md`, `AGENTS.md`, `README.md`, `GETTING_STARTED.md`, and the Makefile's TODO gate. By 2026-04-23 the `.beads/` workspace held 89 closed tasks, 7 open tasks (all deferred epic children), and 14 saved memories.
 
-Phase 6 framed as "beads capability closure" is effectively complete for the purposes it was scoped to: the features agent-infra was going to absorb from beads have been absorbed (ADR 0010 fossil code artifacts, ADR 0016 closed-task compaction, ADRs 0008/0009 chat/presence). The remaining open items are all deliberate deferrals — ADR-only design work or far-future phases.
+Phase 6 framed as "beads capability closure" is effectively complete for the purposes it was scoped to: the features bones was going to absorb from beads have been absorbed (ADR 0010 fossil code artifacts, ADR 0016 closed-task compaction, ADRs 0008/0009 chat/presence). The remaining open items are all deliberate deferrals — ADR-only design work or far-future phases.
 
 At this point the cost of keeping beads in the repo — two auto-run hooks, four files of agent-facing prose steering agents toward `bd`, an embedded Dolt DB the agent doesn't actually need for day-to-day work, and dual-tracking against git issues — exceeds the benefit of a structured issue DAG that isn't seeing churn.
 
@@ -19,7 +19,7 @@ At this point the cost of keeping beads in the repo — two auto-run hooks, four
 3. **Strip `bd prime` from `.claude/settings.json`** SessionStart and PreCompact hooks; retain the `agent-tasks prime` / `agent-tasks autoclaim` hooks.
 4. **Preserve context that was only in beads** via two artifacts:
    - the remaining-work roadmap in §Remaining work below,
-   - Claude-memory notes under `/Users/dmestas/.claude/projects/-Users-dmestas-projects-agent-infra/memory/` for the non-obvious cross-session insights (see §Migrated memories).
+   - Claude-memory notes under `/Users/dmestas/.claude/projects/-Users-dmestas-projects-bones/memory/` for the non-obvious cross-session insights (see §Migrated memories).
 5. **Do not edit historical mentions** in `reference/CAPABILITIES.md` or `docs/adr/0014-typed-edges.md` — those are design history and should remain as written. `README.md`'s "Why this project exists" section likewise stays intact: beads is genuinely the audit target that motivates the project design, even though it is no longer the installed tracker. (The earlier `docs/superpowers/plans/` directory was compressed into ADRs 0019–0023 on 2026-04-26 and removed.)
 6. **`reference/beads/`** (the read-only source clone under `reference/`) also stays — it is the audit-target role from `GETTING_STARTED.md` §3, not the task-tracker role.
 
@@ -29,7 +29,7 @@ At this point the cost of keeping beads in the repo — two auto-run hooks, four
 
 **Gained**: two fewer auto-run hooks per session; one less substrate to keep in sync; the repo is honest about what it actually uses — ADRs, plan docs, git log, and the `agent-tasks` CLI for coord-backed task operations inside `examples/` harnesses.
 
-**Neutral**: `coord.OpenTask` / `coord.Claim` / `coord.Ready` / `coord.CloseTask` are unaffected — those are the agent-infra task primitives (ADRs 0005, 0007), not beads. They were always independent of `.beads/`.
+**Neutral**: `coord.OpenTask` / `coord.Claim` / `coord.Ready` / `coord.CloseTask` are unaffected — those are the bones task primitives (ADRs 0005, 0007), not beads. They were always independent of `.beads/`.
 
 ## Remaining work (migrated from `bd list --status=open`)
 
@@ -70,5 +70,5 @@ The other seven memory entries (phase-1/2/3 invariant snapshots, claim-CAS-order
 ## Non-goals of this ADR
 
 - Relitigating whether beads was the right initial choice for task tracking — it was, and Phase 6 capability-closure design benefited from the direct audit.
-- Deleting or rewriting the design documents that compare agent-infra to beads (`README.md` §Why, `reference/CAPABILITIES.md`). Those are historical rationale.
+- Deleting or rewriting the design documents that compare bones to beads (`README.md` §Why, `reference/CAPABILITIES.md`). Those are historical rationale.
 - Prescribing a replacement task tracker. GitHub issues are available if structured tracking resumes; this ADR does not commit to one.

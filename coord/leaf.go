@@ -15,7 +15,7 @@ import (
 	"github.com/danmestas/libfossil"
 	_ "github.com/danmestas/libfossil/db/driver/modernc"
 
-	"github.com/danmestas/agent-infra/internal/assert"
+	"github.com/danmestas/bones/internal/assert"
 )
 
 // Claim is the handle a Leaf returns from Claim. It carries the TaskID

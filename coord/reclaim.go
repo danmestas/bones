@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/assert"
-	"github.com/danmestas/agent-infra/internal/holds"
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/assert"
+	"github.com/danmestas/bones/internal/holds"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // Reclaim transfers an abandoned claim from a crashed or unreachable

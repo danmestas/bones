@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Pre-commit hook: block imports from EdgeSync/ or libfossil/ internal/ subtrees.
 # Activate: run `git config core.hooksPath .githooks` from the repo root.
-# This keeps agent-infra honest about the public API boundary documented in README §Development setup.
+# This keeps bones honest about the public API boundary documented in README §Development setup.
 
 set -euo pipefail
 
@@ -38,8 +38,8 @@ done
 
 if [ "$violations" -gt 0 ]; then
   echo "" >&2
-  echo "agent-infra pre-commit: $violations forbidden import(s) detected." >&2
-  echo "agent-infra must consume only the public API of EdgeSync and libfossil." >&2
+  echo "bones pre-commit: $violations forbidden import(s) detected." >&2
+  echo "bones must consume only the public API of EdgeSync and libfossil." >&2
   echo "See README §Development setup." >&2
   exit 1
 fi
@@ -77,13 +77,13 @@ done
 
 if [ "$fmt_violations" -gt 0 ]; then
   echo "" >&2
-  echo "agent-infra pre-commit: $fmt_violations file(s) need gofmt." >&2
+  echo "bones pre-commit: $fmt_violations file(s) need gofmt." >&2
   echo "Run: gofmt -w <files>   (or: make fmt)" >&2
 fi
 
 if [ "$todo_violations" -gt 0 ]; then
   echo "" >&2
-  echo "agent-infra pre-commit: $todo_violations TODO marker(s) in production code." >&2
+  echo "bones pre-commit: $todo_violations TODO marker(s) in production code." >&2
   echo "File an ADR or a note under docs/ instead." >&2
   echo "See project CLAUDE.md §Task tracking." >&2
 fi

@@ -114,7 +114,7 @@ func ensureLeafBinary(root string) error {
 	if _, err := os.Stat(leafSrc); os.IsNotExist(err) {
 		return fmt.Errorf(
 			"EdgeSync sibling clone not found at %s — "+
-				"clone https://github.com/danmestas/EdgeSync next to agent-infra, "+
+				"clone https://github.com/danmestas/EdgeSync next to bones, "+
 				"then re-run `bones up`",
 			edgesyncDir,
 		)

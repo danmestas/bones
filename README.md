@@ -1,24 +1,19 @@
-# agent-infra
+# bones
 
 State memory and real-time comms for embedded agent processes, built on Fossil
 (durable state) and NATS (live coordination). Beads-inspired — but without the
 git cleanup tax that multi-agent divergence imposes on branch-based VCS.
-
-> **Working title.** `agent-infra` is the on-disk directory name during early
-> scaffolding. Project name is not decided. Candidates: `agentforge`,
-> `swarmkit`, `ensemble`, `abacus`, `tally`. Don't bikeshed this early; rename
-> once the thing is clearly itself.
 
 ---
 
 ## Quickstart
 
 ```bash
-git clone https://github.com/danmestas/agent-infra
-cd agent-infra
+git clone https://github.com/danmestas/bones
+cd bones
 # Clone EdgeSync sibling repo (required for bin/leaf):
-cd .. && git clone https://github.com/danmestas/EdgeSync && cd agent-infra
-# Build agent-infra binaries:
+cd .. && git clone https://github.com/danmestas/EdgeSync && cd bones
+# Build bones binaries:
 make
 # One-command bootstrap: workspace + scaffold + bin/leaf + hub:
 bin/bones up
@@ -85,7 +80,7 @@ EdgeSync — offers a fundamentally different posture:
 **NATS** provides the ephemeral, low-latency side: hold announcements, chat,
 request/reply, TTL-based presence state.
 
-**The agent-infra thesis.** Fossil (code + structured state) plus NATS
+**The bones thesis.** Fossil (code + structured state) plus NATS
 (live coordination) gives a single substrate where code and tasks
 converge together, and where agents can do real-time negotiation without
 an external broker. That's the unification beads doesn't offer: beads
@@ -140,12 +135,12 @@ what we're deferring.
 | Project | Role | PR policy |
 |---|---|---|
 | `libfossil` (danmestas) | Fossil primitives: `Repo`, `Checkout`, sync, timeline | PR upstream when new primitives are needed (e.g., observer hooks, task artifact support) |
-| `EdgeSync` (danmestas) | Leaf daemon, embedded NATS, notify system | PR when the substrate needs a change agent-infra can't make locally |
+| `EdgeSync` (danmestas) | Leaf daemon, embedded NATS, notify system | PR when the substrate needs a change bones can't make locally |
 | `nats-server`, `nats.go` | Real-time transport | Consume only — no upstream PRs from this project |
 | `beads` (gastownhall) | Reference design & audit target | Cloned at `reference/beads/`; no runtime dependency |
 
-Dependency arrow: `agent-infra → EdgeSync → libfossil`. Linear. No
-back-edges. If we notice `EdgeSync` reaching *up* into `agent-infra`, that's
+Dependency arrow: `bones → EdgeSync → libfossil`. Linear. No
+back-edges. If we notice `EdgeSync` reaching *up* into `bones`, that's
 a smell — push the primitive the other direction.
 
 ---
@@ -205,7 +200,7 @@ NATS carries:
 
 ### Phase 0 — scaffolding
 
-- [x] Directory layout created at `/Users/dmestas/projects/agent-infra`
+- [x] Directory layout created at `/Users/dmestas/projects/bones`
 - [x] This README drafted
 - [x] Clone `reference/beads` for audit
 - [ ] Read beads' **agent config** first — `AGENTS.md`,
@@ -248,7 +243,7 @@ NATS carries:
 - `cmd/bones/` — walk up to find `.agent-infra/` marker or create one at
   the invocation directory; start (or join) a local leaf daemon; human-facing
   tasks subcommands (`list`, `claim`, `update`, `close`)
-- Decide: explicit `agent-infra init` command vs silent walk-up
+- Decide: explicit `bones init` command vs silent walk-up
 
 ### Phase 5 — smoke + chaos tests
 
@@ -286,7 +281,7 @@ NATS carries:
 ## Repository layout (planned — created as phases land)
 
 ```
-agent-infra/
+bones/
   coord/              # Public Go API — the surface agents import
   cmd/
     bones/            # Unified CLI: init/up/orchestrator + tasks subcommands
@@ -364,8 +359,8 @@ stdout/stderr lands in `.agent-infra/leaf.log`; the PID sits at
 `.agent-infra/leaf.pid`. Set `AGENT_INFRA_LOG=json` to switch
 `bones`'s own logs to JSON.
 
-Release-time: each of the three repos (`agent-infra`, `EdgeSync`,
-`libfossil`) is tagged and published independently. `agent-infra`
+Release-time: each of the three repos (`bones`, `EdgeSync`,
+`libfossil`) is tagged and published independently. `bones`
 consumes tagged versions of the other two. No monorepo pressure.
 
 **Guardrail**: a pre-commit or lint check (to be added in Phase 1) that
@@ -381,7 +376,7 @@ nested git repos tracked as ghost submodules.
 
 ## Configuration
 
-All environment variables consumed by agent-infra binaries and scripts are
+All environment variables consumed by bones binaries and scripts are
 documented in [`docs/configuration.md`](docs/configuration.md), including
 defaults and which binary reads each variable.
 

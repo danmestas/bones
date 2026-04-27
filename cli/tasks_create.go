@@ -9,7 +9,7 @@ import (
 	libfossilcli "github.com/danmestas/libfossil/cli"
 	"github.com/google/uuid"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // TasksCreateCmd creates a new task.

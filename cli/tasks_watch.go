@@ -9,7 +9,7 @@ import (
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // TasksWatchCmd subscribes to the tasks KV bucket and streams human-readable

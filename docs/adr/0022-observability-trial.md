@@ -10,7 +10,7 @@ implementation steps and TDD task list do not need to persist.
 
 ## Context
 
-After Phase 4–5 closed (CLIs, code-artifact substrate), agent-infra had
+After Phase 4–5 closed (CLIs, code-artifact substrate), bones had
 OTel wired through `EdgeSync/leaf/telemetry` but had never run the
 coord primitives under thundering-herd contention. The 6-step
 two-agents harness (ADR 0019) validates "does it work at all"; it does
@@ -48,7 +48,7 @@ backend.
   EdgeSync `leaf/agent/notify` publishers.
 
 The change is cross-repo: EdgeSync's publish/subscribe path lands first
-(tagged), then agent-infra's coord layer consumes the new header API.
+(tagged), then bones's coord layer consumes the new header API.
 Trial reports live in `docs/trials/`, not here.
 
 ### 2. Attributes, not new metric names
@@ -129,7 +129,7 @@ leak into the trial harness.
   Code under test gets fixed in coord (or EdgeSync); the harness itself
   evolves but the pattern (goroutine + errgroup + bucketprefix) does not.
 - **Cross-repo instrumentation changes** ship in two coordinated PRs:
-  EdgeSync first (tagged), agent-infra second (consumes the new tag).
+  EdgeSync first (tagged), bones second (consumes the new tag).
   This is the pattern for all future cross-repo telemetry work; ADR
   0018 codifies the dependency direction.
 - **Counter cardinality stays bounded** by the attribute-vs-metric

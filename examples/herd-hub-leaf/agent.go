@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/danmestas/agent-infra/coord"
-	"github.com/danmestas/agent-infra/internal/assert"
+	"github.com/danmestas/bones/coord"
+	"github.com/danmestas/bones/internal/assert"
 )
 
 // runAgent drives one slot through k tasks via coord.Leaf. Each leaf

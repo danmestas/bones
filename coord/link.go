@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/assert"
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/assert"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // Link records an outgoing typed edge from one task to another per

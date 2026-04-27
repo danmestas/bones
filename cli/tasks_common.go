@@ -16,8 +16,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
-	"github.com/danmestas/agent-infra/internal/workspace"
+	"github.com/danmestas/bones/internal/tasks"
+	"github.com/danmestas/bones/internal/workspace"
 )
 
 // TasksCmd groups all `bones tasks <verb>` subcommands.
@@ -107,8 +107,8 @@ func taskCLIError(err error) error {
 }
 
 var (
-	tracer = otel.Tracer("github.com/danmestas/agent-infra/cli")
-	meter  = otel.Meter("github.com/danmestas/agent-infra/cli")
+	tracer = otel.Tracer("github.com/danmestas/bones/cli")
+	meter  = otel.Meter("github.com/danmestas/bones/cli")
 
 	opCounter  metric.Int64Counter
 	opDuration metric.Float64Histogram

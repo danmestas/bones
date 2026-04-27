@@ -8,7 +8,7 @@ and `docs/trials/2026-04-26/trial-report.md` (post-refactor, Phase 2)
 
 ## Context
 
-agent-infra's hub-and-leaf orchestrator originally hand-rolled three
+bones's hub-and-leaf orchestrator originally hand-rolled three
 custom layers on top of libfossil:
 
 1. A `coord.tip.changed` JetStream broadcast for tip-propagation between
@@ -37,7 +37,7 @@ already had, and the duplication was the bottleneck.
 
 ## Decision
 
-agent-infra wraps `leaf.Agent` rather than libfossil directly. The
+bones wraps `leaf.Agent` rather than libfossil directly. The
 public surface in `coord` is two deep types:
 
 - `coord.Hub` — owns `hub.fossil`, runs the embedded `leaf.Agent`'s
@@ -100,7 +100,7 @@ benefit.
 
 ### Negative / known limitations
 
-- **EdgeSync coupling:** agent-infra now depends on
+- **EdgeSync coupling:** bones now depends on
   `github.com/danmestas/EdgeSync/leaf`. Any sync-protocol change
   upstream may require coord changes. Trade-off: we get EdgeSync's
   NATS mesh, iroh peer-to-peer support, telemetry plumbing for free.
@@ -130,7 +130,7 @@ EdgeSync upstream changes required:
 
 ## Migration
 
-agent-infra's chat and workspace continue to import libfossil
+bones's chat and workspace continue to import libfossil
 directly — explicit scope limit, not an oversight. Other callers
 (`coord/`, both example harnesses, `cmd/bones/`)
 flow through `coord.Hub`/`coord.Leaf`.

@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/danmestas/agent-infra/internal/assert"
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/assert"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // Blocked returns open, unclaimed tasks that are currently blocked by

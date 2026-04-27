@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
 // TestAskAdmin_HappyPath mirrors TestAsk_HappyPath but takes the

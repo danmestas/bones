@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
 // nilCtx is a typed-nil context.Context used to exercise the nil-ctx
@@ -172,7 +172,7 @@ func TestUseAfterClosePanics(t *testing.T) {
 	// assertOpen before any NATS call, so the record need not exist.
 	requirePanic(t, func() {
 		_, _ = c.Claim(
-			context.Background(), TaskID("agent-infra-clos0001"),
+			context.Background(), TaskID("bones-clos0001"),
 			10*time.Second,
 		)
 	}, "coord is closed")

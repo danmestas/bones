@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
 // TestReclaim_TaskNotClaimed_Refused verifies Reclaim on an 'open'

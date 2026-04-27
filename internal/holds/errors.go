@@ -5,7 +5,7 @@
 // closure/return-release model coord builds on top of these primitives.
 //
 // This package is internal and unexported: callers outside
-// github.com/danmestas/agent-infra must not depend on it.
+// github.com/danmestas/bones must not depend on it.
 package holds
 
 import "errors"

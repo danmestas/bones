@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/holds"
+	"github.com/danmestas/bones/internal/holds"
 )
 
 // The CAS tests live alongside holds_test.go. They exercise the

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
 // Smoke tests for coord.Claim under real contention. These exercise

@@ -10,14 +10,14 @@ import (
 	"sort"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/assert"
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/assert"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // taskIDProject is the fixed project prefix the TaskID generator emits
 // per ADR 0005. Callers never supply it; it is baked into the coord
-// package for agent-infra and would be a new-ADR concern to change.
-const taskIDProject = "agent-infra"
+// package for bones and would be a new-ADR concern to change.
+const taskIDProject = "bones"
 
 // taskIDSuffixLen is the length of the random lowercase-alphanumeric
 // suffix appended after the project prefix and dash. ADR 0005 fixes
@@ -35,7 +35,7 @@ const taskIDAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
 // OpenTask invocation pays only the MatchString cost, not the compile
 // cost. The pattern is identical to the shape described in ADR 0005
 // and invariant 15.
-var taskIDPattern = regexp.MustCompile(`^agent-infra-[a-z0-9]{8}$`)
+var taskIDPattern = regexp.MustCompile(`^bones-[a-z0-9]{8}$`)
 
 // OpenTask creates a new task record with status=open and returns its
 // generated TaskID. Files must be non-empty, bounded by
@@ -130,7 +130,7 @@ func sortDedupFiles(in []string) []string {
 }
 
 // generateTaskID returns a freshly generated TaskID with the shape
-// fixed by ADR 0005: "agent-infra-" followed by taskIDSuffixLen
+// fixed by ADR 0005: "bones-" followed by taskIDSuffixLen
 // lowercase alphanumeric characters drawn uniformly from
 // taskIDAlphabet. Entropy comes from crypto/rand so the output is
 // unguessable; math/rand is never used because a predictable generator

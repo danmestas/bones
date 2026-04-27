@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
 // TestAsk_HappyPath exercises the full round-trip across two Coords that

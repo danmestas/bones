@@ -12,7 +12,7 @@ import (
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // TasksStatusCmd prints a one-shot snapshot of hub and backlog state.

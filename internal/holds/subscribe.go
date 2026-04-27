@@ -9,7 +9,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/danmestas/agent-infra/internal/assert"
+	"github.com/danmestas/bones/internal/assert"
 )
 
 // Subscribe opens a watch over all hold state changes. The returned

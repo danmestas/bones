@@ -11,7 +11,7 @@ import (
 	"github.com/danmestas/EdgeSync/leaf/agent"
 	"github.com/danmestas/libfossil"
 
-	"github.com/danmestas/agent-infra/internal/assert"
+	"github.com/danmestas/bones/internal/assert"
 )
 
 // Hub owns the orchestrator's hub fossil repo + HTTP xfer endpoint and

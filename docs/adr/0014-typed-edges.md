@@ -15,7 +15,7 @@ gap (ADR 0013). Phase 6's charter is "beads capability closure" — walk
 row. The largest unshipped beads capability is the typed dependency graph:
 `bd dep add`, `bd dep remove`, and the ready/blocked DAG that consumes it.
 
-Without typed edges, agent-infra cannot express:
+Without typed edges, bones cannot express:
 
 - **Blocking** — "task B waits on task A" is encodable only as a free-text
   note. `coord.Ready` surfaces both A and B indiscriminately, forcing callers

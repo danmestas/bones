@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/holds"
+	"github.com/danmestas/bones/internal/holds"
 )
 
 func TestTTL_ExpiryMakesWhoHasReturnFalse(t *testing.T) {

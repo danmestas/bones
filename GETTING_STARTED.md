@@ -8,7 +8,7 @@
 
 ## 1. What you're looking at
 
-`agent-infra` is a Go project for **multi-agent coordination primitives**:
+`bones` is a Go project for **multi-agent coordination primitives**:
 a durable + real-time substrate that lets 5–10 AI coding agents collaborate
 on a single codebase without the git-branching cleanup tax that bites
 traditional multi-writer setups.
@@ -24,7 +24,7 @@ provide natively.
 
 ## 2. Current state (as of 2026-04-18)
 
-- Project directory created at `/Users/dmestas/projects/agent-infra`
+- Project directory created at `/Users/dmestas/projects/bones`
 - `README.md` drafted with full plan, open questions, phase breakdown
 - `reference/beads/` cloned — the audit target
 - No Go code yet. No `go.mod`, no `go.work`. Phase 0 scaffolding only.
@@ -45,7 +45,7 @@ the full sequence through Phase 8.
 
 A read-only clone of the beads project lives at `reference/beads/` as
 the design audit target (see `reference/CAPABILITIES.md` for the
-beads-feature → agent-infra-equivalent mapping). Beads was briefly used
+beads-feature → bones-equivalent mapping). Beads was briefly used
 as this repo's installed task tracker during Phase 6 planning and was
 removed on 2026-04-23 — see
 [ADR 0017](./docs/adr/0017-beads-removal.md). Only the audit-target
@@ -141,8 +141,8 @@ guard against:
   separate consumer codebase the user will build later. If you find
   yourself designing workflow DSLs, YAML task graphs, or "smart"
   scheduling, stop — that's out of scope.
-- **Dependency arrow is one-way.** `agent-infra → EdgeSync → libfossil`.
-  If you see EdgeSync reaching *up* into agent-infra, it's wrong — push
+- **Dependency arrow is one-way.** `bones → EdgeSync → libfossil`.
+  If you see EdgeSync reaching *up* into bones, it's wrong — push
   the primitive the other direction.
 - **NATS is consumed, not extended.** No upstream PRs to `nats-server` or
   `nats.go` from this project.
@@ -170,7 +170,7 @@ guard against:
 - **Project shape unclear?** Re-read `README.md` §Architecture and §Goals.
 - **Beads capabilities unclear?** Skim `reference/beads/README.md` and
   `reference/beads/docs/`.
-- **Whether something belongs in agent-infra vs EdgeSync?** If it's
+- **Whether something belongs in bones vs EdgeSync?** If it's
   agent-coordination primitives (holds, tasks, chat), it's here. If it's
   fossil-sync daemon or NATS mesh plumbing, it's EdgeSync.
 - **User preferences seem to contradict this doc?** User wins. Ask.

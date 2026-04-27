@@ -11,7 +11,7 @@ import (
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // TasksAggregateCmd produces a per-slot summary of tasks within a window.

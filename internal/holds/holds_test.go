@@ -10,8 +10,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/danmestas/agent-infra/internal/holds"
-	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+	"github.com/danmestas/bones/internal/holds"
+	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
 // openTestManager spins up a JetStream-enabled fixture and returns a

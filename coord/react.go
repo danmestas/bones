@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/danmestas/agent-infra/internal/assert"
+	"github.com/danmestas/bones/internal/assert"
 )
 
 // React posts a reaction to the message identified by messageID in the

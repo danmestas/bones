@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/chat"
-	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+	"github.com/danmestas/bones/internal/chat"
+	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
 // validConfig returns a fully-valid chat.Config bound to the given
@@ -18,8 +18,8 @@ import (
 func validConfig(t *testing.T) chat.Config {
 	t.Helper()
 	return chat.Config{
-		AgentID:        "agent-infra-testabcd",
-		ProjectPrefix:  "agent-infra",
+		AgentID:        "bones-testabcd",
+		ProjectPrefix:  "bones",
 		Nats:           nil, // filled in by caller
 		FossilRepoPath: filepath.Join(t.TempDir(), "chat.fossil"),
 		MaxSubscribers: 32,
@@ -158,19 +158,19 @@ const deterministicTestTimeout = 2 * time.Second
 // TestSend_DeterministicThreadAcrossManagers proves two Managers on
 // the same substrate that Send to the same caller name converge on one
 // notify thread. Manager A WatchAll-subscribes under project-prefix
-// "agent-infra"; Manager B Sends to "t1"; the message arrives on A's
+// "bones"; Manager B Sends to "t1"; the message arrives on A's
 // stream carrying the ThreadShort every Manager computes from
-// ("agent-infra", "t1"). That property is the whole of
-// agent-infra-x0t: cross-Manager identity falls out of the
+// ("bones", "t1"). That property is the whole of
+// bones-x0t: cross-Manager identity falls out of the
 // deterministic hash with no coordination substrate.
 func TestSend_DeterministicThreadAcrossManagers(t *testing.T) {
 	nc, _ := natstest.NewTestServer(t)
 
 	cfgA := validConfig(t)
-	cfgA.AgentID = "agent-infra-aaaa"
+	cfgA.AgentID = "bones-aaaa"
 	cfgA.Nats = nc
 	cfgB := validConfig(t)
-	cfgB.AgentID = "agent-infra-bbbb"
+	cfgB.AgentID = "bones-bbbb"
 	cfgB.Nats = nc
 
 	mA, err := chat.Open(context.Background(), cfgA)
@@ -249,14 +249,14 @@ func TestSend_DeterministicAcrossRestart(t *testing.T) {
 	nc, _ := natstest.NewTestServer(t)
 
 	cfgA := validConfig(t)
-	cfgA.AgentID = "agent-infra-aaaa"
+	cfgA.AgentID = "bones-aaaa"
 	cfgA.Nats = nc
 
 	// Watcher Manager stays up across the Send-close-Send cycle so we
 	// can read back both messages' ThreadShort without racing the
 	// NATS subscribe setup.
 	cfgW := validConfig(t)
-	cfgW.AgentID = "agent-infra-wwww"
+	cfgW.AgentID = "bones-wwww"
 	cfgW.Nats = nc
 	mW, err := chat.Open(context.Background(), cfgW)
 	if err != nil {
@@ -295,7 +295,7 @@ func TestSend_DeterministicAcrossRestart(t *testing.T) {
 	// from (ProjectPrefix, thread name), not from any per-Manager
 	// state, so the ThreadShort must match.
 	cfgB := validConfig(t)
-	cfgB.AgentID = "agent-infra-bbbb"
+	cfgB.AgentID = "bones-bbbb"
 	cfgB.Nats = nc
 	mB, err := chat.Open(context.Background(), cfgB)
 	if err != nil {
@@ -333,7 +333,7 @@ const reqRespTimeout = 2 * time.Second
 // TestWatch_NamedDelivery exercises the Watch path in isolation from
 // coord.Subscribe: Manager A subscribes to thread "t1" via Watch,
 // Manager B Sends to "t1", and A must receive the message. Both
-// Managers compute the same ThreadShort from SHA-256("agent-infra:t1")
+// Managers compute the same ThreadShort from SHA-256("bones:t1")
 // so the delivery path closes at the chat layer alone, not via the
 // coord wrapper. Also covers threadShort — the helper is unreachable
 // via WatchAll.
@@ -341,10 +341,10 @@ func TestWatch_NamedDelivery(t *testing.T) {
 	nc, _ := natstest.NewTestServer(t)
 
 	cfgA := validConfig(t)
-	cfgA.AgentID = "agent-infra-aaaa"
+	cfgA.AgentID = "bones-aaaa"
 	cfgA.Nats = nc
 	cfgB := validConfig(t)
-	cfgB.AgentID = "agent-infra-bbbb"
+	cfgB.AgentID = "bones-bbbb"
 	cfgB.FossilRepoPath = filepath.Join(t.TempDir(), "b.fossil")
 	cfgB.Nats = nc
 
@@ -421,10 +421,10 @@ func TestWatchPattern_WildcardDelivery(t *testing.T) {
 	nc, _ := natstest.NewTestServer(t)
 
 	cfgA := validConfig(t)
-	cfgA.AgentID = "agent-infra-aaaa"
+	cfgA.AgentID = "bones-aaaa"
 	cfgA.Nats = nc
 	cfgB := validConfig(t)
-	cfgB.AgentID = "agent-infra-bbbb"
+	cfgB.AgentID = "bones-bbbb"
 	cfgB.FossilRepoPath = filepath.Join(t.TempDir(), "b.fossil")
 	cfgB.Nats = nc
 

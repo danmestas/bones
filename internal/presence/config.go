@@ -5,7 +5,7 @@
 // multiplier requires an ADR amendment.
 //
 // This package is internal and unexported: callers outside
-// github.com/danmestas/agent-infra must not depend on it. The internal
+// github.com/danmestas/bones must not depend on it. The internal
 // Entry and Event types translate through coord/types.go and
 // coord/events.go into the public Presence DTO and PresenceChange
 // event per ADR 0003's substrate-hiding rule.
@@ -35,7 +35,7 @@ type Config struct {
 	Project string
 
 	// Bucket is the name of the JetStream KV bucket backing presence.
-	// Coord supplies agent-infra-presence; validated here so a
+	// Coord supplies bones-presence; validated here so a
 	// misconfiguration (empty) fails at Open rather than at first Put.
 	Bucket string
 

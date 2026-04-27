@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // The CAS tests live alongside tasks_test.go. They exercise the
@@ -27,7 +27,7 @@ func TestUpdate_CAS_RetryFires(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	id := "agent-infra-retry001"
+	id := "bones-retry001"
 
 	if err := m.Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -92,7 +92,7 @@ func TestUpdate_CAS_ConcurrentContention(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	id := "agent-infra-stress01"
+	id := "bones-stress01"
 
 	if err := m.Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -158,7 +158,7 @@ func TestUpdate_CAS_ExhaustedRetries(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	id := "agent-infra-exhaust0"
+	id := "bones-exhaust0"
 
 	if err := m.Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)

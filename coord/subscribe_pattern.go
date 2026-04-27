@@ -3,7 +3,7 @@ package coord
 import (
 	"context"
 
-	"github.com/danmestas/agent-infra/internal/assert"
+	"github.com/danmestas/bones/internal/assert"
 )
 
 // SubscribePattern returns a channel of coord.Event values for every

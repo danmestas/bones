@@ -8,7 +8,7 @@ import (
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
-	"github.com/danmestas/agent-infra/coord"
+	"github.com/danmestas/bones/coord"
 )
 
 // TasksPrimeCmd prints an agent context summary (open/ready/claimed tasks,
