@@ -19,9 +19,10 @@ PR-creation log line for v1."* Today, code agents produce never lands in
 git — the human extracts files from a Fossil checkout manually.
 
 The narrowest fix: open the orchestrator's Fossil checkout *at the host
-project root* itself, with Fossil metadata gitignored. After all
-subagents complete, `fossil pull && fossil update` materializes the
-merged hub tip into the working tree as ordinary file contents. From
+project root* itself, with Fossil metadata gitignored. The checkout
+shares the hub repo file directly, so when leaves autosync their
+commits to the hub, `fossil update` alone reads the new tip and
+materializes it into the working tree as ordinary file contents. From
 there `git add/commit/push` is the standard flow.
 
 The alternative — a `coord.Export(ctx, rev) ([]File, error)` primitive
@@ -73,16 +74,17 @@ or accept that the swarm sees only the tracked state.
 
 ### 4. Completion materializes merged tip into the working tree
 
-The orchestrator skill's Step 6 (Completion) gains two new commands
+The orchestrator skill's Step 6 (Completion) gains a new command
 before the summary:
 
 ```
-fossil pull
 fossil update
 ```
 
-`fossil pull` fetches the merged hub tip into the local checkout.
-`fossil update` applies it to the working tree. Files committed by
+Because the orchestrator's checkout shares the hub repo file directly
+(opened locally by `hub-bootstrap.sh` rather than cloned), no `pull` is
+required — `fossil update` reads the autosynced tip from the shared
+`.fossil` file and applies it to the working tree. Files committed by
 subagents now appear as ordinary file changes.
 
 Followed by `git status` (informational) so the user sees exactly what

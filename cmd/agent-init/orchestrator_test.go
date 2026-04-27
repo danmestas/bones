@@ -155,8 +155,7 @@ func TestRunOrchestrator_SkillHasADR0024Completion(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"fossil pull",   // pulls merged tip (ADR 0024 §4)
-		"fossil update", // materializes into worktree (ADR 0024 §4)
+		"fossil update", // materializes merged tip into worktree (ADR 0024 §4)
 	} {
 		if !strings.Contains(string(skill), want) {
 			t.Errorf("orchestrator SKILL.md missing %q (ADR 0024)", want)
