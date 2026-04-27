@@ -26,7 +26,7 @@ import (
 // also emits a JSON slot→task mapping to stdout on success.
 type ValidatePlanCmd struct {
 	Path      string `arg:"" type:"existingfile" help:"Markdown plan path"`
-	ListSlots bool   `name:"list-slots" help:"emit JSON slot→task list to stdout (still runs validation)"`
+	ListSlots bool   `name:"list-slots" help:"emit JSON slot→task list (still runs validation)"`
 }
 
 func (c *ValidatePlanCmd) Run(g *libfossilcli.Globals) error {

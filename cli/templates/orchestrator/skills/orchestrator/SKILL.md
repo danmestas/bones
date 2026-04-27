@@ -12,11 +12,14 @@ their progress, and clean up at completion.
 
 ## Step 1: Validate the plan
 
-Run the validator binary against the plan path the user provided:
+Run the validator against the plan path the user provided:
 
 ```
-go run ./cmd/orchestrator-validate-plan/ <plan-path>
+bones validate-plan <plan-path>
 ```
+
+(Or `go run ./cmd/bones/ validate-plan <plan-path>` if the binary
+isn't on `$PATH`.)
 
 If it exits non-zero, print the violations and stop. Do not dispatch
 subagents against an invalid plan. Tell the user which lines failed and

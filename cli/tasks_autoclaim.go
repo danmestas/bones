@@ -15,8 +15,8 @@ import (
 
 // TasksAutoclaimCmd runs a single autoclaim tick.
 type TasksAutoclaimCmd struct {
-	Enabled  *bool         `name:"enabled" help:"enable one auto-claim tick (default: env AGENT_INFRA_AUTOCLAIM)"`
-	Idle     bool          `name:"idle" default:"true" help:"treat the session as idle for this single tick"`
+	Enabled  *bool         `name:"enabled" help:"enable tick (default: env AGENT_INFRA_AUTOCLAIM)"`
+	Idle     bool          `name:"idle" default:"true" help:"treat session as idle for this tick"`
 	ClaimTTL time.Duration `name:"claim-ttl" default:"1m" help:"claim TTL for auto-claimed task"`
 }
 

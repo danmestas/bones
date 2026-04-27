@@ -21,7 +21,7 @@ type TasksUpdateCmd struct {
 	Files      *string  `name:"files" help:"comma-separated file list (replaces existing)"`
 	Parent     *string  `name:"parent" help:"parent task id"`
 	DeferUntil *string  `name:"defer-until" help:"RFC3339 time (empty clears)"`
-	Context    []string `name:"context" help:"key=value (repeatable; merges with existing)" sep:"none"`
+	Context    []string `name:"context" help:"key=value (repeatable; merges)" sep:"none"`
 	ClaimedBy  *string  `name:"claimed-by" help:"agent id to claim as"`
 	JSON       bool     `name:"json" help:"emit JSON"`
 }

@@ -20,7 +20,7 @@ import (
 // claimed task accordingly.
 type TasksDispatchParentCmd struct {
 	TaskID             string `name:"task-id" required:"" help:"task id"`
-	WorkerBin          string `name:"worker-bin" help:"worker binary path (defaults to current process)"`
+	WorkerBin          string `name:"worker-bin" help:"worker binary path (default: this process)"`
 	WorkerResult       string `name:"worker-result" default:"success" help:"worker final result"`
 	WorkerSummary      string `name:"worker-summary" default:"done" help:"worker final summary"`
 	WorkerClaimHandoff bool   `name:"worker-claim-handoff" help:"worker takes claim ownership"`
@@ -110,8 +110,8 @@ type TasksDispatchWorkerCmd struct {
 	TaskThread       string        `name:"task-thread" required:"" help:"task chat thread"`
 	WorkerAgentID    string        `name:"worker-agent-id" required:"" help:"worker agent id"`
 	ClaimFromAgentID string        `name:"claim-from-agent-id" help:"expected previous claimer"`
-	HandoffTTL       time.Duration `name:"handoff-ttl" help:"handoff hold ttl (defaults to coord HoldTTLDefault)"`
-	Result           string        `name:"result" default:"success" help:"final result: success|fork|fail"`
+	HandoffTTL       time.Duration `name:"handoff-ttl" help:"handoff hold ttl"`
+	Result           string        `name:"result" default:"success" help:"success|fork|fail"`
 	Summary          string        `name:"summary" default:"done" help:"final summary"`
 	Branch           string        `name:"branch" help:"fork branch"`
 	Rev              string        `name:"rev" help:"fork rev"`
