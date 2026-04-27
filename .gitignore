@@ -24,3 +24,8 @@ go.work.sum
 
 # Claude Code / scheduled_tasks runtime state (local-only).
 .claude/
+
+# Orchestrator runtime + Fossil checkout-at-root (ADR 0024)
+.fslckout
+.fossil-settings/
+.orchestrator/
