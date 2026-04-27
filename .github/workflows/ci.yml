@@ -64,11 +64,11 @@ jobs:
           make leaf
           echo "LEAF_BIN=$GITHUB_WORKSPACE/EdgeSync/bin/leaf" >> $GITHUB_ENV
 
-      - name: Build agent-init binary
+      - name: Build bones binary
         working-directory: agent-infra
         run: |
-          make agent-init
-          echo "AGENT_INIT_BIN=$GITHUB_WORKSPACE/agent-infra/bin/agent-init" >> $GITHUB_ENV
+          make bones
+          echo "BONES_BIN=$GITHUB_WORKSPACE/agent-infra/bin/bones" >> $GITHUB_ENV
 
       - name: make check
         working-directory: agent-infra
