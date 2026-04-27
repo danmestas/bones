@@ -1,6 +1,7 @@
 
 # Built binaries
 bin/
+/agent-init
 /agent-tasks
 # examples/* leave these in cwd when run without -o or from the repo root.
 /two-agents
@@ -24,3 +25,12 @@ go.work.sum
 
 # Claude Code / scheduled_tasks runtime state (local-only).
 .claude/
+
+# Orchestrator runtime + Fossil checkout-at-root (ADR 0024)
+.fslckout
+.fossil-settings/
+.orchestrator/
+
+# Local scratch — code reviews and implementation plans (ephemeral, per-session)
+docs/code-review/
+docs/plans/
