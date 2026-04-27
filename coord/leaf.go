@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/danmestas/EdgeSync/leaf/agent"
 	"github.com/danmestas/libfossil"
@@ -51,13 +52,16 @@ func (c *Claim) Release() error {
 // paths route through it. The substrate (l.coord.sub) does NOT carry
 // its own fossil field.
 type Leaf struct {
-	agent    *agent.Agent
-	coord    *Coord
-	repoPath string
-	wtPath   string
-	slotID   string
-	mu       sync.Mutex
-	stopped  bool
+	agent      *agent.Agent
+	coord      *Coord
+	repoPath   string
+	wtPath     string
+	slotID     string
+	claimTTL   time.Duration     // zero → use substrate HoldTTLDefault
+	fossilUser string            // commit author; empty → fall back to slotID
+	metadata   map[string]string // harness-supplied opaque key=value pairs
+	mu         sync.Mutex
+	stopped    bool
 }
 
 // LeafConfig is the configuration passed to OpenLeaf. Hub is required and
@@ -72,6 +76,27 @@ type LeafConfig struct {
 
 	// SlotID is the unique identifier for this leaf slot. Required.
 	SlotID string
+
+	// ClaimTTL overrides Tuning.HoldTTLDefault for this leaf's claims.
+	// Zero means use the substrate's default (30s).
+	ClaimTTL time.Duration
+
+	// FossilUser overrides the fossil user set on commits and sync
+	// handshakes for this leaf. When empty, SlotID is used as the
+	// commit author and the clone is performed as unauthenticated
+	// "nobody" (required — SlotID isn't in the hub's user table so
+	// passing it during clone would fail authentication).
+	FossilUser string
+
+	// PollInterval overrides the leaf.Agent poll cadence (default 5s).
+	// Zero means use the agent default. Lower for tight-loop tests,
+	// higher for human-cadence work.
+	PollInterval time.Duration
+
+	// Metadata is opaque key=value pairs the harness wants to attach
+	// to the leaf for its own bookkeeping. Not used by coord; stored
+	// on *Leaf so harnesses can call l.Metadata("foo").
+	Metadata map[string]string
 }
 
 // OpenLeaf starts a leaf at cfg.Workdir/<cfg.SlotID>/leaf.fossil that
@@ -126,6 +151,17 @@ func OpenLeaf(ctx context.Context, cfg LeafConfig) (*Leaf, error) {
 		Push:         true,
 		Autosync:     agent.AutosyncOff,
 	}
+	if cfg.PollInterval != 0 {
+		agentCfg.PollInterval = cfg.PollInterval
+	}
+	// FossilUser: used as the User field on sync handshakes. The clone
+	// at open time is always unauthenticated ("nobody") regardless of
+	// FossilUser — SlotID isn't in the hub's user table and setting User
+	// during clone would fail authentication. FossilUser only affects
+	// post-clone sync sessions and Commit author attribution.
+	if cfg.FossilUser != "" {
+		agentCfg.User = cfg.FossilUser
+	}
 	a, err := agent.New(agentCfg)
 	if err != nil {
 		return nil, fmt.Errorf("coord.OpenLeaf: agent.New: %w", err)
@@ -162,11 +198,14 @@ func OpenLeaf(ctx context.Context, cfg LeafConfig) (*Leaf, error) {
 	}
 
 	return &Leaf{
-		agent:    a,
-		coord:    cc,
-		repoPath: repoPath,
-		wtPath:   wtPath,
-		slotID:   cfg.SlotID,
+		agent:      a,
+		coord:      cc,
+		repoPath:   repoPath,
+		wtPath:     wtPath,
+		slotID:     cfg.SlotID,
+		claimTTL:   cfg.ClaimTTL,
+		fossilUser: cfg.FossilUser,
+		metadata:   cfg.Metadata,
 	}, nil
 }
 
@@ -201,7 +240,11 @@ func (l *Leaf) OpenTask(ctx context.Context, title string, files []string) (Task
 func (l *Leaf) Claim(ctx context.Context, taskID TaskID) (*Claim, error) {
 	assert.NotNil(l, "coord.Leaf.Claim: receiver is nil")
 	assert.NotNil(ctx, "coord.Leaf.Claim: ctx is nil")
-	rel, err := l.coord.Claim(ctx, taskID, l.coord.cfg.Tuning.HoldTTLDefault)
+	ttl := l.coord.cfg.Tuning.HoldTTLDefault
+	if l.claimTTL != 0 {
+		ttl = l.claimTTL
+	}
+	rel, err := l.coord.Claim(ctx, taskID, ttl)
 	if err != nil {
 		return nil, err
 	}
@@ -247,10 +290,14 @@ func (l *Leaf) Commit(ctx context.Context, claim *Claim, files []File) (string, 
 			Content: f.Content,
 		})
 	}
+	commitUser := l.slotID
+	if l.fossilUser != "" {
+		commitUser = l.fossilUser
+	}
 	_, uuid, err := repo.Commit(libfossil.CommitOpts{
 		Files:   toCommit,
 		Comment: commitMessage(claim),
-		User:    l.slotID,
+		User:    commitUser,
 	})
 	if err != nil {
 		return "", fmt.Errorf("coord.Leaf.Commit: %w", err)
@@ -325,6 +372,14 @@ func (l *Leaf) Tip(ctx context.Context) (string, error) {
 func (l *Leaf) WT() string {
 	assert.NotNil(l, "coord.Leaf.WT: receiver is nil")
 	return l.wtPath
+}
+
+// Metadata returns the value associated with key in the harness-supplied
+// metadata map (from LeafConfig.Metadata). Returns "" if the key is
+// absent or if no metadata was provided.
+func (l *Leaf) Metadata(key string) string {
+	assert.NotNil(l, "coord.Leaf.Metadata: receiver is nil")
+	return l.metadata[key]
 }
 
 // Stop shuts down the underlying leaf.Agent. Idempotent.
