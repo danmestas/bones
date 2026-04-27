@@ -2,14 +2,8 @@ module github.com/danmestas/agent-infra
 
 go 1.26.0
 
-// EdgeSync is private; both local development and CI consume it via a
-// sibling checkout. CI's ci.yml clones github.com/danmestas/EdgeSync to
-// ../EdgeSync; local devs are expected to have the same layout. Drop
-// this replace once EdgeSync is published or moves to a public mirror.
-replace github.com/danmestas/EdgeSync/leaf => ../EdgeSync/leaf
-
 require (
-	github.com/danmestas/EdgeSync/leaf v0.0.1
+	github.com/danmestas/EdgeSync/leaf v0.0.3
 	github.com/danmestas/libfossil v0.4.3
 	github.com/danmestas/libfossil/db/driver/modernc v0.1.0
 	github.com/google/uuid v1.6.0

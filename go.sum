@@ -4,10 +4,10 @@ github.com/cenkalti/backoff/v5 v5.0.3 h1:ZN+IMa753KfX5hd8vVaMixjnqRZ3y8CuJKRKj1x
 github.com/cenkalti/backoff/v5 v5.0.3/go.mod h1:rkhZdG3JZukswDf7f0cwqPNk4K0sa+F97BxZthm/crw=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
+github.com/danmestas/EdgeSync/leaf v0.0.3 h1:uJf9j6K2Eg5ljgaDidWLgd8oPfzxXmkUpflSm4xIv/0=
+github.com/danmestas/EdgeSync/leaf v0.0.3/go.mod h1:Et+E0lMUaAgk58pMLauIvSjeeMnS2+bZJeDZEkwF4h8=
 github.com/danmestas/go-sqlite3-opfs v0.2.0 h1:bO6iQYobgWCqTCQZ4NQ147x3yU2v+J+nn0Sq3y1b7sk=
 github.com/danmestas/go-sqlite3-opfs v0.2.0/go.mod h1:eAYxwG9hykpkB6oNMnsM8sSGB9HhHZv/NIN6yO9ZVQE=
-github.com/danmestas/libfossil v0.4.2 h1:404ujpTed0UHmQgmZ3vor1Qal5WDNg9a1fLObaSfsfI=
-github.com/danmestas/libfossil v0.4.2/go.mod h1:Ex+ADZ0kBLkBhSqnyrKg+KHbANVyQpKEWvVHUq8qMLc=
 github.com/danmestas/libfossil v0.4.3 h1:Oo/0T4KgovoYfvUtXVsTNnyprvWYtaN1u0dWwIZ+zYw=
 github.com/danmestas/libfossil v0.4.3/go.mod h1:Ex+ADZ0kBLkBhSqnyrKg+KHbANVyQpKEWvVHUq8qMLc=
 github.com/danmestas/libfossil/db/driver/modernc v0.1.0 h1:w3elyVSdXdbGNZ3Iu9xE6RP4XTz6JRlkpk0RZKBMl1Y=
