@@ -159,7 +159,7 @@ guard against:
 
 - `coord/` — the single public Go package agents import
 - `internal/holds/`, `internal/tasks/` — implementation detail
-- `cmd/agent-init/`, `cmd/agent-tasks/` — CLI binaries
+- `cmd/bones/` — unified CLI binary (init/up/orchestrator + tasks subcommands)
 - Tasks stored as files under `tasks/` in the fossil repo (Phase 2
   decision — subject to revisit)
 - Pre-commit hook that blocks imports from `EdgeSync/internal/` or
