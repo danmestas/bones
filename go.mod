@@ -2,13 +2,6 @@ module github.com/danmestas/agent-infra
 
 go 1.26.0
 
-// EdgeSync is private. CI authenticates `go get` against it via a
-// PAT-driven URL-insteadOf git rewrite plus GOPRIVATE — see
-// .github/workflows/ci.yml. Local devs need GOPRIVATE=github.com/danmestas/*
-// and either a `gh auth git-credential` configured netrc or an SSH
-// rewrite. Once EdgeSync moves to a public repo, no env setup is
-// needed and this comment can be deleted.
-
 require (
 	github.com/alecthomas/kong v1.15.0
 	github.com/danmestas/EdgeSync v0.0.5
@@ -47,14 +40,8 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
-	go.opentelemetry.io/contrib/bridges/otelslog v0.17.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.67.0 // indirect
-	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.19.0 // indirect
-	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.43.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.43.0 // indirect
-	go.opentelemetry.io/otel/log v0.19.0 // indirect
-	go.opentelemetry.io/otel/sdk/log v0.19.0 // indirect
-	go.opentelemetry.io/otel/sdk/metric v1.43.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
 	golang.org/x/crypto v0.49.0 // indirect
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
