@@ -2,13 +2,12 @@ module github.com/danmestas/agent-infra
 
 go 1.26.0
 
-// EdgeSync is currently a private repo, so `go get` against the v0.0.3
-// tag fails in CI ("fatal: could not read Username for 'https://github.com'").
-// CI's ci.yml clones github.com/danmestas/EdgeSync to ../EdgeSync (the
-// sibling layout) and the replace directive points the leaf module at
-// that local clone. Local devs use the same layout. Drop this replace
-// once EdgeSync moves to a public repo (or a public mirror).
-replace github.com/danmestas/EdgeSync/leaf => ../EdgeSync/leaf
+// EdgeSync is private. CI authenticates `go get` against it via a
+// PAT-driven URL-insteadOf git rewrite plus GOPRIVATE — see
+// .github/workflows/ci.yml. Local devs need GOPRIVATE=github.com/danmestas/*
+// and either a `gh auth git-credential` configured netrc or an SSH
+// rewrite. Once EdgeSync moves to a public repo, no env setup is
+// needed and this comment can be deleted.
 
 require (
 	github.com/danmestas/EdgeSync/leaf v0.0.3
