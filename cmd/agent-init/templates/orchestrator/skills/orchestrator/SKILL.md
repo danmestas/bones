@@ -90,10 +90,23 @@ When all subagents return:
    fossil timeline --type ci -R .orchestrator/hub.fossil --limit <N>
    ```
 
-2. Print a summary: slots completed, tasks per slot, fork retries (from
+2. Materialize the merged tip into the host project's working tree
+   (per ADR 0024). The orchestrator's Fossil checkout is opened at the
+   project root by `hub-bootstrap.sh`; pulling and updating writes the
+   swarm's commits onto disk as ordinary file changes. Run from the
+   project root (where `.fslckout` lives):
+
+   ```
+   ROOT="$(git rev-parse --show-toplevel)"
+   (cd "$ROOT" && fossil pull && fossil update && git status)
+   ```
+
+3. Print a summary: slots completed, tasks per slot, fork retries (from
    span data if available), unrecoverable conflicts.
 
-3. (v2 stub for now) Log "PR generation skipped — implement in v2".
+4. Tell the user: "Swarm complete. Review with `git diff`. Stage the
+   files you want with `git add -u` (modified) or `git add <paths>`
+   (specific), then `git commit -m '...' && git push`."
 
 The hub itself stays running across the session — Stop hook will tear it
 down.
@@ -108,7 +121,8 @@ down.
 
 ## What this skill does NOT do (v2 work)
 
-- GitHub PR creation
+- Auto git-add/commit/push (user runs these after Step 6)
+- GitHub PR creation (user runs `gh pr create` after committing)
 - Remote-harness subagents (multi-cloud)
 - Auto-replan on conflict
 - Multi-session hub coordination beyond persistence
