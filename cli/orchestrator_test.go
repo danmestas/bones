@@ -19,6 +19,7 @@ func TestScaffoldOrchestrator_FreshWorkspace(t *testing.T) {
 		".orchestrator/.gitignore",
 		".claude/skills/orchestrator/SKILL.md",
 		".claude/skills/subagent/SKILL.md",
+		".claude/skills/uninstall-bones/SKILL.md",
 		".claude/settings.json",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, want)); err != nil {

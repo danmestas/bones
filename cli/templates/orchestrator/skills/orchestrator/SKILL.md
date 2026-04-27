@@ -10,6 +10,20 @@ You are the orchestrator. Your job is to validate a plan, bootstrap a hub
 (if it isn't already up), dispatch one Task-tool subagent per slot, monitor
 their progress, and clean up at completion.
 
+## Prerequisites
+
+This skill assumes the `bones` binary is on `$PATH` (it was when the skill
+was scaffolded). If `bones` is not found, stop and tell the user to reinstall:
+
+```
+brew install danmestas/tap/bones
+# or
+go install github.com/danmestas/bones/cmd/bones@latest
+# or download from https://github.com/danmestas/bones/releases
+```
+
+Do not auto-install. Wait for the user.
+
 ## Step 1: Validate the plan
 
 Run the validator against the plan path the user provided:
