@@ -40,7 +40,8 @@ if [[ ! -f "$HUB_REPO" ]]; then
             exit 1
         fi
         git ls-files -z | xargs -0 fossil add >/dev/null
-        fossil commit -m "session base: $(git rev-parse --short HEAD)" >/dev/null
+        fossil commit --user orchestrator \
+            -m "session base: $(git rev-parse --short HEAD)" >/dev/null
     )
 fi
 
