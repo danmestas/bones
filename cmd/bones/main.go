@@ -9,6 +9,9 @@
 package main
 
 import (
+	"fmt"
+	"os"
+
 	"github.com/alecthomas/kong"
 	_ "github.com/danmestas/libfossil/db/driver/modernc"
 )
@@ -19,7 +22,18 @@ func main() {
 		kong.Name("bones"),
 		kong.Description("agent-infra unified CLI: workspace, orchestrator, tasks"),
 		kong.UsageOnError(),
+		// Match the exit codes the deleted agent-init/agent-tasks CLIs used:
+		// argument errors exit 1, not Kong's default 80, so existing harness
+		// scripts and the integration suite stay portable.
+		kong.Exit(func(code int) {
+			if code == 80 {
+				code = 1
+			}
+			os.Exit(code)
+		}),
 	)
-	err := ctx.Run(&c.Globals)
-	ctx.FatalIfErrorf(err)
+	if err := ctx.Run(&c.Globals); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }
