@@ -47,7 +47,7 @@ func ensureGitignoreEntries(dir string) error {
 	if err != nil {
 		return fmt.Errorf("open .gitignore: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	header := "\n# Orchestrator runtime + Fossil checkout-at-root (ADR 0024)\n"
 	if _, err := f.WriteString(header); err != nil {
