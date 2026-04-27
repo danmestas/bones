@@ -54,12 +54,14 @@ For each slot, invoke the Task tool with:
 
   > You are a subagent for slot=<name> in a hub-leaf orchestration. Use
   > the `subagent` skill. Your environment:
-  > - LEAF_REPO: .orchestrator/leaves/<slot>/leaf.fossil
-  > - LEAF_WT:   .orchestrator/leaves/<slot>/wt
-  > - HUB_URL:   http://127.0.0.1:8765
-  > - NATS_URL:  nats://127.0.0.1:4222
   > - AGENT_ID:  <slot>
   > - SLOT_ID:   <slot>
+  > - HUB_URL:   http://127.0.0.1:8765
+  > - NATS_URL:  nats://127.0.0.1:4222
+  > - WORKDIR:   .orchestrator/leaves
+  >
+  > (LEAF_REPO and LEAF_WT are no longer injected — coord.OpenLeaf owns
+  > those paths under WORKDIR/<slot>/. See the subagent skill for details.)
   >
   > Your task list follows. Execute it; emit one fossil commit per task.
 
