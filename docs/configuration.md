@@ -5,19 +5,19 @@ Listed alphabetically by prefix.
 
 ## AGENT_INFRA_*
 
-- `AGENT_INFRA_AUTOCLAIM` — enable/disable the `agent-tasks autoclaim` tick.
+- `AGENT_INFRA_AUTOCLAIM` — enable/disable the `bones tasks autoclaim` tick.
   Accepted values: `1`, `true`, `yes` (enable); `0`, `false`, `no` (disable).
-  Used by: `bin/agent-tasks` (`autoclaim` subcommand).
+  Used by: `bin/bones tasks autoclaim`.
 
 - `AGENT_INFRA_LOG=json` — switch slog handler to JSON output on stderr.
   Default: human-readable text.
-  Used by: `bin/agent-init`, `bin/agent-tasks`.
+  Used by: `bin/bones`.
 
 ## EDGESYNC_*
 
 - `EDGESYNC_DIR` — path to the EdgeSync sibling repository.
   Default: `$ROOT/../EdgeSync` (where `$ROOT` is the agent-infra workspace root).
-  Used by: `.orchestrator/scripts/hub-bootstrap.sh`, `agent-init up`.
+  Used by: `.orchestrator/scripts/hub-bootstrap.sh`, `bones up`.
 
 ## HERD_*
 
@@ -42,7 +42,7 @@ that `hub-bootstrap.sh` and agent-infra's workspace package use:
   If unset, `hub-bootstrap.sh` resolves the binary in priority order:
   `$ROOT/bin/leaf` → `$EDGESYNC_DIR/bin/leaf` → `leaf` on `$PATH` →
   build from `$EDGESYNC_DIR/leaf/cmd/leaf`.
-  Used by: `.orchestrator/scripts/hub-bootstrap.sh`, `agent-init up`,
+  Used by: `.orchestrator/scripts/hub-bootstrap.sh`, `bones up`,
   `internal/workspace`, `examples/two-agents`.
 
 - `LEAF_NATS_CLIENT_PORT` — TCP port for the embedded NATS server started by
@@ -75,16 +75,16 @@ disabled (no-op) and the binary runs normally.
 
 - `OTEL_EXPORTER_OTLP_ENDPOINT` — OTLP collector endpoint
   (e.g. `https://api.honeycomb.io`).
-  Used by: `bin/agent-init`, `bin/agent-tasks`, `examples/herd-hub-leaf`.
+  Used by: `bin/bones`, `examples/herd-hub-leaf`.
   Note: `hub-bootstrap.sh` **unsets** this var in the hub process env to
   prevent the hub from blocking on a slow or unreachable collector.
 
 - `OTEL_EXPORTER_OTLP_HEADERS` — key=value pairs passed to the OTLP exporter,
   comma-separated (e.g. `x-honeycomb-team=abc123`).
-  Used by: `bin/agent-init`, `bin/agent-tasks`.
+  Used by: `bin/bones`.
 
 - `OTEL_SERVICE_NAME` — service name tag for traces and metrics.
-  Defaults: `agent-init` (bin/agent-init), `agent-tasks` (bin/agent-tasks),
+  Defaults: `bones` (bin/bones),
   `herd-hub-leaf` (examples/herd-hub-leaf), `edgesync-leaf` (bin/leaf).
   Used by: `examples/herd-hub-leaf` (reads directly); other binaries pass the
   default via `telemetry.TelemetryConfig.ServiceName`.

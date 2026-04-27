@@ -84,7 +84,7 @@ unclaimed" is the contract.
 **Opt-out.** Env var `AGENT_INFRA_AUTOCLAIM=0|false|no` disables the
 tick at the CLI layer; CLI flag `--autoclaim=false` overrides env.
 
-**Hook wiring.** `.claude/settings.json` runs `agent-tasks autoclaim`
+**Hook wiring.** `.claude/settings.json` runs `bones tasks autoclaim`
 on Stop and PreCompact hooks (so a session-idle moment becomes a
 claim-tick opportunity).
 
@@ -107,7 +107,7 @@ files, parent id, edges, thread id, parent agent id, worker agent id,
 workspace dir. Encoded as JSON on stdin so the worker doesn't have to
 re-Get the task record.
 
-**Worker command contract.** Parent launches `agent-tasks dispatch worker
+**Worker command contract.** Parent launches `bones tasks dispatch worker
 ...`. Worker mode is a self-exec branch of the same binary, not a hidden
 internal function. Operator-introspectable.
 

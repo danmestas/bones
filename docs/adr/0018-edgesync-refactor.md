@@ -132,7 +132,7 @@ EdgeSync upstream changes required:
 
 agent-infra's chat and workspace continue to import libfossil
 directly — explicit scope limit, not an oversight. Other callers
-(`coord/`, both example harnesses, `cmd/orchestrator-validate-plan/`)
+(`coord/`, both example harnesses, `cmd/bones/`)
 flow through `coord.Hub`/`coord.Leaf`.
 
 `.orchestrator/scripts/hub-bootstrap.sh` now spawns
