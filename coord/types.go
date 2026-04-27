@@ -106,19 +106,25 @@ func taskFromRecord(rec tasks.Task) Task {
 	}
 }
 
-// EdgeType re-exports tasks.EdgeType so callers do not import
-// internal/tasks. See ADR 0014.
-type EdgeType = tasks.EdgeType
+// EdgeType names a typed outgoing relationship from one task to another.
+// Using a type definition (not alias) keeps tasks.EdgeType out of coord's
+// diagnostic output per Ousterhout review #11.
+type EdgeType string
 
 const (
-	EdgeBlocks         = tasks.EdgeBlocks
-	EdgeDiscoveredFrom = tasks.EdgeDiscoveredFrom
-	EdgeSupersedes     = tasks.EdgeSupersedes
-	EdgeDuplicates     = tasks.EdgeDuplicates
+	EdgeBlocks         EdgeType = "blocks"
+	EdgeDiscoveredFrom EdgeType = "discovered-from"
+	EdgeSupersedes     EdgeType = "supersedes"
+	EdgeDuplicates     EdgeType = "duplicates"
 )
 
-// Edge re-exports tasks.Edge. See ADR 0014.
-type Edge = tasks.Edge
+// Edge is a typed outgoing relationship between two tasks.
+// Using a type definition (not alias) keeps tasks.Edge out of coord's
+// diagnostic output per Ousterhout review #11.
+type Edge struct {
+	Type   EdgeType
+	Target string
+}
 
 // RevID is the opaque identifier of a committed revision in the
 // code-artifact Fossil substrate per ADR 0010. Treated as opaque by

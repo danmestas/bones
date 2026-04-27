@@ -3,35 +3,30 @@ package coord
 import (
 	"bytes"
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/danmestas/EdgeSync/leaf/agent/notify"
-
-	"github.com/danmestas/agent-infra/internal/testutil/natstest"
 )
 
-func TestPostMedia_HappyPath(t *testing.T) {
-	nc, _ := natstest.NewJetStreamServer(t)
-	url := nc.ConnectedUrl()
-	sharedRepo := filepath.Join(t.TempDir(), "shared-code.fossil")
-	cA := newCoordWithCodeRepo(t, url, "agent-A", sharedRepo)
-	cB := newCoordWithCodeRepo(t, url, "agent-B", sharedRepo)
+// TestLeaf_PostMedia_HappyPath posts an opaque media blob through
+// Leaf.PostMedia and asserts (a) the chat substrate delivers a
+// MediaMessage envelope to a Subscribe consumer, (b) the rev/path on
+// the envelope round-trip the original bytes from the leaf's libfossil
+// repo. The same Leaf is both producer and consumer; cross-process
+// propagation is covered by leaf_commit_test.go's hub-tip assertion.
+func TestLeaf_PostMedia_HappyPath(t *testing.T) {
+	l, _ := openLeafFixture(t, "slot-M")
+	ctx := context.Background()
 
-	events, closeSub, err := cB.Subscribe(context.Background(), "t1")
+	events, closeSub, err := l.coord.Subscribe(ctx, "t1")
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer func() { _ = closeSub() }()
 
 	wantData := []byte("fake-png-bytes")
-	if err := cA.PostMedia(
-		context.Background(),
-		"t1",
-		"image/png",
-		wantData,
-	); err != nil {
+	if err := l.PostMedia(ctx, "t1", "image/png", wantData); err != nil {
 		t.Fatalf("PostMedia: %v", err)
 	}
 
@@ -43,9 +38,6 @@ func TestPostMedia_HappyPath(t *testing.T) {
 		media, isMedia := evt.(MediaMessage)
 		if !isMedia {
 			t.Fatalf("event type=%T, want MediaMessage", evt)
-		}
-		if media.From() != "agent-A" {
-			t.Fatalf("From=%q, want agent-A", media.From())
 		}
 		if media.Thread() == "" {
 			t.Fatal("Thread empty")
@@ -65,16 +57,9 @@ func TestPostMedia_HappyPath(t *testing.T) {
 		if media.Timestamp().IsZero() {
 			t.Fatal("Timestamp zero")
 		}
-		gotData, err := cB.OpenFile(
-			context.Background(),
-			media.Rev(),
-			media.Path(),
-		)
-		if err != nil {
-			t.Fatalf("OpenFile: %v", err)
-		}
+		gotData := readLeafArtifact(t, l, string(media.Rev()), media.Path())
 		if !bytes.Equal(gotData, wantData) {
-			t.Fatalf("OpenFile bytes=%q, want %q", gotData, wantData)
+			t.Fatalf("ReadFile bytes=%q, want %q", gotData, wantData)
 		}
 	case <-time.After(subscribeDeliveryTimeout):
 		t.Fatalf("no MediaMessage within %s", subscribeDeliveryTimeout)
@@ -102,36 +87,35 @@ func TestMediaFromMessage_MalformedFallsThrough(t *testing.T) {
 	}
 }
 
-func TestPostMedia_UseAfterClosePanics(t *testing.T) {
-	c := mustOpen(t)
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	requirePanic(t, func() {
-		_ = c.PostMedia(context.Background(), "t1", "text/plain", []byte("x"))
-	}, "coord is closed")
-}
-
-func TestPostMedia_InvariantPanics(t *testing.T) {
-	c := mustOpen(t)
-	t.Run("nil ctx", func(t *testing.T) {
+func TestLeaf_PostMedia_InvariantPanics(t *testing.T) {
+	t.Run("nil receiver", func(t *testing.T) {
+		var l *Leaf
 		requirePanic(t, func() {
-			_ = c.PostMedia(nilCtx, "t1", "text/plain", []byte("x"))
+			_ = l.PostMedia(context.Background(), "t1", "text/plain", []byte("x"))
+		}, "receiver is nil")
+	})
+	t.Run("nil ctx", func(t *testing.T) {
+		l, _ := openLeafFixture(t, "slot-pm-ctx")
+		requirePanic(t, func() {
+			_ = l.PostMedia(nilCtx, "t1", "text/plain", []byte("x"))
 		}, "ctx is nil")
 	})
 	t.Run("empty thread", func(t *testing.T) {
+		l, _ := openLeafFixture(t, "slot-pm-thread")
 		requirePanic(t, func() {
-			_ = c.PostMedia(context.Background(), "", "text/plain", []byte("x"))
+			_ = l.PostMedia(context.Background(), "", "text/plain", []byte("x"))
 		}, "thread is empty")
 	})
 	t.Run("empty mime", func(t *testing.T) {
+		l, _ := openLeafFixture(t, "slot-pm-mime")
 		requirePanic(t, func() {
-			_ = c.PostMedia(context.Background(), "t1", "", []byte("x"))
+			_ = l.PostMedia(context.Background(), "t1", "", []byte("x"))
 		}, "mimeType is empty")
 	})
 	t.Run("empty data", func(t *testing.T) {
+		l, _ := openLeafFixture(t, "slot-pm-data")
 		requirePanic(t, func() {
-			_ = c.PostMedia(context.Background(), "t1", "text/plain", nil)
+			_ = l.PostMedia(context.Background(), "t1", "text/plain", nil)
 		}, "data is empty")
 	})
 }

@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 PID_DIR="$ROOT/.orchestrator/pids"
 
-for kind in fossil nats; do
+for kind in leaf; do
     pidfile="$PID_DIR/$kind.pid"
     if [[ -f "$pidfile" ]]; then
         pid="$(cat "$pidfile")"

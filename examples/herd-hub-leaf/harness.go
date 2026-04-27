@@ -2,38 +2,35 @@
 // hub-and-leaf architecture (ADR 0018, Phase 2 of hub-leaf-orchestrator).
 //
 // The harness brings up:
-//   - one in-process libfossil hub fossil server (httptest);
-//   - one embedded NATS JetStream server (random loopback port);
-//   - n disjoint per-agent libfossil leaves and worktrees, all under a
-//     single t.TempDir() (or the OS temp dir for the main binary).
+//   - one coord.Hub (libfossil hub fossil + embedded leaf.Agent NATS
+//     mesh + HTTP xfer endpoint);
+//   - n disjoint coord.Leaf instances, each with its own libfossil leaf
+//     repo + worktree + leaf.Agent that joins the hub mesh as a NATS
+//     leaf-node (single-hop subject-interest propagation).
 //
 // Each agent runs k tasks against its own slot directory. Slots are
 // disjoint by construction (slot-i/) so the no-fork-branches contract
-// still holds, but the harness exercises real concurrency at the
-// JetStream broadcast layer, the hub-pull path, and the fossil push.
+// holds, but the harness exercises real concurrency at the agent NATS
+// sync path and the fossil push to the hub.
 //
 // Compared to examples/hub-leaf-e2e (the 3x3 sanity test), this harness
 // scales up (default 16 x 30 = 480 commits) and emits OTLP traces to
 // SigNoz so the user can inspect span timing under load.
-//
-// Reuses the precreateLeaves project-code threading from T21 because
-// libfossil v0.4.0 does not propagate project-code on first xfer.
 package main
 
 import (
 	"context"
 	"fmt"
-	"net/http/httptest"
-	"os"
+	"net"
 	"path/filepath"
 	"sort"
 	"sync"
 	"time"
 
-	natsserver "github.com/nats-io/nats-server/v2/server"
-	"github.com/nats-io/nats.go"
-
 	"github.com/danmestas/libfossil"
+
+	"github.com/danmestas/agent-infra/coord"
+	"github.com/danmestas/agent-infra/internal/assert"
 )
 
 // Config is the operator-supplied trial configuration.
@@ -64,9 +61,8 @@ type Config struct {
 	// Seed is the master seed; per-slot seeds derive as Seed+slotIndex.
 	Seed int64
 
-	// WorkDir is the root directory under which hub.fossil, leaf-*.fossil,
-	// chat-*.fossil, wt-*/ checkouts, and the JetStream store live.
-	// The caller owns cleanup.
+	// WorkDir is the root directory under which hub.fossil and per-slot
+	// leaf state live. The caller owns cleanup.
 	WorkDir string
 }
 
@@ -91,22 +87,34 @@ func DefaultConfig(workDir string) Config {
 // All counters are filled in by per-slot goroutines via atomic updates;
 // CommitLatencies is mutex-guarded since it is appended to.
 type Result struct {
-	HubCommits                  int   // Trunk checkins counted on the verifier clone.
-	ForkRetries                 int64 // SUM(commit.fork_retried==true) across slots.
-	ForkUnrecoverable           int64 // Slots that hit ErrConflictForked. Should be 0.
-	ClaimsWon                   int64 // Successful coord.Claim returns.
-	ClaimsLost                  int64 // Claim attempts that returned ErrAlreadyHeld.
-	BroadcastsPulled            int64 // tipSubscriber pull.success==true.
-	BroadcastsSkippedIdempotent int64 // pull.skipped_idempotent==true.
+	// HubCommits is the trunk-checkin count read from hub.fossil
+	// after Hub.Stop.
+	HubCommits int
+	// ForkRetries is a legacy counter; fork+merge has been deleted in
+	// coord. Stays at 0.
+	ForkRetries int64
+	// ForkUnrecoverable counts tasks that surfaced coord.ErrConflict
+	// (planner partition failure).
+	ForkUnrecoverable int64
+	// ClaimsWon counts successful Leaf.Claim returns.
+	ClaimsWon int64
+	// ClaimsLost counts Claim attempts that returned ErrHeldByAnother
+	// or ErrTaskAlreadyClaimed.
+	ClaimsLost int64
+	// BroadcastsPulled is reserved for future tip-broadcast
+	// instrumentation. Stays at 0.
+	BroadcastsPulled int64
+	// BroadcastsSkippedIdempotent is reserved for future
+	// tip-broadcast instrumentation. Stays at 0.
+	BroadcastsSkippedIdempotent int64
 
 	commitLatenciesMu sync.Mutex
 	CommitLatencies   []time.Duration
 
 	UnrecoverableErr error
-	// AggregateErr captures verifier-clone failures (e.g., libfossil
-	// "exceeded 100 rounds" from finding #4). Non-fatal: HubCommits is
-	// populated from a direct hub-event-table count instead. Surfaced
-	// in the summary so the operator sees the protocol-budget signal.
+	// AggregateErr captures hub-fossil read failures during the
+	// post-Stop HubCommits count. Non-fatal: agent-side counters in
+	// Result remain valid even if the hub-side count fails.
 	AggregateErr error
 	Runtime      time.Duration
 }
@@ -137,153 +145,75 @@ func (r *Result) Percentile(p float64) time.Duration {
 	return sorted[idx]
 }
 
-// jsServer is an in-process NATS JetStream server with cleanup. It
-// duplicates internal/testutil/natstest minus the *testing.T plumbing
-// so the main binary can run outside of go test.
-type jsServer struct {
-	nc       *nats.Conn
-	srv      *natsserver.Server
-	storeDir string
-}
-
-func (j *jsServer) URL() string { return j.nc.ConnectedUrl() }
-
-func (j *jsServer) Close() {
-	j.nc.Close()
-	j.srv.Shutdown()
-	j.srv.WaitForShutdown()
-	if j.storeDir != "" {
-		_ = os.RemoveAll(j.storeDir)
-	}
-}
-
-// startJetStream brings up an embedded NATS JetStream server bound to a
-// random loopback port. State lives under an OS temp dir that Close
-// removes.
-func startJetStream() (*jsServer, error) {
-	storeDir, err := os.MkdirTemp("", "herd-hub-leaf-js-*")
+// freeAddr returns an unused 127.0.0.1:<port> string so the hub HTTP
+// server gets a fresh port per run.
+func freeAddr() (string, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return nil, fmt.Errorf("create store dir: %w", err)
+		return "", err
 	}
-	opts := &natsserver.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		NoLog:     true,
-		NoSigs:    true,
-		JetStream: true,
-		StoreDir:  storeDir,
-	}
-	srv, err := natsserver.NewServer(opts)
-	if err != nil {
-		_ = os.RemoveAll(storeDir)
-		return nil, fmt.Errorf("nats new: %w", err)
-	}
-	go srv.Start()
-	if !srv.ReadyForConnections(5 * time.Second) {
-		srv.Shutdown()
-		srv.WaitForShutdown()
-		_ = os.RemoveAll(storeDir)
-		return nil, fmt.Errorf("nats not ready")
-	}
-	nc, err := nats.Connect(srv.ClientURL(), nats.Timeout(5*time.Second))
-	if err != nil {
-		srv.Shutdown()
-		srv.WaitForShutdown()
-		_ = os.RemoveAll(storeDir)
-		return nil, fmt.Errorf("nats connect: %w", err)
-	}
-	return &jsServer{nc: nc, srv: srv, storeDir: storeDir}, nil
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	return addr, nil
 }
 
-// precreateLeaves materializes each leaf's fossil repo file with the
-// hub's project-code so the leaf and hub agree on project identity at
-// sync time. Identical to examples/hub-leaf-e2e's helper; libfossil
-// v0.4.0 does not propagate project-code on first xfer.
-func precreateLeaves(dir, hubProjectCode string, n int) error {
-	for i := 0; i < n; i++ {
-		leafPath := filepath.Join(dir, fmt.Sprintf("leaf-%d.fossil", i))
-		r, err := libfossil.Create(leafPath, libfossil.CreateOpts{
-			User: fmt.Sprintf("herd-agent-%d", i),
-		})
-		if err != nil {
-			return fmt.Errorf("create leaf-%d: %w", i, err)
-		}
-		if serr := r.SetConfig("project-code", hubProjectCode); serr != nil {
-			_ = r.Close()
-			return fmt.Errorf("leaf-%d set project-code: %w", i, serr)
-		}
-		if cerr := r.Close(); cerr != nil {
-			return fmt.Errorf("close leaf-%d: %w", i, cerr)
-		}
-	}
-	return nil
-}
-
-// Run executes the full trial. Caller must have set up OTel before
-// calling so spans land in the configured exporter.
+// Run executes the full trial against coord.Hub + N coord.Leaf. Caller
+// must have set up OTel before calling so spans land in the configured
+// exporter.
+//
+//	stay together for end-to-end clarity.
+//
+//nolint:funlen // trial harness: setup, fan-out, drain, teardown
 func Run(ctx context.Context, cfg Config) (*Result, error) {
+	assert.NotNil(ctx, "herd-hub-leaf.Run: ctx is nil")
+	assert.NotEmpty(cfg.WorkDir, "herd-hub-leaf.Run: cfg.WorkDir is empty")
 	if cfg.Agents <= 0 || cfg.TasksPerAgent <= 0 {
 		return nil, fmt.Errorf("agents and tasksPerAgent must be > 0")
 	}
 	start := time.Now()
 
-	// Hub fossil repo + http xfer server.
-	hubPath := filepath.Join(cfg.WorkDir, "hub.fossil")
-	hubRepo, err := libfossil.Create(hubPath, libfossil.CreateOpts{})
+	httpAddr, err := freeAddr()
 	if err != nil {
-		return nil, fmt.Errorf("create hub: %w", err)
+		return nil, fmt.Errorf("free addr: %w", err)
 	}
-	defer func() { _ = hubRepo.Close() }()
-	// Hub absorbs concurrent xfer-session writes; busy_timeout=30s lets
-	// SQLite block writers instead of failing fast with SQLITE_BUSY (517).
-	// Trial #1 and #2 saw "database is locked (517)" aborts when many leaf
-	// Pushes serialized at the hub's blob-write transaction.
-	if _, err := hubRepo.DB().Exec(
-		"PRAGMA busy_timeout = 30000",
-	); err != nil {
-		return nil, fmt.Errorf("hub busy_timeout: %w", err)
-	}
-	hubProjectCode, err := hubRepo.Config("project-code")
+	hub, err := coord.OpenHub(ctx, cfg.WorkDir, httpAddr)
 	if err != nil {
-		return nil, fmt.Errorf("hub project-code: %w", err)
+		return nil, fmt.Errorf("OpenHub: %w", err)
 	}
-	hubSrv := httptest.NewServer(hubRepo.XferHandler())
-	defer hubSrv.Close()
-
-	if err := precreateLeaves(cfg.WorkDir, hubProjectCode, cfg.Agents); err != nil {
-		return nil, err
-	}
-
-	js, err := startJetStream()
-	if err != nil {
-		return nil, fmt.Errorf("jetstream: %w", err)
-	}
-	defer js.Close()
+	hubStopped := false
+	defer func() {
+		if !hubStopped {
+			_ = hub.Stop()
+		}
+	}()
 
 	res := &Result{}
 	var wg sync.WaitGroup
 	var errMu sync.Mutex
 	var firstErr error
+	var leavesMu sync.Mutex
+	leaves := make([]*coord.Leaf, 0, cfg.Agents)
 
 	for i := 0; i < cfg.Agents; i++ {
 		i := i
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := runAgent(ctx, i, cfg, js.URL(), hubSrv.URL, res)
-			if err != nil {
+			l, rerr := runAgent(ctx, i, cfg, hub, res)
+			if l != nil {
+				leavesMu.Lock()
+				leaves = append(leaves, l)
+				leavesMu.Unlock()
+			}
+			if rerr != nil {
 				errMu.Lock()
 				if firstErr == nil {
-					firstErr = err
+					firstErr = rerr
 				}
 				errMu.Unlock()
-				// runAgent already records ForkUnrecoverable per task.
-				// Don't double-count slot-level errors.
 			}
 		}()
-		// Stagger starts so JetStream durable name suffix is well-spread
-		// even on platforms with coarse monotonic clocks. T22 added a
-		// crypto/rand suffix so the 10ms is belt-and-braces, but cheap.
+		// Stagger starts so durable name suffixes spread on coarse-clock platforms.
 		time.Sleep(10 * time.Millisecond)
 	}
 	wg.Wait()
@@ -291,65 +221,76 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	if firstErr != nil {
 		res.UnrecoverableErr = firstErr
 	}
-
-	// Record wall-clock runtime BEFORE aggregate. Verifier-clone may
-	// fail with "exceeded 100 rounds" when the hub repo accumulates
-	// too many sibling branches (trial #5 finding #4); in that case
-	// the agent-side metrics are still valid and we want them in the
-	// summary regardless of clone outcome.
 	res.Runtime = time.Since(start)
 
-	// Direct hub-side count: query the hub's event table for ci rows.
-	// libfossil v0.4.1's server-side crosslink keeps `event` populated
-	// in real time, so this works even when verifier clone fails. The
-	// clone-based aggregateHub still runs below as a cross-check.
-	if err := countHubCommitsDirect(hubRepo, res); err != nil {
-		// Soft failure; aggregateHub may still succeed.
-		_ = err
+	// Wait for in-flight syncs to land at the hub before reading.
+	// leaf.Agent.SyncNow only signals the leaf's pollLoop — Stopping
+	// the leaf right after Leaf.Commit returns can cancel in-flight
+	// sync RPCs and lose commits at teardown. Same pattern as
+	// examples/hub-leaf-e2e/main.go: keep leaves alive, poll the hub
+	// until either every commit is visible or the deadline elapses,
+	// then tear down. SQLite-WAL allows a second read-only handle
+	// concurrent with the hub's writer.
+	expected := int(res.ClaimsWon - res.ForkUnrecoverable)
+	if cerr := waitHubCommits(cfg.WorkDir, expected, 30*time.Second, res); cerr != nil {
+		res.AggregateErr = cerr
 	}
-
-	// Aggregate hub state via verifier clone (libfossil v0.4.0
-	// HandleSync stores blobs but does not crosslink server-side).
-	if aerr := aggregateHub(ctx, cfg.WorkDir, hubSrv.URL, res); aerr != nil {
-		// Direct count above is the source of truth post-v0.4.1; the
-		// clone failure no longer zeroes the metric. Surface the
-		// clone error as a non-fatal note in res.AggregateErr so the
-		// caller can print it without failing the trial summary.
-		res.AggregateErr = fmt.Errorf("aggregate: %w", aerr)
+	stopLeaves(leaves)
+	if err := hub.Stop(); err != nil {
+		if res.AggregateErr == nil {
+			res.AggregateErr = fmt.Errorf("hub stop: %w", err)
+		}
+	} else {
+		hubStopped = true
 	}
 	return res, nil
 }
 
-// countHubCommitsDirect reads the hub's event table for ci rows. Used
-// when verifier-clone fails (round-budget exhaustion) but the hub itself
-// has consistent state. Safe under v0.4.1's server-side crosslink.
-func countHubCommitsDirect(repo *libfossil.Repo, res *Result) error {
-	var n int
-	if err := repo.DB().QueryRow(
-		`SELECT COUNT(*) FROM event WHERE type='ci'`,
-	).Scan(&n); err != nil {
-		return fmt.Errorf("count hub direct: %w", err)
+// stopLeaves stops every leaf in the slice. Errors ignored; teardown
+// is best-effort because the hub already counted commits via the
+// post-poll waitHubCommits.
+func stopLeaves(leaves []*coord.Leaf) {
+	for _, l := range leaves {
+		if l == nil {
+			continue
+		}
+		_ = l.Stop()
 	}
-	res.HubCommits = n
-	return nil
 }
 
-// aggregateHub clones the hub into a verifier repo and counts trunk
-// checkins. Mirrors examples/hub-leaf-e2e/main.go::aggregate.
-func aggregateHub(ctx context.Context, dir, hubURL string, res *Result) error {
-	verifierPath := filepath.Join(dir, "verifier.fossil")
-	tr := libfossil.NewHTTPTransport(hubURL)
-	v, _, err := libfossil.Clone(ctx, verifierPath, tr, libfossil.CloneOpts{})
-	if err != nil {
-		return fmt.Errorf("verifier clone: %w", err)
+// waitHubCommits polls hub.fossil's event-ci count until it reaches
+// expected or the deadline elapses, writing the final observed count
+// into res.HubCommits. Open uses a separate read-only *libfossil.Repo
+// concurrent with the hub agent's writer (SQLite-WAL safe).
+func waitHubCommits(workdir string, expected int, timeout time.Duration, res *Result) error {
+	repoPath := filepath.Join(workdir, "hub.fossil")
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		r, err := libfossil.Open(repoPath)
+		if err == nil {
+			row := r.DB().QueryRow(`SELECT COUNT(*) FROM event WHERE type='ci'`)
+			var n int
+			scanErr := row.Scan(&n)
+			_ = r.Close()
+			if scanErr == nil {
+				res.HubCommits = n
+				if n >= expected {
+					return nil
+				}
+				lastErr = nil
+			} else {
+				lastErr = scanErr
+			}
+		} else {
+			lastErr = err
+		}
+		if time.Now().After(deadline) {
+			if lastErr != nil {
+				return fmt.Errorf("waitHubCommits: %w", lastErr)
+			}
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	defer func() { _ = v.Close() }()
-	var n int
-	if err := v.DB().QueryRow(
-		`SELECT COUNT(*) FROM event WHERE type='ci'`,
-	).Scan(&n); err != nil {
-		return fmt.Errorf("count timeline: %w", err)
-	}
-	res.HubCommits = n
-	return nil
 }

@@ -4,10 +4,12 @@ github.com/cenkalti/backoff/v5 v5.0.3 h1:ZN+IMa753KfX5hd8vVaMixjnqRZ3y8CuJKRKj1x
 github.com/cenkalti/backoff/v5 v5.0.3/go.mod h1:rkhZdG3JZukswDf7f0cwqPNk4K0sa+F97BxZthm/crw=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
+github.com/danmestas/EdgeSync/leaf v0.0.3 h1:uJf9j6K2Eg5ljgaDidWLgd8oPfzxXmkUpflSm4xIv/0=
+github.com/danmestas/EdgeSync/leaf v0.0.3/go.mod h1:Et+E0lMUaAgk58pMLauIvSjeeMnS2+bZJeDZEkwF4h8=
 github.com/danmestas/go-sqlite3-opfs v0.2.0 h1:bO6iQYobgWCqTCQZ4NQ147x3yU2v+J+nn0Sq3y1b7sk=
 github.com/danmestas/go-sqlite3-opfs v0.2.0/go.mod h1:eAYxwG9hykpkB6oNMnsM8sSGB9HhHZv/NIN6yO9ZVQE=
-github.com/danmestas/libfossil v0.4.2 h1:404ujpTed0UHmQgmZ3vor1Qal5WDNg9a1fLObaSfsfI=
-github.com/danmestas/libfossil v0.4.2/go.mod h1:Ex+ADZ0kBLkBhSqnyrKg+KHbANVyQpKEWvVHUq8qMLc=
+github.com/danmestas/libfossil v0.4.4 h1:VdrCxiW8YOlOHXR5WfgGdSs+DQQt0Xotz3Gc/36JVaU=
+github.com/danmestas/libfossil v0.4.4/go.mod h1:Ex+ADZ0kBLkBhSqnyrKg+KHbANVyQpKEWvVHUq8qMLc=
 github.com/danmestas/libfossil/db/driver/modernc v0.1.0 h1:w3elyVSdXdbGNZ3Iu9xE6RP4XTz6JRlkpk0RZKBMl1Y=
 github.com/danmestas/libfossil/db/driver/modernc v0.1.0/go.mod h1:sXeYxCmAkz3Tb/zLIOo7X2CoZDelYQ1MWyoUrySD/vU=
 github.com/danmestas/libfossil/db/driver/ncruces v0.1.0 h1:GWlyrNicyBYSUi68w4G4uXL34SIqmwSFco5a8IuutY0=
@@ -16,6 +18,8 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
+github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2Wg=
+github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
 github.com/go-logr/logr v1.2.2/go.mod h1:jdQByPbusPIv2/zmleS9BjJVeZ6kBagPoEUsqbVz/1A=
 github.com/go-logr/logr v1.4.3 h1:CjnDlHq8ikf6E492q6eKboGOC0T8CDaOvkHCIg8idEI=
 github.com/go-logr/logr v1.4.3/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=
@@ -71,6 +75,8 @@ go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ
 go.opentelemetry.io/auto/sdk v1.2.1/go.mod h1:KRTj+aOaElaLi+wW1kO/DZRXwkF4C5xPbEe3ZiIhN7Y=
 go.opentelemetry.io/contrib/bridges/otelslog v0.17.0 h1:NFIS6x7wyObQ7cR84x7bt1sr8nYBx89s3x3GwRjw40k=
 go.opentelemetry.io/contrib/bridges/otelslog v0.17.0/go.mod h1:39SaByOyDMRMe872AE7uelMuQZidIw7LLFAnQi0FWTE=
+go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.67.0 h1:OyrsyzuttWTSur2qN/Lm0m2a8yqyIjUVBZcxFPuXq2o=
+go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.67.0/go.mod h1:C2NGBr+kAB4bk3xtMXfZ94gqFDtg/GkI7e9zqGh5Beg=
 go.opentelemetry.io/otel v1.43.0 h1:mYIM03dnh5zfN7HautFE4ieIig9amkNANT+xcVxAj9I=
 go.opentelemetry.io/otel v1.43.0/go.mod h1:JuG+u74mvjvcm8vj8pI5XiHy1zDeoCS2LB1spIq7Ay0=
 go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.19.0 h1:HIBTQ3VO5aupLKjC90JgMqpezVXwFuq6Ryjn0/izoag=

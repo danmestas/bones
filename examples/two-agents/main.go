@@ -1,7 +1,7 @@
 // Command two-agents is a smoke harness that spawns two child processes,
 // each opening its own coord.Coord against a shared leaf, and asserts
 // six Phase 3+4 coord primitives work across real process boundaries.
-// See docs/superpowers/specs/2026-04-20-examples-two-agents-design.md.
+// See docs/adr/0019-cli-binaries.md.
 package main
 
 import (
@@ -34,29 +34,19 @@ const (
 	threadChat = "harness.chat"
 )
 
-// newConfig builds a coord.Config for a role. Per-coord FossilRepoPath,
-// ChatFossilRepoPath, and CheckoutRoot are all distinct — this harness
-// tests Phase 3+4 primitives and does not exercise coord.Commit, so the
-// code-artifact substrate paths only need to validate.
-func newConfig(agentID, natsURL, chatRepo, codeRepo, checkoutRoot string) coord.Config {
+// newConfig builds a coord.Config for a role. Per-coord
+// ChatFossilRepoPath and CheckoutRoot are distinct so two children
+// running in the same workspace do not collide on chat repo / checkout
+// state. This harness tests Phase 3+4 primitives and does not exercise
+// any code-artifact write path, so no per-coord FossilRepoPath is
+// needed (Task 10 of the EdgeSync refactor removed it from Config).
+func newConfig(agentID, natsURL, chatRepo, checkoutRoot string) coord.Config {
 	return coord.Config{
 		AgentID:            agentID,
-		HoldTTLDefault:     30 * time.Second,
-		HoldTTLMax:         5 * time.Minute,
-		MaxHoldsPerClaim:   32,
-		MaxSubscribers:     32,
-		MaxTaskFiles:       32,
-		MaxReadyReturn:     256,
-		MaxTaskValueSize:   8 * 1024,
-		TaskHistoryDepth:   8,
-		OperationTimeout:   10 * time.Second,
-		HeartbeatInterval:  5 * time.Second,
-		NATSReconnectWait:  2 * time.Second,
-		NATSMaxReconnects:  5,
 		NATSURL:            natsURL,
 		ChatFossilRepoPath: chatRepo,
-		FossilRepoPath:     codeRepo,
 		CheckoutRoot:       checkoutRoot,
+		// Tuning: zero — coord.Open fills sane defaults via defaultTuning.
 	}
 }
 
@@ -160,7 +150,6 @@ func parentInit(ctx context.Context) (*parentState, int) {
 		"twoagent-parent",
 		info.NATSURL,
 		filepath.Join(tempDir, "chat-parent.fossil"),
-		filepath.Join(tempDir, "code-parent.fossil"),
 		filepath.Join(tempDir, "checkouts-parent"),
 	))
 	if err != nil {
@@ -378,7 +367,6 @@ func runAgent(ctx context.Context, role string) int {
 		agentID,
 		info.NATSURL,
 		filepath.Join(*workspaceFlag, "chat-"+role+".fossil"),
-		filepath.Join(*workspaceFlag, "code-"+role+".fossil"),
 		filepath.Join(*workspaceFlag, "checkouts-"+role),
 	))
 	if err != nil {
@@ -618,7 +606,6 @@ func stepWhoPresence(ctx context.Context, c *coord.Coord, natsURL, tempDir strin
 		probeID,
 		natsURL,
 		filepath.Join(tempDir, probeID+"-chat.fossil"),
-		filepath.Join(tempDir, probeID+"-code.fossil"),
 		filepath.Join(tempDir, probeID+"-checkouts"),
 	))
 	if err != nil {

@@ -84,7 +84,7 @@ func (c *Coord) watchChat(
 // below the 70-line funlen cap.
 func (c *Coord) reserveSubscriberSlot(prefix string) error {
 	next := c.subsActive.Add(1)
-	if int(next) > c.cfg.MaxSubscribers {
+	if int(next) > c.cfg.Tuning.MaxSubscribers {
 		c.subsActive.Add(-1)
 		return fmt.Errorf("%s: %w", prefix, ErrTooManySubscribers)
 	}

@@ -13,7 +13,6 @@ import (
 
 	"github.com/danmestas/agent-infra/internal/assert"
 	"github.com/danmestas/agent-infra/internal/chat"
-	"github.com/danmestas/agent-infra/internal/fossil"
 	"github.com/danmestas/agent-infra/internal/holds"
 	"github.com/danmestas/agent-infra/internal/presence"
 	"github.com/danmestas/agent-infra/internal/tasks"
@@ -54,7 +53,6 @@ const presenceBucket = "agent-infra-presence"
 type Coord struct {
 	cfg    Config
 	sub    *substrate
-	tipSub *tipSubscriber
 	mu     sync.Mutex // protects closed
 	closed bool
 
@@ -86,6 +84,7 @@ type Coord struct {
 // returning so no substrate resources leak.
 func Open(ctx context.Context, cfg Config) (*Coord, error) {
 	assert.NotNil(ctx, "coord.Open: ctx is nil")
+	cfg.Tuning = defaultTuning(cfg.Tuning)
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("coord.Open: invalid config: %w", err)
 	}
@@ -94,30 +93,6 @@ func Open(ctx context.Context, cfg Config) (*Coord, error) {
 		return nil, err
 	}
 	c := &Coord{cfg: cfg, sub: sub}
-	if cfg.EnableTipBroadcast && cfg.HubURL != "" {
-		// tipSubscriber drives the broadcast-side Pull on every
-		// peer commit so this leaf's view stays roughly current —
-		// both for read paths and as the friendly-case input to
-		// Commit's pre-flight Pull. Trial #10 deletes the
-		// COORD_COMMIT_LEASE bucket and the bounded-N retry: the
-		// fork+merge model lets fossil place forks-as-branches
-		// and Merge them into trunk locally, so no hub-wide
-		// serialization is needed.
-		c.tipSub = &tipSubscriber{
-			nc:     c.sub.nc,
-			hubURL: cfg.HubURL,
-			pullFn: func(ctx context.Context, hubURL string) error {
-				return c.sub.fossil.Pull(ctx, hubURL)
-			},
-			localFn: func(ctx context.Context) (string, error) {
-				return c.sub.fossil.Tip(ctx)
-			},
-		}
-		if err := c.tipSub.Start(ctx); err != nil {
-			c.sub.close()
-			return nil, fmt.Errorf("coord.Open: tipSubscriber: %w", err)
-		}
-	}
 	return c, nil
 }
 
@@ -131,36 +106,32 @@ func openSubstrate(
 ) (*substrate, error) {
 	nc, err := nats.Connect(
 		cfg.NATSURL,
-		nats.ReconnectWait(cfg.NATSReconnectWait),
-		nats.MaxReconnects(cfg.NATSMaxReconnects),
+		nats.ReconnectWait(cfg.Tuning.NATSReconnectWait),
+		nats.MaxReconnects(cfg.Tuning.NATSMaxReconnects),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("coord.Open: nats connect: %w", err)
 	}
-	s := &substrate{nc: nc, hubURL: cfg.HubURL}
+	s := &substrate{nc: nc}
 	if s.holds, err = holds.Open(ctx, nc, holds.Config{
 		Bucket:     holdsBucket,
-		HoldTTLMax: cfg.HoldTTLMax,
+		HoldTTLMax: cfg.Tuning.HoldTTLMax,
 	}); err != nil {
 		s.close()
 		return nil, fmt.Errorf("coord.Open: holds: %w", err)
 	}
-	if s.tasks, err = tasks.Open(ctx, tasks.Config{
-		NATSURL:          cfg.NATSURL,
-		BucketName:       tasksBucket,
-		HistoryDepth:     cfg.TaskHistoryDepth,
-		MaxValueSize:     int32(cfg.MaxTaskValueSize),
-		OperationTimeout: cfg.OperationTimeout,
+	if s.tasks, err = tasks.Open(ctx, nc, tasks.Config{
+		BucketName:   tasksBucket,
+		HistoryDepth: cfg.Tuning.TaskHistoryDepth,
+		MaxValueSize: int32(cfg.Tuning.MaxTaskValueSize),
 	}); err != nil {
 		s.close()
 		return nil, fmt.Errorf("coord.Open: tasks: %w", err)
 	}
-	if s.archive, err = tasks.Open(ctx, tasks.Config{
-		NATSURL:          cfg.NATSURL,
-		BucketName:       archiveBucket,
-		HistoryDepth:     cfg.TaskHistoryDepth,
-		MaxValueSize:     int32(cfg.MaxTaskValueSize),
-		OperationTimeout: cfg.OperationTimeout,
+	if s.archive, err = tasks.Open(ctx, nc, tasks.Config{
+		BucketName:   archiveBucket,
+		HistoryDepth: cfg.Tuning.TaskHistoryDepth,
+		MaxValueSize: int32(cfg.Tuning.MaxTaskValueSize),
 	}); err != nil {
 		s.close()
 		return nil, fmt.Errorf("coord.Open: archive tasks: %w", err)
@@ -170,7 +141,7 @@ func openSubstrate(
 		ProjectPrefix:  projectPrefix(cfg.AgentID),
 		Nats:           nc,
 		FossilRepoPath: cfg.ChatFossilRepoPath,
-		MaxSubscribers: cfg.MaxSubscribers,
+		MaxSubscribers: cfg.Tuning.MaxSubscribers,
 	}); err != nil {
 		s.close()
 		return nil, fmt.Errorf("coord.Open: chat: %w", err)
@@ -180,18 +151,10 @@ func openSubstrate(
 		Project:           projectPrefix(cfg.AgentID),
 		Bucket:            presenceBucket,
 		NATSConn:          nc,
-		HeartbeatInterval: cfg.HeartbeatInterval,
+		HeartbeatInterval: cfg.Tuning.HeartbeatInterval,
 	}); err != nil {
 		s.close()
 		return nil, fmt.Errorf("coord.Open: presence: %w", err)
-	}
-	if s.fossil, err = fossil.Open(ctx, fossil.Config{
-		AgentID:      cfg.AgentID,
-		RepoPath:     cfg.FossilRepoPath,
-		CheckoutRoot: cfg.CheckoutRoot,
-	}); err != nil {
-		s.close()
-		return nil, fmt.Errorf("coord.Open: fossil: %w", err)
 	}
 	return s, nil
 }
@@ -232,9 +195,6 @@ func (c *Coord) Close() error {
 		return nil
 	}
 	c.closed = true
-	if c.tipSub != nil {
-		c.tipSub.Close()
-	}
 	c.sub.close()
 	return nil
 }
@@ -314,9 +274,9 @@ func (c *Coord) assertClaimPreconditions(
 	assert.NotEmpty(string(taskID), "coord.Claim: taskID is empty")
 	assert.Precondition(ttl > 0, "coord.Claim: ttl must be > 0")
 	assert.Precondition(
-		ttl <= c.cfg.HoldTTLMax,
+		ttl <= c.cfg.Tuning.HoldTTLMax,
 		"coord.Claim: ttl=%s exceeds HoldTTLMax=%s",
-		ttl, c.cfg.HoldTTLMax,
+		ttl, c.cfg.Tuning.HoldTTLMax,
 	)
 }
 
@@ -461,6 +421,11 @@ var errClaimCASNoOp = errors.New(
 // swallows so deferred release-after-shutdown stays silent. It is also
 // safe after CloseTask: a closed task is terminal, so the un-claim
 // step is a silent no-op and only the hold releases run.
+// releaseTimeout caps how long the release closure will wait for NATS
+// round-trips at shutdown. Bounded so a stalled broker cannot block
+// deferred cleanup forever.
+const releaseTimeout = 5 * time.Second
+
 func (c *Coord) releaseClosure(
 	taskID TaskID, held []string,
 ) func() error {
@@ -468,10 +433,12 @@ func (c *Coord) releaseClosure(
 	var firstErr error
 	return func() error {
 		once.Do(func() {
-			// Background — release must run to completion even when
-			// the claim's ctx has been canceled, and deferred rel()
-			// sites typically have no ctx of their own to thread in.
-			ctx := context.Background()
+			// Use a bounded context so that a stalled or unreachable
+			// NATS broker cannot block deferred release indefinitely.
+			// context.Background() is the root so cancellation of the
+			// caller's ctx (e.g. at shutdown) does not abort the release.
+			ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
+			defer cancel()
 			if err := c.releaseTaskCAS(ctx, taskID); err != nil {
 				firstErr = err
 			}
@@ -702,4 +669,46 @@ func (c *Coord) Answer(
 		return nil, fmt.Errorf("coord.Answer: %w", err)
 	}
 	return unsub, nil
+}
+
+// listTasks returns every task record currently readable in the hot
+// tasks bucket. Used by Leaf.Compact to build the eligible-task set;
+// unexported so substrate remains opaque to Leaf code.
+func (c *Coord) listTasks(ctx context.Context) ([]tasks.Task, error) {
+	return c.sub.tasks.List(ctx)
+}
+
+// updateTask performs a revision-gated CAS update on a task record.
+// Used by Leaf.Compact to stamp compaction metadata on a closed record;
+// unexported so substrate remains opaque to Leaf code.
+func (c *Coord) updateTask(
+	ctx context.Context,
+	id string,
+	mutate func(tasks.Task) (tasks.Task, error),
+) error {
+	return c.sub.tasks.Update(ctx, id, mutate)
+}
+
+// getAndArchiveTask reads the hot task record for id, writes it into
+// the archive bucket (idempotent on ErrAlreadyExists), then purges it
+// from the hot bucket. Used by Leaf.Compact when opts.Prune is true;
+// unexported so substrate remains opaque to Leaf code.
+func (c *Coord) getAndArchiveTask(ctx context.Context, id string) error {
+	archived, _, err := c.sub.tasks.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := c.sub.archive.Create(ctx, archived); err != nil {
+		if !errors.Is(err, tasks.ErrAlreadyExists) {
+			return err
+		}
+	}
+	return c.sub.tasks.Purge(ctx, id)
+}
+
+// sendChat publishes body to the chat thread identified by thread.
+// Used by Leaf.PostMedia to write the in-band media envelope; unexported
+// so substrate remains opaque to Leaf code.
+func (c *Coord) sendChat(ctx context.Context, thread, body string) error {
+	return c.sub.chat.Send(ctx, thread, body)
 }

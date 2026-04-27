@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/danmestas/agent-infra/internal/tasks"
 )
 
 func TestBlocked_FindsOpenTasksBlockedByOpenBlockers(t *testing.T) {
@@ -50,8 +52,8 @@ func TestBlocked_SortsOldestFirst(t *testing.T) {
 	oldTarget := readyBaseline("agent-infra-bd66", base.Add(time.Minute))
 	newBlocker := readyBaseline("agent-infra-bd77", base.Add(2*time.Minute))
 	newTarget := readyBaseline("agent-infra-bd88", base.Add(3*time.Minute))
-	oldBlocker.Edges = []Edge{{Type: EdgeBlocks, Target: oldTarget.ID}}
-	newBlocker.Edges = []Edge{{Type: EdgeBlocks, Target: newTarget.ID}}
+	oldBlocker.Edges = []tasks.Edge{{Type: tasks.EdgeBlocks, Target: oldTarget.ID}}
+	newBlocker.Edges = []tasks.Edge{{Type: tasks.EdgeBlocks, Target: newTarget.ID}}
 	seedTask(t, c, oldBlocker)
 	seedTask(t, c, oldTarget)
 	seedTask(t, c, newBlocker)

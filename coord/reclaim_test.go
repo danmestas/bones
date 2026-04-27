@@ -112,11 +112,10 @@ func newCoordOnURLWithHeartbeat(
 	t.Helper()
 	cfg := validConfigWithURL(t, url)
 	cfg.AgentID = agentID
-	cfg.HeartbeatInterval = hb
+	cfg.Tuning.HeartbeatInterval = hb
 	// HoldTTLDefault must not exceed HoldTTLMax; keep defaults valid.
 	dir := t.TempDir()
 	cfg.ChatFossilRepoPath = filepath.Join(dir, agentID+"-chat.fossil")
-	cfg.FossilRepoPath = filepath.Join(dir, agentID+"-code.fossil")
 	cfg.CheckoutRoot = filepath.Join(dir, agentID+"-checkouts")
 	c, err := Open(context.Background(), cfg)
 	if err != nil {
