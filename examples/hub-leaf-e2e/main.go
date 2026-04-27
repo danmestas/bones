@@ -140,9 +140,13 @@ func RunN(ctx context.Context, t *testing.T, dir string, n int) (*runResult, err
 		// instant. Reproducible with `go test -race -count=10`; the
 		// race is in NATS server itself, not in coord. Durable-name
 		// collision is NOT the issue — coord/sync_broadcast.go appends
-		// crypto/rand bytes to the durable. 10ms is empirical and
-		// keeps the race from triggering across all observed runs.
-		time.Sleep(10 * time.Millisecond)
+		// crypto/rand bytes to the durable.
+		//
+		// 10ms held locally but tripped on GitHub Actions runners
+		// (24989439538). Bumped to 50ms to widen the race-margin on
+		// contended CI hardware while still keeping smoke-test wall
+		// time well under a second for n=3.
+		time.Sleep(50 * time.Millisecond)
 	}
 	wg.Wait()
 
