@@ -6,21 +6,14 @@ on:
   pull_request:
     branches: [main]
 
-# EdgeSync is still private. CI authenticates go-get against it via the
-# repository secret GH_PRIVATE_DEPS_PAT (PAT with `repo` read access to
-# github.com/danmestas/EdgeSync), configured below as a URL-insteadOf
-# rewrite plus GOPRIVATE so the public module proxy is bypassed for
-# the danmestas/* prefix.
-#
-# The sibling EdgeSync checkout is still used to `make leaf` so
-# integration tests have a local bin/leaf binary at LEAF_BIN.
-# libfossil is open-source — no rewrite needed for public modules.
+# Sibling EdgeSync checkout is still used to `make leaf` so integration
+# tests have a local bin/leaf binary at LEAF_BIN.
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       # Check out agent-infra into ./agent-infra so the sibling EdgeSync
-      # clone can sit at ../EdgeSync, matching the go.mod replace path.
+      # clone can sit at ../EdgeSync.
       - name: Checkout agent-infra
         uses: actions/checkout@v4
         with:
@@ -30,7 +23,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: danmestas/EdgeSync
-          token: ${{ secrets.GH_PRIVATE_DEPS_PAT }}
           path: EdgeSync
 
       - uses: actions/setup-go@v5
@@ -38,19 +30,6 @@ jobs:
           go-version: '1.26.0'
           cache: true
           cache-dependency-path: agent-infra/go.sum
-
-      # Authenticate go-get for private modules under github.com/danmestas/*.
-      # The URL-insteadOf rewrite makes `git fetch` (which `go mod download`
-      # uses when GOPRIVATE excludes the public proxy) authenticate as the
-      # PAT-holder instead of failing on the anonymous-clone HTTPS prompt.
-      - name: Configure go-get auth for private modules
-        env:
-          GH_PRIVATE_DEPS_PAT: ${{ secrets.GH_PRIVATE_DEPS_PAT }}
-        run: |
-          git config --global \
-            url."https://x-access-token:${GH_PRIVATE_DEPS_PAT}@github.com/danmestas/".insteadOf \
-            "https://github.com/danmestas/"
-          echo "GOPRIVATE=github.com/danmestas/*" >> $GITHUB_ENV
 
       # The golangci-lint-action binary is built with an older Go and ships a
       # v1 binary by default; we pin v2 (matches .golangci.yml schema) and let
