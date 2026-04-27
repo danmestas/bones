@@ -46,6 +46,7 @@ const usage = `Usage:
   agent-tasks autoclaim [--enabled=true|false] [--idle=true|false] [--claim-ttl=1m]
   agent-tasks dispatch parent --task-id=<id> [--worker-bin=<path>]
   agent-tasks dispatch worker --task-id=<id> --task-thread=<thread> --worker-agent-id=<id>
+  agent-tasks aggregate [--since=<duration>] [--json]
 `
 
 func main() {
