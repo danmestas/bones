@@ -24,7 +24,11 @@ go.work
 go.work.sum
 
 # Claude Code / scheduled_tasks runtime state (local-only).
+# Skills and settings are project-level config — track those explicitly.
 .claude/
+!.claude/settings.json
+!.claude/skills/
+!.claude/skills/**
 
 # Orchestrator runtime + Fossil checkout-at-root (ADR 0024)
 .fslckout

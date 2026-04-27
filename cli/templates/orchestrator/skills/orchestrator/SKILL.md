@@ -30,7 +30,8 @@ what the [slot: name] format is.
 Check that the SessionStart hook ran successfully:
 
 ```
-test -f .orchestrator/pids/leaf.pid && \
+test -f .orchestrator/pids/fossil.pid && \
+  test -f .orchestrator/pids/nats.pid && \
   curl -fsS -X POST http://127.0.0.1:8765/xfer >/dev/null
 ```
 
@@ -44,16 +45,8 @@ bash .orchestrator/scripts/hub-bootstrap.sh
 
 ## Step 3: Extract slots and tasks
 
-Run the validator with `--list-slots` to get a machine-readable slot→task
-mapping:
-
-```
-bones validate-plan --list-slots <plan-path> | jq
-```
-
-This emits JSON like `{"slots": [{"name": "alpha", "tasks": [...]}, ...]}`.
-Use the `tasks` array from each slot entry to build the dispatch prompt for
-Step 4 — no manual plan re-parsing needed.
+Parse the plan again (mentally, or by re-running the validator with a
+flag once it grows one) to enumerate slots and the task list per slot.
 
 ## Step 4: Dispatch one subagent per slot
 
@@ -65,46 +58,17 @@ For each slot, invoke the Task tool with:
 
   > You are a subagent for slot=<name> in a hub-leaf orchestration. Use
   > the `subagent` skill. Your environment:
-  > - AGENT_ID:  <slot>
-  > - SLOT_ID:   <slot>
+  > - LEAF_REPO: .orchestrator/leaves/<slot>/leaf.fossil
+  > - LEAF_WT:   .orchestrator/leaves/<slot>/wt
   > - HUB_URL:   http://127.0.0.1:8765
   > - NATS_URL:  nats://127.0.0.1:4222
-  > - WORKDIR:   .orchestrator/leaves
-  >
-  > (LEAF_REPO and LEAF_WT are no longer injected — coord.OpenLeaf owns
-  > those paths under WORKDIR/<slot>/. See the subagent skill for details.)
+  > - AGENT_ID:  <slot>
+  > - SLOT_ID:   <slot>
   >
   > Your task list follows. Execute it; emit one fossil commit per task.
 
 The orchestrator dispatches subagents in parallel (single message with N
 Task tool calls).
-
-### Parallelism guidance (per docs/trials/2026-04-26/trial-report.md)
-
-Post-EdgeSync-refactor: the architecture is no longer hub-rate-limited
-at orchestration scale. The trial sweep at zero think time (worst case)
-shows 100% completion through N=64 with sub-100ms P99; production
-agents commit on minute timescales (~0.017 events/sec) so even N=100+
-is comfortable. The old "100-round Pull-negotiation wall" is gone — the
-EdgeSync NATS mesh sync replaces it.
-
-Tier guidance for picking concurrency (zero-think trial numbers):
-
-- **Sweet spot (sub-second P99):** N ≤ 32 slots. Use for interactive
-  tooling where latency matters.
-- **Acceptable (sub-100ms P99):** N ≤ 64 slots. Use for batch agents
-  with bearable latency.
-- **Stress ceiling (tight-loop):** N ≤ 100 slots, P99 ~450ms,
-  ~98% commit propagation in 30s. Beyond this hub-side serve-nats
-  queueing dominates.
-- **Production cadence (1 commit/min/agent):** 100+ agents
-  comfortable.
-
-If the plan has more slots than fit your concurrency tier, dispatch in
-batches (N at a time, wait for each batch to drain before starting the
-next). The trial harness `examples/herd-hub-leaf/` reproduces the
-envelope; consult its README and `docs/trials/2026-04-26/trial-report.md`
-for current numbers.
 
 ## Step 5: Monitor
 
@@ -129,10 +93,23 @@ When all subagents return:
    fossil timeline --type ci -R .orchestrator/hub.fossil --limit <N>
    ```
 
-2. Print a summary: slots completed, tasks per slot, fork retries (from
+2. Materialize the merged tip into the host project's working tree
+   (per ADR 0024). The orchestrator's Fossil checkout shares the hub
+   repo file directly (opened by `hub-bootstrap.sh`), so `fossil update`
+   reads the autosynced tip and rewrites the working tree as ordinary
+   file changes. Run from the project root (where `.fslckout` lives):
+
+   ```
+   ROOT="$(git rev-parse --show-toplevel)"
+   (cd "$ROOT" && fossil update && git status)
+   ```
+
+3. Print a summary: slots completed, tasks per slot, fork retries (from
    span data if available), unrecoverable conflicts.
 
-3. (v2 stub for now) Log "PR generation skipped — implement in v2".
+4. Tell the user: "Swarm complete. Review with `git diff`. Stage the
+   files you want with `git add -u` (modified) or `git add <paths>`
+   (specific), then `git commit -m '...' && git push`."
 
 The hub itself stays running across the session — Stop hook will tear it
 down.
@@ -147,7 +124,8 @@ down.
 
 ## What this skill does NOT do (v2 work)
 
-- GitHub PR creation
+- Auto git-add/commit/push (user runs these after Step 6)
+- GitHub PR creation (user runs `gh pr create` after committing)
 - Remote-harness subagents (multi-cloud)
 - Auto-replan on conflict
 - Multi-session hub coordination beyond persistence
