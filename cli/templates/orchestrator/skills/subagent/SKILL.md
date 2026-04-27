@@ -16,6 +16,20 @@ a slot's task list and these environment values:
 - AGENT_ID    — your unique agent id
 - SLOT_ID     — slot you're servicing
 
+## Prerequisites
+
+This skill assumes the `bones` binary is on `$PATH` (it was when the skill
+was scaffolded). If `bones` is not found, stop and tell the user to reinstall:
+
+```
+brew install danmestas/tap/bones
+# or
+go install github.com/danmestas/bones/cmd/bones@latest
+# or download from https://github.com/danmestas/bones/releases
+```
+
+Do not auto-install. Wait for the user.
+
 ## Step 1: Initialize leaf
 
 If LEAF_REPO does not exist, clone from hub:
