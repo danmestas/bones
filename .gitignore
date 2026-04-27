@@ -1,6 +1,7 @@
 
 # Built binaries
 bin/
+/agent-init
 /agent-tasks
 # examples/* leave these in cwd when run without -o or from the repo root.
 /two-agents
@@ -29,3 +30,7 @@ go.work.sum
 .fslckout
 .fossil-settings/
 .orchestrator/
+
+# Local scratch — code reviews and implementation plans (ephemeral, per-session)
+docs/code-review/
+docs/plans/
