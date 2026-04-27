@@ -6,7 +6,7 @@ import (
 )
 
 func BuildWorkerCommand(bin string, spec Spec) (*exec.Cmd, error) {
-	cmd := exec.Command(bin, "dispatch", "worker")
+	cmd := exec.Command(bin, "tasks", "dispatch", "worker")
 	cmd.Dir = spec.WorkspaceDir
 	cmd.Env = append(os.Environ(),
 		"AGENT_INFRA_TASK_ID="+string(spec.TaskID),
