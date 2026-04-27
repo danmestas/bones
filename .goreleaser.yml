@@ -95,7 +95,7 @@ brews:
     repository:
       owner: danmestas
       name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+      token: "{{ .Env.HOMEBREW_PAT_TOKEN }}"
     directory: Formula
     homepage: https://github.com/danmestas/bones
     description: "Unified CLI for the bones agent-infrastructure substrate (workspace, orchestrator, tasks)."
