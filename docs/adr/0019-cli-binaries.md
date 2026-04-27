@@ -8,6 +8,12 @@ NATS KV) and ADR 0007 (claim semantics) by giving operators a verb
 vocabulary to drive both. Compressed from three plan/spec pairs
 (`cmd/agent-init`, `cmd/agent-tasks`, `examples/two-agents`).
 
+Superseded by the bones consolidation — the `agent-init`,
+`agent-tasks`, and `orchestrator-validate-plan` binaries were merged
+into a single `bones` CLI in 2026-04 (PR #20). The split rationale
+below is preserved for historical context; current behavior, verb
+list, and packaging live under `cmd/bones/`.
+
 ## Context
 
 After ADRs 0005–0010 the coord package had a complete primitive surface

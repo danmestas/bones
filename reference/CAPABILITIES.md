@@ -63,7 +63,7 @@ conflict resolution is one round trip with a deterministic winner
 | `bd blocked` | `coord.Blocked()` | planned | Same DAG, filtered inversely. Phase 6 (tickets `dcd` → `0sr`). |
 | `bd list --status=X` | `coord.List(filter struct)` | planned | Struct filter, not a query-string DSL. |
 | `bd defer --until` | `defer_until:` field + Ready filter | planned | Phase 6 (ticket `8m9`). Not yet on the task record. |
-| `bd stale` / `bd orphans` / `bd preflight` | Helpers under `cmd/agent-tasks/` | planned | Lint-style checks fit the CLI better than the library. `cmd/agent-tasks` ships with `create`/`list`/`show`/`claim`/`update`/`close`; the stale/orphans/preflight helpers are Phase 6 (ticket `kue`). |
+| `bd stale` / `bd orphans` / `bd preflight` | Helpers under `cmd/bones/` | planned | Lint-style checks fit the CLI better than the library. `bones tasks` ships with `create`/`list`/`show`/`claim`/`update`/`close`; the stale/orphans/preflight helpers are Phase 6 (ticket `kue`). |
 | Priority 0–4 (0=critical) | Same integer scheme | planned | Additive extension to the Phase 2 record. |
 
 ## 2. Dependency graph
@@ -94,11 +94,11 @@ conflict resolution is one round trip with a deterministic winner
 
 | Beads | agent-infra plan | Status | Notes |
 |---|---|---|---|
-| `bd prime` — canonical context recovery | `coord.Prime(ctx)` + `agent-tasks prime` CLI wrapper — outputs project state, ready work, claimed work, thread summaries | planned | Phase 6 (ticket `rbu`). Borrow the single-source-of-truth pattern directly. |
-| SessionStart + PreCompact hooks auto-inject `bd prime` | Claude plugin with the same two hooks calling `agent-tasks prime` | planned | Phase 6 (ticket `rbu`). |
+| `bd prime` — canonical context recovery | `coord.Prime(ctx)` + `bones tasks prime` CLI wrapper — outputs project state, ready work, claimed work, thread summaries | planned | Phase 6 (ticket `rbu`). Borrow the single-source-of-truth pattern directly. |
+| SessionStart + PreCompact hooks auto-inject `bd prime` | Claude plugin with the same two hooks calling `bones tasks prime` | planned | Phase 6 (ticket `rbu`). |
 | "Landing the plane" session close (close issues, run QA, push, verify up-to-date) | Same ceremony, adapted: verify fossil timeline is synced, no outstanding txns | planned | Conceptual win to keep: agents are accountable for finalization, not "ready when you are." |
 | `bd edit` is prohibited (opens `$EDITOR`, blocks agents) | Never ship an equivalent; all mutations via flags or stdin | planned | Pre-learned lesson. |
-| `--json` everywhere | Every CLI subcommand supports `--json`; programmatic contract | partially implemented | `agent-tasks` subcommands accept `--json` per `cmd/agent-tasks/main.go`; schema stability audit is Phase 6 (ticket `ayy`). |
+| `--json` everywhere | Every CLI subcommand supports `--json`; programmatic contract | partially implemented | `bones tasks` subcommands accept `--json` per `cmd/bones/`; schema stability audit is Phase 6 (ticket `ayy`). |
 | `discovered-from` linking for context recovery | Same edge type; `agent-infra task discover <new> --from <parent>` | planned | Phase 6 (ticket `dcd`). Cheap to implement once typed edges land, large payoff for multi-session continuity. |
 | `bd remember` / `bd memories` — memory as first-class, in Dolt not MEMORY.md | Memory is either an issue-type (`type: memory`) or a dedicated `memories/` dir | TBD | Open: memory as a task-type or a separate primitive? |
 
@@ -127,7 +127,7 @@ conflict resolution is one round trip with a deterministic winner
 
 | Beads | agent-infra plan | Status | Notes |
 |---|---|---|---|
-| Multi-tier AI compaction (summarize old closed issues via Haiku) | `coord.Compact(ctx, opts)` does on-demand batch compaction of eligible closed tasks via a caller-supplied summarizer, writes summaries to deterministic Fossil artifacts, can archive compacted closed tasks into a cold KV bucket, and can prune them from the hot tasks bucket; `agent-tasks compact` binds a default Anthropic-backed summarizer and optional `--every` cadence wrapper | implemented | ADR 0016 keeps provider choice outside `coord`; the shipped default binding lives in the CLI layer. |
+| Multi-tier AI compaction (summarize old closed issues via Haiku) | `coord.Compact(ctx, opts)` does on-demand batch compaction of eligible closed tasks via a caller-supplied summarizer, writes summaries to deterministic Fossil artifacts, can archive compacted closed tasks into a cold KV bucket, and can prune them from the hot tasks bucket; `bones tasks compact` binds a default Anthropic-backed summarizer and optional `--every` cadence wrapper | implemented | ADR 0016 keeps provider choice outside `coord`; the shipped default binding lives in the CLI layer. |
 | `original_size`, `compact_level`, `compacted_at` metadata | Same scheme on the task record | implemented | Landed with ADR 0016 / ticket `znr`. |
 | Compaction audit trail | Fossil timeline *is* the audit trail — no separate log needed | implemented | Summary artifacts are Fossil commits; task metadata updates are KV revisions. |
 
@@ -151,13 +151,13 @@ build one on top of `coord`.
 | Content hash on Issue (SHA256 of canonical fields) | Fossil artifact hash on code artifacts (Phase 5 per ADR 0010); task records carry a schema_version but no content hash | implemented for code / planned for tasks | Free on the code side: every `coord.Commit` returns a content-addressed `RevID` (see `coord/commit.go`). Task records still carry only `schema_version`. |
 | `events` table + `EventKind` namespacing (`patrol.muted`, `agent.started`, ...) | In-process `coord.Event` interface carrying `ChatMessage`, `Reaction`, `PresenceChange` (ADR 0008 / 0009) | implemented (live-only) / TBD (durable) | `coord.Event` interface is shipped with three concrete types — see `coord/events.go`. Current events are live-only on Subscribe channels; whether a durable event store is worth building is still open. |
 | Append-only `interactions.jsonl` (LLM calls, tool calls, labeling) | Out of scope — consumers track their own LLM audit | non-goal | Not a substrate concern. |
-| Lint / orphan / stale checks | Helpers in `cmd/agent-tasks/` | planned | Phase 6 (ticket `kue`). Base CLI ships; these three helpers are additive. |
+| Lint / orphan / stale checks | Helpers in `cmd/bones/` | planned | Phase 6 (ticket `kue`). Base CLI ships; these three helpers are additive. |
 
 ## 10. CLI and plugin surface
 
 | Beads | agent-infra plan | Status | Notes |
 |---|---|---|---|
-| ~29 `bd` subcommands | `agent-init` + `agent-tasks` binaries; narrow CLI | partially implemented | `agent-init` ships `init` + `join`; `agent-tasks` ships `create`/`list`/`show`/`claim`/`update`/`close` (~8 total). Stale/orphans/preflight helpers planned in Phase 6 (`kue`). Won't match beads' breadth at v0.1. |
+| ~29 `bd` subcommands | unified `bones` binary; narrow CLI | partially implemented | `bones` ships `init`/`up`/`join`/`orchestrator` plus a `tasks` subcommand group (`create`/`list`/`show`/`claim`/`update`/`close` etc.). Stale/orphans/preflight helpers planned in Phase 6 (`kue`). Won't match beads' breadth at v0.1. |
 | Claude plugin: `plugin.json` with hooks, commands, skill, agents, MCP | Ship our own plugin in Phase 6 — same shape | planned | Phase 6 (ticket `rbu`). Direct borrow. |
 | MCP server exposing tool-level operations | Sibling binary (Phase 7) | planned | ADR 0011 reserved; ticket `hf1`. |
 | Task-agent autonomous workflow doc | Ship equivalent under `claude-plugin/agents/` | planned | Phase 6 (ticket `rbu`). Direct borrow. |
@@ -260,7 +260,7 @@ For users coming from `bd`, the mental mapping is approximately:
 | `bd close <id> --reason` | `coord.CloseTask(ctx, taskID, reason)` — `coord/close_task.go` |
 | `bd ready --json` | `coord.Ready(ctx)` — `coord/ready.go` |
 | `bd remember` / `bd memories` | No equivalent yet — memory primitive is still TBD (§4). |
-| `bd prime` | Not yet — `coord.Prime()` + `agent-tasks prime` is Phase 6 (`rbu`). |
+| `bd prime` | Not yet — `coord.Prime()` + `bones tasks prime` is Phase 6 (`rbu`). |
 
 The substrate differences that matter most:
 

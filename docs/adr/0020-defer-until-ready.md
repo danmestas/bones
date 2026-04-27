@@ -67,8 +67,8 @@ the gate opens, it stays open.
 
 ### CLI surface
 
-`agent-tasks create` and `agent-tasks update` accept `--defer-until=<rfc3339>`.
-`agent-tasks show` formats `defer_until=<rfc3339>` when set. No
+`bones tasks create` and `bones tasks update` accept `--defer-until=<rfc3339>`.
+`bones tasks show` formats `defer_until=<rfc3339>` when set. No
 dedicated `defer` verb — the field is a property, not a verb. Callers
 who want to "un-defer" use `update --defer-until=` (empty string) which
 clears the pointer.

@@ -49,7 +49,7 @@ plugin; Claude Code's skill runner drives the lifecycle.
    `.claude/skills/orchestrator/SKILL.md` in this repo.
 2. Invoke the orchestrator skill with a slot-annotated plan: the skill
    expects a plan doc that identifies which files go to which slot.
-3. The skill calls `agent-tasks` subcommands internally and coordinates
+3. The skill calls `bones tasks` subcommands internally and coordinates
    leaf commit/close.
 
 See `.claude/skills/orchestrator/SKILL.md` for the full invocation
@@ -172,11 +172,11 @@ required in agent-infra.
 
 ## 4. Result Aggregation
 
-After a run, use `agent-tasks aggregate` to get a one-shot summary of
+After a run, use `bones tasks aggregate` to get a one-shot summary of
 what every slot committed:
 
 ```
-$ bin/agent-tasks aggregate --since 1h
+$ bin/bones tasks aggregate --since 1h
 Run summary (last 1h0m0s)
 ─────────────────────────────────────────────────────
 slot-A               3 task(s)  files: foo.go, bar.go            status: closed
@@ -202,7 +202,7 @@ slot-C               1 task(s)  files: baz.go                    status: active
 ```
 
 The command requires a running hub workspace (NATS + tasks bucket). If no
-hub is running, `agent-tasks aggregate` exits with an error about the
+hub is running, `bones tasks aggregate` exits with an error about the
 missing workspace.
 
 ---
@@ -242,7 +242,7 @@ if err != nil {
 |---|---|---|
 | `examples/herd-hub-leaf/` | Shape B (library) | N-leaf thundering-herd trial: 16 slots × 30 tasks, OTLP telemetry |
 | `cmd/space-invaders-orchestrate/` | Shape B (library) | 4–5 slot minimal harness; commits files produced by parallel Task subagents |
-| `.claude/skills/orchestrator/SKILL.md` | Shape A (skill) | Claude Code orchestrator skill; drives slots via `agent-tasks` CLI |
+| `.claude/skills/orchestrator/SKILL.md` | Shape A (skill) | Claude Code orchestrator skill; drives slots via `bones tasks` CLI |
 
 ### Anatomy of `examples/herd-hub-leaf/`
 

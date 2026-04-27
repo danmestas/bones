@@ -21,22 +21,22 @@ cd .. && git clone https://github.com/danmestas/EdgeSync && cd agent-infra
 # Build agent-infra binaries:
 make
 # One-command bootstrap: workspace + scaffold + bin/leaf + hub:
-bin/agent-init up
+bin/bones up
 # Add and inspect tasks:
-bin/agent-tasks add "my first task" --files src/foo.go
-bin/agent-tasks open
-bin/agent-tasks status
+bin/bones tasks add "my first task" --files src/foo.go
+bin/bones tasks open
+bin/bones tasks status
 ```
 
-Or use fine-grained control (`agent-init up` is equivalent to):
+Or use fine-grained control (`bones up` is equivalent to):
 
 ```bash
-bin/agent-init init
-bin/agent-init orchestrator
+bin/bones init
+bin/bones orchestrator
 bash .orchestrator/scripts/hub-bootstrap.sh
 ```
 
-See `bin/agent-tasks --help` for the full subcommand list (`add`, `claim`,
+See `bin/bones --help` for the full subcommand list (`add`, `claim`,
 `close`, `watch`, `status`, and more).
 
 ---
@@ -245,9 +245,9 @@ NATS carries:
 
 ### Phase 4 — auto-init + CLI
 
-- `cmd/agent-init/` — walk up to find `.agent-infra/` marker or create one at
-  the invocation directory; start (or join) a local leaf daemon
-- `cmd/agent-tasks/` — human-facing CLI (`list`, `claim`, `update`, `done`)
+- `cmd/bones/` — walk up to find `.agent-infra/` marker or create one at
+  the invocation directory; start (or join) a local leaf daemon; human-facing
+  tasks subcommands (`list`, `claim`, `update`, `close`)
 - Decide: explicit `agent-infra init` command vs silent walk-up
 
 ### Phase 5 — smoke + chaos tests
@@ -289,8 +289,7 @@ NATS carries:
 agent-infra/
   coord/              # Public Go API — the surface agents import
   cmd/
-    agent-init/       # Project auto-init wrapper
-    agent-tasks/      # Human-facing tasks CLI
+    bones/            # Unified CLI: init/up/orchestrator + tasks subcommands
   internal/
     holds/            # NATS KV hold protocol
     tasks/            # tasks-as-files helpers
@@ -337,24 +336,24 @@ go test ./...
 you find yourself editing inside `reference/` that's a sign something's
 miswired.
 
-### Getting started with `agent-init`
+### Getting started with `bones`
 
-`agent-init` creates an `.agent-infra/` workspace and starts a local
+`bones init` creates an `.agent-infra/` workspace and starts a local
 `leaf` daemon, or rejoins an existing workspace from any subdir.
 
 ```bash
-# Build the binary (leaves it at ./bin/agent-init):
-make agent-init
+# Build the binary (leaves it at ./bin/bones):
+make bones
 
 # First time in a fresh directory — starts a leaf, writes .agent-infra/:
-$ ./bin/agent-init init
+$ ./bin/bones init
 workspace=/path/to/dir
 agent_id=7c3d…
 nats_url=nats://127.0.0.1:4222
 leaf_http_url=http://127.0.0.1:51234
 
 # From any descendant directory — walks up to find the marker:
-$ ./bin/agent-init join
+$ ./bin/bones join
 workspace=/path/to/dir
 …
 ```
@@ -363,7 +362,7 @@ The `leaf` binary must be on `PATH` (or `LEAF_BIN` set to its absolute
 path). Build it from EdgeSync with `cd ../EdgeSync && make leaf`. Leaf
 stdout/stderr lands in `.agent-infra/leaf.log`; the PID sits at
 `.agent-infra/leaf.pid`. Set `AGENT_INFRA_LOG=json` to switch
-`agent-init`'s own logs to JSON.
+`bones`'s own logs to JSON.
 
 Release-time: each of the three repos (`agent-infra`, `EdgeSync`,
 `libfossil`) is tagged and published independently. `agent-infra`
