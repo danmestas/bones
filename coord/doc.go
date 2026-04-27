@@ -1,4 +1,4 @@
-// Package coord is the single public entry point for agent-infra.
+// Package coord is the single public entry point for bones.
 //
 // Agents construct a Coord via Open, call methods to Claim file-scoped
 // work, list Ready tasks, CloseTask, Post chat messages, Ask synchronous

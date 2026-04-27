@@ -6,14 +6,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // seedTaskID is a shape-valid TaskID used by every close test. Tests
 // that need a second ID derive from this one so the fixture stays
 // obvious at the call site. ADR 0005 pins the shape to
 // <proj>-<8lowalnum>; the value here passes that predicate.
-const seedTaskID = "agent-infra-c46close"
+const seedTaskID = "bones-c46close"
 
 // seedClaimedTask writes a claimed task record bound to the Coord's
 // configured AgentID. The record is created directly via c.sub.tasks.Create
@@ -216,7 +216,7 @@ func TestCloseTask_NotFound(t *testing.T) {
 	defer func() { _ = c.Close() }()
 
 	err := c.CloseTask(
-		context.Background(), TaskID("agent-infra-ghost001"), "why",
+		context.Background(), TaskID("bones-ghost001"), "why",
 	)
 	if !errors.Is(err, ErrTaskNotFound) {
 		t.Fatalf("CloseTask: got %v, want ErrTaskNotFound", err)
@@ -322,7 +322,7 @@ func TestCloseTask_InvariantPanics(t *testing.T) {
 		c := mustOpen(t)
 		defer func() { _ = c.Close() }()
 		requirePanic(t, func() {
-			_ = c.CloseTask(nilCtx, TaskID("agent-infra-nilctx01"), "r")
+			_ = c.CloseTask(nilCtx, TaskID("bones-nilctx01"), "r")
 		}, "ctx is nil")
 	})
 	t.Run("empty taskID", func(t *testing.T) {
@@ -340,7 +340,7 @@ func TestCloseTask_InvariantPanics(t *testing.T) {
 		requirePanic(t, func() {
 			_ = c.CloseTask(
 				context.Background(),
-				TaskID("agent-infra-uac00001"),
+				TaskID("bones-uac00001"),
 				"r",
 			)
 		}, "coord is closed")

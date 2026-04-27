@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // checkHolds enforces Invariant 20: every file in files must be held by

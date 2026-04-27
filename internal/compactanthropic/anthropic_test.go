@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/coord"
+	"github.com/danmestas/bones/coord"
 )
 
 func TestSummarize_SendsRequestAndReturnsText(t *testing.T) {
@@ -38,7 +38,7 @@ func TestSummarize_SendsRequestAndReturnsText(t *testing.T) {
 		Model:   "claude-3-5-haiku-latest",
 	}}
 	out, err := s.Summarize(context.Background(), coord.CompactInput{
-		TaskID:       "agent-infra-sum1",
+		TaskID:       "bones-sum1",
 		Title:        "closed task",
 		Files:        []string{"/tmp/a.go"},
 		Context:      map[string]string{"kind": "bug"},

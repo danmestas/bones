@@ -9,8 +9,8 @@ import (
 
 	"github.com/danmestas/libfossil"
 
-	"github.com/danmestas/agent-infra/internal/assert"
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/assert"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // Summarizer compresses an eligible closed task into a textual summary

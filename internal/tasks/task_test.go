@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 func TestTask_EdgesJSONRoundTrip(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	original := tasks.Task{
-		ID:            "agent-infra-aa11",
+		ID:            "bones-aa11",
 		Title:         "edge carrier",
 		Status:        tasks.StatusOpen,
 		Files:         []string{"a.go"},
@@ -20,10 +20,10 @@ func TestTask_EdgesJSONRoundTrip(t *testing.T) {
 		UpdatedAt:     now,
 		SchemaVersion: tasks.SchemaVersion,
 		Edges: []tasks.Edge{
-			{Type: tasks.EdgeBlocks, Target: "agent-infra-bb22"},
-			{Type: tasks.EdgeDiscoveredFrom, Target: "agent-infra-cc33"},
-			{Type: tasks.EdgeSupersedes, Target: "agent-infra-dd44"},
-			{Type: tasks.EdgeDuplicates, Target: "agent-infra-ee55"},
+			{Type: tasks.EdgeBlocks, Target: "bones-bb22"},
+			{Type: tasks.EdgeDiscoveredFrom, Target: "bones-cc33"},
+			{Type: tasks.EdgeSupersedes, Target: "bones-dd44"},
+			{Type: tasks.EdgeDuplicates, Target: "bones-ee55"},
 		},
 	}
 	data, err := json.Marshal(original)
@@ -47,7 +47,7 @@ func TestTask_EdgesJSONRoundTrip(t *testing.T) {
 func TestTask_EmptyEdgesOmitted(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	rec := tasks.Task{
-		ID:            "agent-infra-ff66",
+		ID:            "bones-ff66",
 		Title:         "no edges",
 		Status:        tasks.StatusOpen,
 		Files:         []string{"b.go"},
@@ -65,10 +65,10 @@ func TestTask_EmptyEdgesOmitted(t *testing.T) {
 }
 
 func TestTask_UnknownEdgeTypePreserved(t *testing.T) {
-	raw := `{"id":"agent-infra-gg77","title":"t","status":"open",` +
+	raw := `{"id":"bones-gg77","title":"t","status":"open",` +
 		`"files":["c.go"],"created_at":"2026-04-21T00:00:00Z",` +
 		`"updated_at":"2026-04-21T00:00:00Z","schema_version":1,` +
-		`"edges":[{"type":"future-type","target":"agent-infra-hh88"}]}`
+		`"edges":[{"type":"future-type","target":"bones-hh88"}]}`
 	var rec tasks.Task
 	if err := json.Unmarshal([]byte(raw), &rec); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
@@ -85,7 +85,7 @@ func TestTask_UnknownEdgeTypePreserved(t *testing.T) {
 func TestTask_DeferUntilJSONRoundTrip(t *testing.T) {
 	now := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
 	rec := tasks.Task{
-		ID:            "agent-infra-du88",
+		ID:            "bones-du88",
 		Title:         "deferred",
 		Status:        tasks.StatusOpen,
 		Files:         []string{"d.go"},

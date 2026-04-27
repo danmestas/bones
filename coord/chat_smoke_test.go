@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
 // End-to-end smoke tests for the Phase 3 chat surface. These walk the
@@ -188,12 +188,12 @@ func TestChatSmoke_SubscribeCloseIdempotent(t *testing.T) {
 	}
 }
 
-// TestChatSmoke_NamedSubscribeCrossCoord proves the agent-infra-x0t
+// TestChatSmoke_NamedSubscribeCrossCoord proves the bones-x0t
 // deterministic-thread-identity scheme works end-to-end: Coord A
 // subscribes with pattern="t1" (non-empty — the substrate-leak path
 // before x0t, now clean), Coord B posts to "t1", and A receives. The
 // test only passes if both Coords compute the same ThreadShort from
-// ("agent-infra", "t1"); a per-Manager cache (pre-x0t) would have
+// ("bones", "t1"); a per-Manager cache (pre-x0t) would have
 // given them distinct ThreadShorts and A's subscribe would have seen
 // nothing.
 func TestChatSmoke_NamedSubscribeCrossCoord(t *testing.T) {

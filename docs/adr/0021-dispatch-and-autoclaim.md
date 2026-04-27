@@ -10,7 +10,7 @@ Accepted 2026-04-22. Phase 6 orchestration layer. Builds on ADR 0007
 
 ## Context
 
-agent-infra ships coord primitives — `Claim`, `Commit`, `CloseTask`,
+bones ships coord primitives — `Claim`, `Commit`, `CloseTask`,
 `Reclaim`, `Post`, `Subscribe` — but each operates on a single task in
 isolation. Real agent workflows want a layer above that: an idle agent
 should pick up work automatically; a parent agent should be able to

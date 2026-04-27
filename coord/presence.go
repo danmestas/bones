@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/danmestas/agent-infra/internal/assert"
-	"github.com/danmestas/agent-infra/internal/presence"
+	"github.com/danmestas/bones/internal/assert"
+	"github.com/danmestas/bones/internal/presence"
 )
 
 // Who returns the live-presence snapshot for this Coord's project.

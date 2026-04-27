@@ -1,6 +1,6 @@
 # Harness Integration Guide
 
-This document explains how to wire an agent runtime into agent-infra's
+This document explains how to wire an agent runtime into bones's
 hub-and-leaf coordination substrate. It covers the conceptual model, two
 integration shapes, per-slot customization, result aggregation, and common
 failure modes.
@@ -9,10 +9,10 @@ failure modes.
 
 ## 1. Conceptual Model
 
-agent-infra provides the **coordination substrate**. The harness provides
+bones provides the **coordination substrate**. The harness provides
 the **agent runtime**.
 
-| Layer | Owned by agent-infra | Owned by the harness |
+| Layer | Owned by bones | Owned by the harness |
 |---|---|---|
 | Hub fossil repo | ✓ | |
 | NATS mesh (leaf ↔ hub) | ✓ | |
@@ -71,7 +71,7 @@ import (
     "context"
     "fmt"
 
-    "github.com/danmestas/agent-infra/coord"
+    "github.com/danmestas/bones/coord"
 )
 
 func main() {
@@ -166,7 +166,7 @@ correlation without threading extra state through your goroutines.
 **PollInterval note:** if the EdgeSync `agent.Config` field is not
 reachable (e.g. future API change), `PollInterval` is only applied when
 non-zero. The agent defaults to 5 s otherwise. No build-time change is
-required in agent-infra.
+required in bones.
 
 ---
 

@@ -9,7 +9,7 @@ import (
 
 	"github.com/danmestas/libfossil"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // stubSummarizer is the legacy compact_test summarizer: it tracks call
@@ -92,7 +92,7 @@ func TestLeaf_Compact_WritesSummaryArtifactAndMetadata(t *testing.T) {
 	ctx := context.Background()
 	closedAt := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
 	rec := tasks.Task{
-		ID:            "agent-infra-cp111111",
+		ID:            "bones-cp111111",
 		Title:         "closed task",
 		Status:        tasks.StatusClosed,
 		Files:         []string{"/seed/a.go"},
@@ -192,7 +192,7 @@ func TestLeaf_Compact_PruneArchivesAndRemovesHotRecord(t *testing.T) {
 	ctx := context.Background()
 	closedAt := time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC)
 	rec := tasks.Task{
-		ID:            "agent-infra-cpprune1",
+		ID:            "bones-cpprune1",
 		Title:         "prunable task",
 		Status:        tasks.StatusClosed,
 		Files:         []string{"/seed/a.go"},
@@ -244,7 +244,7 @@ func TestLeaf_Compact_SkipsIneligibleTasks(t *testing.T) {
 	recentClosedAt := now.Add(-time.Hour)
 
 	seedLeafClosedTask(t, l, tasks.Task{
-		ID:            "agent-infra-cp222222",
+		ID:            "bones-cp222222",
 		Title:         "eligible",
 		Status:        tasks.StatusClosed,
 		Files:         []string{"/seed/a.go"},
@@ -256,7 +256,7 @@ func TestLeaf_Compact_SkipsIneligibleTasks(t *testing.T) {
 		SchemaVersion: tasks.SchemaVersion,
 	})
 	seedLeafClosedTask(t, l, tasks.Task{
-		ID:            "agent-infra-cp333333",
+		ID:            "bones-cp333333",
 		Title:         "recent",
 		Status:        tasks.StatusClosed,
 		Files:         []string{"/seed/b.go"},
@@ -268,7 +268,7 @@ func TestLeaf_Compact_SkipsIneligibleTasks(t *testing.T) {
 		SchemaVersion: tasks.SchemaVersion,
 	})
 	seedLeafClosedTask(t, l, tasks.Task{
-		ID:            "agent-infra-cp444444",
+		ID:            "bones-cp444444",
 		Title:         "already compacted",
 		Status:        tasks.StatusClosed,
 		Files:         []string{"/seed/c.go"},
@@ -282,7 +282,7 @@ func TestLeaf_Compact_SkipsIneligibleTasks(t *testing.T) {
 		CompactedAt:   &oldClosedAt,
 		SchemaVersion: tasks.SchemaVersion,
 	})
-	seedLeafClosedTask(t, l, readyBaseline("agent-infra-cp555555", now))
+	seedLeafClosedTask(t, l, readyBaseline("bones-cp555555", now))
 	s := &stubSummarizer{summary: "summary"}
 
 	result, err := l.Compact(ctx, CompactOptions{
@@ -297,7 +297,7 @@ func TestLeaf_Compact_SkipsIneligibleTasks(t *testing.T) {
 	if len(result.Tasks) != 1 {
 		t.Fatalf("len(Tasks)=%d, want 1", len(result.Tasks))
 	}
-	if result.Tasks[0].TaskID != TaskID("agent-infra-cp222222") {
+	if result.Tasks[0].TaskID != TaskID("bones-cp222222") {
 		t.Fatalf("TaskID=%q, want eligible task", result.Tasks[0].TaskID)
 	}
 }

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
 // TestSubscribePattern_WildcardReceivesAll exercises the primary

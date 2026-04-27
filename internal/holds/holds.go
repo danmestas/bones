@@ -14,8 +14,8 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/danmestas/agent-infra/internal/assert"
-	"github.com/danmestas/agent-infra/internal/jskv"
+	"github.com/danmestas/bones/internal/assert"
+	"github.com/danmestas/bones/internal/jskv"
 )
 
 // Config configures Open. Every field is required; there are no

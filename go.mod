@@ -1,4 +1,4 @@
-module github.com/danmestas/agent-infra
+module github.com/danmestas/bones
 
 go 1.26.0
 

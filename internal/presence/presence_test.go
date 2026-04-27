@@ -9,7 +9,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
 // validConfig returns a fully-valid Config bound to nc. Tests override
@@ -19,9 +19,9 @@ import (
 // stay above ticker jitter on slow CI runners.
 func validConfig(nc *nats.Conn) Config {
 	return Config{
-		AgentID:           "agent-infra-test0001",
-		Project:           "agent-infra",
-		Bucket:            "agent-infra-presence-test",
+		AgentID:           "bones-test0001",
+		Project:           "bones",
+		Bucket:            "bones-presence-test",
 		NATSConn:          nc,
 		HeartbeatInterval: 200 * time.Millisecond,
 	}
@@ -132,15 +132,15 @@ func TestWho_Self(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("Who returned %d entries, want 1", len(entries))
 	}
-	if entries[0].AgentID != "agent-infra-test0001" {
+	if entries[0].AgentID != "bones-test0001" {
 		t.Fatalf(
-			"Who AgentID = %q, want agent-infra-test0001",
+			"Who AgentID = %q, want bones-test0001",
 			entries[0].AgentID,
 		)
 	}
-	if entries[0].Project != "agent-infra" {
+	if entries[0].Project != "bones" {
 		t.Fatalf(
-			"Who Project = %q, want agent-infra", entries[0].Project,
+			"Who Project = %q, want bones", entries[0].Project,
 		)
 	}
 	if entries[0].LastSeen.IsZero() {
@@ -151,9 +151,9 @@ func TestWho_Self(t *testing.T) {
 func TestWho_MultipleAgents(t *testing.T) {
 	nc, _ := natstest.NewJetStreamServer(t)
 	cfgA := validConfig(nc)
-	cfgA.AgentID = "agent-infra-aaaa0001"
+	cfgA.AgentID = "bones-aaaa0001"
 	cfgB := validConfig(nc)
-	cfgB.AgentID = "agent-infra-bbbb0001"
+	cfgB.AgentID = "bones-bbbb0001"
 
 	mA, err := Open(context.Background(), cfgA)
 	if err != nil {
@@ -177,7 +177,7 @@ func TestWho_MultipleAgents(t *testing.T) {
 	for _, e := range entries {
 		ids[e.AgentID] = true
 	}
-	if !ids["agent-infra-aaaa0001"] || !ids["agent-infra-bbbb0001"] {
+	if !ids["bones-aaaa0001"] || !ids["bones-bbbb0001"] {
 		t.Fatalf("Who missing one or both agents: %+v", entries)
 	}
 }
@@ -217,9 +217,9 @@ func TestWho_ProjectScoped(t *testing.T) {
 func TestPresent_SelfAndPeerAndMissing(t *testing.T) {
 	nc, _ := natstest.NewJetStreamServer(t)
 	cfgA := validConfig(nc)
-	cfgA.AgentID = "agent-infra-prs10001"
+	cfgA.AgentID = "bones-prs10001"
 	cfgB := validConfig(nc)
-	cfgB.AgentID = "agent-infra-prs20001"
+	cfgB.AgentID = "bones-prs20001"
 
 	mA, err := Open(context.Background(), cfgA)
 	if err != nil {
@@ -246,7 +246,7 @@ func TestPresent_SelfAndPeerAndMissing(t *testing.T) {
 	if !peerOK {
 		t.Fatalf("Present peer: got false, want true")
 	}
-	ghostOK, err := mA.Present(context.Background(), "agent-infra-ghst0001")
+	ghostOK, err := mA.Present(context.Background(), "bones-ghst0001")
 	if err != nil {
 		t.Fatalf("Present ghost: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestPresent_ErrClosed(t *testing.T) {
 func TestWatch_Up(t *testing.T) {
 	nc, _ := natstest.NewJetStreamServer(t)
 	cfgA := validConfig(nc)
-	cfgA.AgentID = "agent-infra-watch001"
+	cfgA.AgentID = "bones-watch001"
 	mA, err := Open(context.Background(), cfgA)
 	if err != nil {
 		t.Fatalf("Open A: %v", err)
@@ -323,7 +323,7 @@ func TestWatch_Up(t *testing.T) {
 
 	// B opening generates an Up event on A's watch.
 	cfgB := validConfig(nc)
-	cfgB.AgentID = "agent-infra-watch002"
+	cfgB.AgentID = "bones-watch002"
 	mB, err := Open(context.Background(), cfgB)
 	if err != nil {
 		t.Fatalf("Open B: %v", err)
@@ -332,8 +332,8 @@ func TestWatch_Up(t *testing.T) {
 
 	select {
 	case evt := <-events:
-		if evt.AgentID != "agent-infra-watch002" {
-			t.Fatalf("Watch: got AgentID %q, want agent-infra-watch002", evt.AgentID)
+		if evt.AgentID != "bones-watch002" {
+			t.Fatalf("Watch: got AgentID %q, want bones-watch002", evt.AgentID)
 		}
 		if evt.Kind != EventUp {
 			t.Fatalf("Watch: got Kind %v, want EventUp", evt.Kind)
@@ -346,7 +346,7 @@ func TestWatch_Up(t *testing.T) {
 func TestWatch_Down(t *testing.T) {
 	nc, _ := natstest.NewJetStreamServer(t)
 	cfgA := validConfig(nc)
-	cfgA.AgentID = "agent-infra-watch001"
+	cfgA.AgentID = "bones-watch001"
 	mA, err := Open(context.Background(), cfgA)
 	if err != nil {
 		t.Fatalf("Open A: %v", err)
@@ -354,7 +354,7 @@ func TestWatch_Down(t *testing.T) {
 	t.Cleanup(func() { _ = mA.Close() })
 
 	cfgB := validConfig(nc)
-	cfgB.AgentID = "agent-infra-watch002"
+	cfgB.AgentID = "bones-watch002"
 	mB, err := Open(context.Background(), cfgB)
 	if err != nil {
 		t.Fatalf("Open B: %v", err)
@@ -379,7 +379,7 @@ func TestWatch_Down(t *testing.T) {
 	for {
 		select {
 		case evt := <-events:
-			if evt.AgentID == "agent-infra-watch002" && evt.Kind == EventDown {
+			if evt.AgentID == "bones-watch002" && evt.Kind == EventDown {
 				return
 			}
 		case <-deadline:

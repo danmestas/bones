@@ -7,7 +7,7 @@ import (
 
 	"github.com/danmestas/EdgeSync/leaf/agent/notify"
 
-	"github.com/danmestas/agent-infra/internal/assert"
+	"github.com/danmestas/bones/internal/assert"
 )
 
 // Subscribe returns a channel of coord.Event values for messages that

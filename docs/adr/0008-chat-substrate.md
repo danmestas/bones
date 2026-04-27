@@ -110,7 +110,7 @@ fragility ticket and is now superseded.
 **Subject scheme.**
 
 - `notify.<proj>.<thread>` — chat messages (inherited from notify)
-- `<proj>.ask.<recipient>` — Ask request/reply (new, agent-infra-specific)
+- `<proj>.ask.<recipient>` — Ask request/reply (new, bones-specific)
 
 `<proj>` is derived from `coord.Config.AgentID`'s project prefix
 (the `<proj>` portion of `<proj>-<agent-suffix>`). `<thread>` is an

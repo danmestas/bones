@@ -6,7 +6,7 @@
 // than one.
 //
 // This package is internal and unexported: callers outside
-// github.com/danmestas/agent-infra must not depend on it. The
+// github.com/danmestas/bones must not depend on it. The
 // notify.Message type leaks across the package boundary into coord
 // where eventFromMessage translates it into coord.ChatMessage per
 // ADR 0003's substrate-hiding rule; no notify type appears on any

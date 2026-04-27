@@ -96,7 +96,7 @@ func keyOf(project, agentID string) string {
 
 // splitKey parses a KV key back into (project, agentID). The split is
 // on the first '/' — project segments cannot themselves contain '/' in
-// the agent-infra naming scheme, so a single split is sufficient.
+// the bones naming scheme, so a single split is sufficient.
 // Returns ("", "", false) on a malformed key (no '/').
 func splitKey(key string) (string, string, bool) {
 	idx := strings.IndexByte(key, '/')

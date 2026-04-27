@@ -10,9 +10,9 @@ import (
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
-	"github.com/danmestas/agent-infra/coord"
-	"github.com/danmestas/agent-infra/internal/dispatch"
-	"github.com/danmestas/agent-infra/internal/workspace"
+	"github.com/danmestas/bones/coord"
+	"github.com/danmestas/bones/internal/dispatch"
+	"github.com/danmestas/bones/internal/workspace"
 )
 
 // TasksDispatchParentCmd runs the parent side of the dispatch flow:

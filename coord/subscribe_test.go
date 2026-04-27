@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
 // subscribeDeliveryTimeout bounds how long a Subscribe test waits for a

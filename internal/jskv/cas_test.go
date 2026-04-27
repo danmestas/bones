@@ -6,7 +6,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/danmestas/agent-infra/internal/jskv"
+	"github.com/danmestas/bones/internal/jskv"
 )
 
 // TestIsConflict_Nil pins the happy-path no-error shortcut — the

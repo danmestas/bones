@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
-	"github.com/danmestas/agent-infra/internal/workspace"
+	"github.com/danmestas/bones/internal/tasks"
+	"github.com/danmestas/bones/internal/workspace"
 )
 
 func TestToExitCode(t *testing.T) {

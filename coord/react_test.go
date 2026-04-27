@@ -7,7 +7,7 @@ import (
 
 	"github.com/danmestas/EdgeSync/leaf/agent/notify"
 
-	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
 // TestReact_HappyPath exercises the full reaction round-trip: both A

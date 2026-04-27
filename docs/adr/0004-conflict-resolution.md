@@ -39,7 +39,7 @@ commit with both leaves as parents.
 
 This is not configurable. The substrate's merge model is what it is;
 alternative choices would mean building our own VCS on top of fossil,
-which is a larger project than `agent-infra` is.
+which is a larger project than `bones` is.
 
 ## Consequences
 

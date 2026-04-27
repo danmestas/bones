@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // waitForKind drains ch until an event matching (id, kind) arrives, or
@@ -46,7 +46,7 @@ func TestWatch_ReceivesCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
-	id := "agent-infra-watch001"
+	id := "bones-watch001"
 	if err := m.Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestWatch_ReceivesUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
-	id := "agent-infra-watch002"
+	id := "bones-watch002"
 	if err := m.Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestWatch_ReceivesDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
-	id := "agent-infra-watch003"
+	id := "bones-watch003"
 	if err := m.Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}

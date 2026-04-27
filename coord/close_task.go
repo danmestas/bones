@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/assert"
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/assert"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // CloseTask marks a task closed with an explanatory reason. The caller

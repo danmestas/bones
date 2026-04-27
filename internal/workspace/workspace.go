@@ -1,4 +1,4 @@
-// Package workspace manages an agent-infra workspace: the .agent-infra/
+// Package workspace manages a bones workspace: the .agent-infra/
 // directory, its on-disk config, and the associated leaf daemon process.
 //
 // Two entry points:
@@ -40,7 +40,7 @@ type Info struct {
 
 var (
 	ErrAlreadyInitialized = errors.New("workspace already initialized")
-	ErrNoWorkspace        = errors.New("no agent-infra workspace found")
+	ErrNoWorkspace        = errors.New("no bones workspace found")
 	ErrLeafUnreachable    = errors.New("leaf daemon not reachable")
 	ErrLeafStartTimeout   = errors.New("leaf daemon failed to start within timeout")
 )
@@ -66,8 +66,8 @@ func ExitCode(err error) int {
 }
 
 var (
-	tracer = otel.Tracer("github.com/danmestas/agent-infra/internal/workspace")
-	meter  = otel.Meter("github.com/danmestas/agent-infra/internal/workspace")
+	tracer = otel.Tracer("github.com/danmestas/bones/internal/workspace")
+	meter  = otel.Meter("github.com/danmestas/bones/internal/workspace")
 
 	opCounter  metric.Int64Counter
 	opDuration metric.Float64Histogram

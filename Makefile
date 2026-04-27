@@ -1,4 +1,4 @@
-# agent-infra — developer Makefile.
+# bones — developer Makefile.
 #
 # Source of truth for local and CI discipline checks. The CI workflow invokes
 # `make check` verbatim so the local and remote gates cannot drift. See

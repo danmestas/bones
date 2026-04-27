@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // linkTestSeed creates an open, unclaimed task via the existing
@@ -41,8 +41,8 @@ func linkTestClose(t *testing.T, c *Coord, id TaskID) {
 func TestLink_HappyPath(t *testing.T) {
 	c := mustOpen(t)
 	ctx := context.Background()
-	from := linkTestSeed(t, c, "agent-infra-ll11", "linker")
-	to := linkTestSeed(t, c, "agent-infra-ll22", "target")
+	from := linkTestSeed(t, c, "bones-ll11", "linker")
+	to := linkTestSeed(t, c, "bones-ll22", "target")
 
 	if err := c.Link(ctx, from, to, EdgeBlocks); err != nil {
 		t.Fatalf("Link: %v", err)
@@ -64,8 +64,8 @@ func TestLink_HappyPath(t *testing.T) {
 func TestLink_InvalidEdgeType(t *testing.T) {
 	c := mustOpen(t)
 	ctx := context.Background()
-	from := linkTestSeed(t, c, "agent-infra-ll33", "linker")
-	to := linkTestSeed(t, c, "agent-infra-ll44", "target")
+	from := linkTestSeed(t, c, "bones-ll33", "linker")
+	to := linkTestSeed(t, c, "bones-ll44", "target")
 
 	err := c.Link(ctx, from, to, EdgeType("bogus"))
 	if !errors.Is(err, ErrInvalidEdgeType) {
@@ -76,9 +76,9 @@ func TestLink_InvalidEdgeType(t *testing.T) {
 func TestLink_FromNotFound(t *testing.T) {
 	c := mustOpen(t)
 	ctx := context.Background()
-	to := linkTestSeed(t, c, "agent-infra-ll55", "target")
+	to := linkTestSeed(t, c, "bones-ll55", "target")
 
-	err := c.Link(ctx, TaskID("agent-infra-nonexist"), to, EdgeBlocks)
+	err := c.Link(ctx, TaskID("bones-nonexist"), to, EdgeBlocks)
 	if !errors.Is(err, ErrTaskNotFound) {
 		t.Errorf("err = %v, want ErrTaskNotFound", err)
 	}
@@ -87,9 +87,9 @@ func TestLink_FromNotFound(t *testing.T) {
 func TestLink_ToNotFound(t *testing.T) {
 	c := mustOpen(t)
 	ctx := context.Background()
-	from := linkTestSeed(t, c, "agent-infra-ll66", "linker")
+	from := linkTestSeed(t, c, "bones-ll66", "linker")
 
-	err := c.Link(ctx, from, TaskID("agent-infra-nonexist"), EdgeBlocks)
+	err := c.Link(ctx, from, TaskID("bones-nonexist"), EdgeBlocks)
 	if !errors.Is(err, ErrTaskNotFound) {
 		t.Errorf("err = %v, want ErrTaskNotFound", err)
 	}
@@ -100,8 +100,8 @@ func TestLink_ToClosedAllowed(t *testing.T) {
 	// (ADR 0014 §API preconditions).
 	c := mustOpen(t)
 	ctx := context.Background()
-	from := linkTestSeed(t, c, "agent-infra-ll77", "linker")
-	to := linkTestSeed(t, c, "agent-infra-ll88", "target")
+	from := linkTestSeed(t, c, "bones-ll77", "linker")
+	to := linkTestSeed(t, c, "bones-ll88", "target")
 	linkTestClose(t, c, to)
 
 	if err := c.Link(ctx, from, to, EdgeSupersedes); err != nil {
@@ -112,8 +112,8 @@ func TestLink_ToClosedAllowed(t *testing.T) {
 func TestLink_IdempotentDuplicate(t *testing.T) {
 	c := mustOpen(t)
 	ctx := context.Background()
-	from := linkTestSeed(t, c, "agent-infra-id11", "linker")
-	to := linkTestSeed(t, c, "agent-infra-id22", "target")
+	from := linkTestSeed(t, c, "bones-id11", "linker")
+	to := linkTestSeed(t, c, "bones-id22", "target")
 
 	if err := c.Link(ctx, from, to, EdgeBlocks); err != nil {
 		t.Fatalf("Link 1: %v", err)
@@ -137,8 +137,8 @@ func TestLink_MultipleTypesSameTarget(t *testing.T) {
 	// pairs; both should append.
 	c := mustOpen(t)
 	ctx := context.Background()
-	from := linkTestSeed(t, c, "agent-infra-id33", "linker")
-	to := linkTestSeed(t, c, "agent-infra-id44", "target")
+	from := linkTestSeed(t, c, "bones-id33", "linker")
+	to := linkTestSeed(t, c, "bones-id44", "target")
 
 	if err := c.Link(ctx, from, to, EdgeBlocks); err != nil {
 		t.Fatalf("Link blocks: %v", err)
@@ -161,9 +161,9 @@ func TestLink_ConcurrentWritersConverge(t *testing.T) {
 	// land. Relies on tasks.Manager.Update's existing CAS-retry.
 	c := mustOpen(t)
 	ctx := context.Background()
-	from := linkTestSeed(t, c, "agent-infra-co11", "linker")
-	toA := linkTestSeed(t, c, "agent-infra-co22", "target-a")
-	toB := linkTestSeed(t, c, "agent-infra-co33", "target-b")
+	from := linkTestSeed(t, c, "bones-co11", "linker")
+	toA := linkTestSeed(t, c, "bones-co22", "target-a")
+	toB := linkTestSeed(t, c, "bones-co33", "target-b")
 
 	errCh := make(chan error, 2)
 	go func() { errCh <- c.Link(ctx, from, toA, EdgeBlocks) }()

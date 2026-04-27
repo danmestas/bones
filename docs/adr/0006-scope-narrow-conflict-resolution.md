@@ -25,7 +25,7 @@ chat-resolved merge commit. ADR 0004's decision is load-bearing there.
 
 What has changed is that ADR 0004's body reads as if it still covers task
 state, which it no longer does. Leaving it un-annotated invites a reader to
-look up "how does agent-infra resolve conflicts?" and conclude — incorrectly —
+look up "how does bones resolve conflicts?" and conclude — incorrectly —
 that task claims can produce sibling leaves waiting for chat resolution. The
 fix is to narrow 0004's stated scope, not to rewrite it.
 

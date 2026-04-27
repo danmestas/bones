@@ -8,10 +8,10 @@ import (
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
-	"github.com/danmestas/agent-infra/internal/workspace"
+	"github.com/danmestas/bones/internal/workspace"
 )
 
-// InitCmd creates a new agent-infra workspace in the current directory.
+// InitCmd creates a new bones workspace in the current directory.
 type InitCmd struct{}
 
 func (c *InitCmd) Run(g *libfossilcli.Globals) error {
@@ -81,7 +81,7 @@ func reportWorkspace(op string, info workspace.Info, err error) error {
 			"workspace already initialized; run `bones join` instead")
 	case errors.Is(err, workspace.ErrNoWorkspace):
 		fmt.Fprintln(os.Stderr,
-			"no agent-infra workspace found; run `bones init` first")
+			"no bones workspace found; run `bones init` first")
 	case errors.Is(err, workspace.ErrLeafUnreachable):
 		fmt.Fprintln(os.Stderr,
 			"leaf daemon not reachable; its PID file may be stale")

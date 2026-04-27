@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
 // TestPost_HappyPath covers the primary flow: an open Coord posts a

@@ -11,8 +11,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
-	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+	"github.com/danmestas/bones/internal/tasks"
+	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
 // openTestManager spins up a JetStream-enabled fixture and returns a
@@ -100,7 +100,7 @@ func TestCreate_HappyPath(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	id := "agent-infra-aaaaaaaa"
+	id := "bones-aaaaaaaa"
 
 	if err := m.Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -124,7 +124,7 @@ func TestCreate_Duplicate_ReturnsAlreadyExists(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	id := "agent-infra-aaaaaaab"
+	id := "bones-aaaaaaab"
 
 	if err := m.Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create 1: %v", err)
@@ -139,7 +139,7 @@ func TestGet_Absent_ReturnsNotFound(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 
-	_, _, err := m.Get(context.Background(), "agent-infra-ghost0000")
+	_, _, err := m.Get(context.Background(), "bones-ghost0000")
 	if !errors.Is(err, tasks.ErrNotFound) {
 		t.Fatalf("Get absent: got %v, want ErrNotFound", err)
 	}
@@ -149,7 +149,7 @@ func TestUpdate_HappyPath(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	id := "agent-infra-update001"
+	id := "bones-update001"
 
 	if err := m.Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -188,7 +188,7 @@ func TestUpdate_Invariant11_Violation_Rejected(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	id := "agent-infra-inv110001"
+	id := "bones-inv110001"
 
 	if err := m.Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -216,7 +216,7 @@ func TestUpdate_InvalidTransition_Rejected(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	id := "agent-infra-dag00001"
+	id := "bones-dag00001"
 
 	if err := m.Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -251,7 +251,7 @@ func TestUpdate_ClosedIsTerminal_RejectsSelfEdge(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	id := "agent-infra-closed01"
+	id := "bones-closed01"
 
 	if err := m.Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -284,7 +284,7 @@ func TestUpdate_ClosedCompactionMetadata_AllowsSelfEdge(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	id := "agent-infra-closed02"
+	id := "bones-closed02"
 
 	if err := m.Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -327,7 +327,7 @@ func TestUpdate_ValueTooLarge_Rejected(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	id := "agent-infra-big00001"
+	id := "bones-big00001"
 
 	if err := m.Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -348,7 +348,7 @@ func TestUpdate_MutateError_Propagates(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	id := "agent-infra-mut00001"
+	id := "bones-mut00001"
 
 	if err := m.Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -368,9 +368,9 @@ func TestList_ReturnsAllRecords(t *testing.T) {
 	ctx := context.Background()
 
 	ids := []string{
-		"agent-infra-list0001",
-		"agent-infra-list0002",
-		"agent-infra-list0003",
+		"bones-list0001",
+		"bones-list0002",
+		"bones-list0003",
 	}
 	for _, id := range ids {
 		if err := m.Create(ctx, newTask(id)); err != nil {
@@ -412,7 +412,7 @@ func TestPurge_RemovesRecord(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	id := "agent-infra-purge001"
+	id := "bones-purge001"
 
 	if err := m.Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -437,7 +437,7 @@ func TestCreate_InvalidStatus_Rejected(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 
-	bad := newTask("agent-infra-status01")
+	bad := newTask("bones-status01")
 	bad.Status = "totally-bogus"
 	err := m.Create(context.Background(), bad)
 	if !errors.Is(err, tasks.ErrInvalidStatus) {
@@ -449,7 +449,7 @@ func TestCreate_Invariant11_OnCreate_Rejected(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 
-	bad := newTask("agent-infra-inv1101c")
+	bad := newTask("bones-inv1101c")
 	bad.Status = tasks.StatusClaimed
 	// ClaimedBy deliberately empty.
 	err := m.Create(context.Background(), bad)
@@ -464,13 +464,13 @@ func TestInvariant_NilCtx(t *testing.T) {
 	var ctx context.Context
 
 	requirePanic(t, func() {
-		_ = m.Create(ctx, newTask("agent-infra-ctx00001"))
+		_ = m.Create(ctx, newTask("bones-ctx00001"))
 	}, "ctx is nil")
 	requirePanic(t, func() {
-		_, _, _ = m.Get(ctx, "agent-infra-ctx00002")
+		_, _, _ = m.Get(ctx, "bones-ctx00002")
 	}, "ctx is nil")
 	requirePanic(t, func() {
-		_ = m.Update(ctx, "agent-infra-ctx00003",
+		_ = m.Update(ctx, "bones-ctx00003",
 			func(t tasks.Task) (tasks.Task, error) { return t, nil })
 	}, "ctx is nil")
 	requirePanic(t, func() {
@@ -525,7 +525,7 @@ func TestGet_MigratesLegacySchemaVersionOnRead(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	id := "agent-infra-legacy01"
+	id := "bones-legacy01"
 	legacy := []byte(`{"id":"` + id + `","title":"legacy","status":"open",` +
 		`"files":["/a"],"created_at":"2026-01-01T00:00:00Z",` +
 		`"updated_at":"2026-01-01T00:00:00Z","schema_version":1}`)

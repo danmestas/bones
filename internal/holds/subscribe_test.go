@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/holds"
+	"github.com/danmestas/bones/internal/holds"
 )
 
 // recvEvent reads one event from ch with a timeout. It fails the test

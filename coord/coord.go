@@ -11,33 +11,33 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/danmestas/agent-infra/internal/assert"
-	"github.com/danmestas/agent-infra/internal/chat"
-	"github.com/danmestas/agent-infra/internal/holds"
-	"github.com/danmestas/agent-infra/internal/presence"
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/assert"
+	"github.com/danmestas/bones/internal/chat"
+	"github.com/danmestas/bones/internal/holds"
+	"github.com/danmestas/bones/internal/presence"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // holdsBucket is the JetStream KV bucket name coord uses to back
 // file-scoped holds. The bucket identifier is a substrate detail per
 // ADR 0003 and therefore lives here, not on Config.
-const holdsBucket = "agent-infra-holds"
+const holdsBucket = "bones-holds"
 
 // tasksBucket is the JetStream KV bucket name coord uses to back task
 // records per ADR 0005. Also substrate-internal per ADR 0003.
-const tasksBucket = "agent-infra-tasks"
+const tasksBucket = "bones-tasks"
 
 // archiveBucket is the cold JetStream KV bucket name coord uses for
 // pruned closed-task snapshots after compaction.
-const archiveBucket = "agent-infra-task-archive"
+const archiveBucket = "bones-task-archive"
 
 // presenceBucket is the JetStream KV bucket name coord uses to back
 // the presence substrate per ADR 0009. Entry TTL is 3x
 // Config.HeartbeatInterval and is set at bucket-creation time by
 // internal/presence.Open.
-const presenceBucket = "agent-infra-presence"
+const presenceBucket = "bones-presence"
 
-// Coord is the public entry point for agent-infra. Construct one via
+// Coord is the public entry point for bones. Construct one via
 // Open and Close it at shutdown. All coordination — hold acquisition,
 // task ready queries, chat messaging, presence — flows through methods
 // on *Coord.
@@ -161,7 +161,7 @@ func openSubstrate(
 
 // projectPrefix derives the <proj> segment from an AgentID shaped
 // <proj>-<suffix> per ADR 0005. It takes everything up to the LAST
-// hyphen — "agent-infra-abc123" yields "agent-infra". This runs after
+// hyphen — "bones-abc123" yields "bones". This runs after
 // Config.Validate's non-empty check so an empty AgentID cannot reach
 // here in production; the assertions catch a caller that bypasses
 // Validate.

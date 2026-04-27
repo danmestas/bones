@@ -1,4 +1,4 @@
-# golangci-lint configuration for agent-infra.
+# golangci-lint configuration for bones.
 # Schema: v2 (golangci-lint v2.x). See https://golangci-lint.run/usage/configuration/
 #
 # TigerStyle discipline gate — enforces formatting, correctness, and function-size

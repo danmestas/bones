@@ -4,7 +4,7 @@ import (
 	edgecli "github.com/danmestas/EdgeSync/cli"
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
-	bonescli "github.com/danmestas/agent-infra/cli"
+	bonescli "github.com/danmestas/bones/cli"
 )
 
 // CLI is the top-level Kong assembly. Globals are inherited from
@@ -21,15 +21,15 @@ type CLI struct {
 	Notify edgecli.NotifyCmd `cmd:"" help:"Bidirectional notification messaging"`
 	Doctor edgecli.DoctorCmd `cmd:"" help:"Check development environment health"`
 
-	// agent-infra workspace (agent-infra/cli).
+	// bones workspace (bones/cli).
 	Init bonescli.InitCmd `cmd:"" help:"Create a workspace"`
 	Join bonescli.JoinCmd `cmd:"" help:"Locate an existing workspace"`
 	Up   bonescli.UpCmd   `cmd:"" help:"Full bootstrap: workspace + scaffold + leaf + hub"`
 
-	// agent-infra orchestrator (agent-infra/cli).
+	// bones orchestrator (bones/cli).
 	Orchestrator bonescli.OrchestratorCmd `cmd:"" help:"Install orchestrator scaffolding"`
 	ValidatePlan bonescli.ValidatePlanCmd `cmd:"" name:"validate-plan" help:"Validate plan"`
 
-	// Workspace task operations (agent-infra/cli).
+	// Workspace task operations (bones/cli).
 	Tasks bonescli.TasksCmd `cmd:"" help:"Inspect and mutate runtime agent tasks"`
 }

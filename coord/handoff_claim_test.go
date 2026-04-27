@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
-	"github.com/danmestas/agent-infra/internal/testutil/natstest"
+	"github.com/danmestas/bones/internal/tasks"
+	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
 func TestHandoffClaim_TaskNotClaimed_Refused(t *testing.T) {

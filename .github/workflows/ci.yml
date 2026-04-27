@@ -12,12 +12,12 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      # Check out agent-infra into ./agent-infra so the sibling EdgeSync
+      # Check out bones into ./bones so the sibling EdgeSync
       # clone can sit at ../EdgeSync.
-      - name: Checkout agent-infra
+      - name: Checkout bones
         uses: actions/checkout@v4
         with:
-          path: agent-infra
+          path: bones
 
       - name: Checkout EdgeSync (sibling dir)
         uses: actions/checkout@v4
@@ -29,7 +29,7 @@ jobs:
         with:
           go-version: '1.26.0'
           cache: true
-          cache-dependency-path: agent-infra/go.sum
+          cache-dependency-path: bones/go.sum
 
       # The golangci-lint-action binary is built with an older Go and ships a
       # v1 binary by default; we pin v2 (matches .golangci.yml schema) and let
@@ -44,11 +44,11 @@ jobs:
           echo "LEAF_BIN=$GITHUB_WORKSPACE/EdgeSync/bin/leaf" >> $GITHUB_ENV
 
       - name: Build bones binary
-        working-directory: agent-infra
+        working-directory: bones
         run: |
           make bones
-          echo "BONES_BIN=$GITHUB_WORKSPACE/agent-infra/bin/bones" >> $GITHUB_ENV
+          echo "BONES_BIN=$GITHUB_WORKSPACE/bones/bin/bones" >> $GITHUB_ENV
 
       - name: make check
-        working-directory: agent-infra
+        working-directory: bones
         run: make check

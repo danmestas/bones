@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/danmestas/agent-infra/internal/assert"
-	"github.com/danmestas/agent-infra/internal/chat"
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/assert"
+	"github.com/danmestas/bones/internal/chat"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // PrimeResult is a snapshot of the workspace state for agent context

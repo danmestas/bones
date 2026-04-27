@@ -5,7 +5,7 @@
 // retention rules this package enforces.
 //
 // This package is internal and unexported: callers outside
-// github.com/danmestas/agent-infra must not depend on it.
+// github.com/danmestas/bones must not depend on it.
 package tasks
 
 import "errors"

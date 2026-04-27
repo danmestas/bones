@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 // readyBaseline returns a well-formed open task record ready for
@@ -71,15 +71,15 @@ func TestReady_FiltersOpenUnclaimed(t *testing.T) {
 	c := mustOpen(t)
 	now := time.Now().UTC()
 
-	open := readyBaseline("agent-infra-open1111", now)
+	open := readyBaseline("bones-open1111", now)
 	seedTask(t, c, open)
 
-	claimed := readyBaseline("agent-infra-clam1111", now)
+	claimed := readyBaseline("bones-clam1111", now)
 	claimed.Status = tasks.StatusClaimed
 	claimed.ClaimedBy = "agent-X"
 	seedTask(t, c, claimed)
 
-	closed := readyBaseline("agent-infra-clos1111", now)
+	closed := readyBaseline("bones-clos1111", now)
 	closed.Status = tasks.StatusClosed
 	closedAt := now
 	closed.ClosedAt = &closedAt
@@ -90,7 +90,7 @@ func TestReady_FiltersOpenUnclaimed(t *testing.T) {
 	// invariant-11 violator: status=open with claimed_by set. Create
 	// rejects this at validateForCreate; seed directly via KVForTest
 	// so Ready's defensive filter is exercised.
-	violator := readyBaseline("agent-infra-viol1111", now)
+	violator := readyBaseline("bones-viol1111", now)
 	violator.ClaimedBy = "agent-Y"
 	seedRawTask(t, c, violator)
 
@@ -113,12 +113,12 @@ func TestReady_FiltersOpenUnclaimed(t *testing.T) {
 func TestReady_HidesFutureDeferredTasks(t *testing.T) {
 	c := mustOpen(t)
 	now := time.Now().UTC()
-	future := readyBaseline("agent-infra-def1111", now)
+	future := readyBaseline("bones-def1111", now)
 	futureAt := now.Add(time.Hour)
 	future.DeferUntil = &futureAt
 	seedTask(t, c, future)
 
-	past := readyBaseline("agent-infra-def2222", now)
+	past := readyBaseline("bones-def2222", now)
 	pastAt := now.Add(-time.Hour)
 	past.DeferUntil = &pastAt
 	seedTask(t, c, past)
@@ -139,12 +139,12 @@ func TestReady_SortOldestFirst(t *testing.T) {
 	c := mustOpen(t)
 	base := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 
-	oldest := readyBaseline("agent-infra-old11111", base)
+	oldest := readyBaseline("bones-old11111", base)
 	middle := readyBaseline(
-		"agent-infra-mid11111", base.Add(10*time.Minute),
+		"bones-mid11111", base.Add(10*time.Minute),
 	)
 	newest := readyBaseline(
-		"agent-infra-new11111", base.Add(20*time.Minute),
+		"bones-new11111", base.Add(20*time.Minute),
 	)
 
 	// Insert in non-sorted order so the test catches a no-op sort.
@@ -178,11 +178,11 @@ func TestReady_CapsResultLength(t *testing.T) {
 	base := time.Date(2025, 3, 1, 9, 0, 0, 0, time.UTC)
 
 	ids := []string{
-		"agent-infra-cap11111",
-		"agent-infra-cap22222",
-		"agent-infra-cap33333",
-		"agent-infra-cap44444",
-		"agent-infra-cap55555",
+		"bones-cap11111",
+		"bones-cap22222",
+		"bones-cap33333",
+		"bones-cap44444",
+		"bones-cap55555",
 	}
 	for i, id := range ids {
 		rec := readyBaseline(id, base.Add(time.Duration(i)*time.Minute))
@@ -254,8 +254,8 @@ func seedChild(t *testing.T, c *Coord, id, title string, parent TaskID) TaskID {
 func TestReady_HidesTargetOfOpenBlocker(t *testing.T) {
 	c := mustOpen(t)
 	ctx := context.Background()
-	blocker := linkTestSeed(t, c, "agent-infra-bk11", "blocker-open")
-	target := linkTestSeed(t, c, "agent-infra-bk22", "target")
+	blocker := linkTestSeed(t, c, "bones-bk11", "blocker-open")
+	target := linkTestSeed(t, c, "bones-bk22", "target")
 
 	if err := c.Link(ctx, blocker, target, EdgeBlocks); err != nil {
 		t.Fatalf("Link: %v", err)
@@ -273,8 +273,8 @@ func TestReady_HidesTargetOfOpenBlocker(t *testing.T) {
 func TestReady_UnhidesTargetWhenBlockerClosed(t *testing.T) {
 	c := mustOpen(t)
 	ctx := context.Background()
-	blocker := linkTestSeed(t, c, "agent-infra-bk33", "blocker-closed")
-	target := linkTestSeed(t, c, "agent-infra-bk44", "target")
+	blocker := linkTestSeed(t, c, "bones-bk33", "blocker-closed")
+	target := linkTestSeed(t, c, "bones-bk44", "target")
 
 	if err := c.Link(ctx, blocker, target, EdgeBlocks); err != nil {
 		t.Fatalf("Link: %v", err)
@@ -293,8 +293,8 @@ func TestReady_UnhidesTargetWhenBlockerClosed(t *testing.T) {
 func TestReady_HidesSupersededTarget(t *testing.T) {
 	c := mustOpen(t)
 	ctx := context.Background()
-	winner := linkTestSeed(t, c, "agent-infra-sp11", "winner")
-	loser := linkTestSeed(t, c, "agent-infra-sp22", "loser")
+	winner := linkTestSeed(t, c, "bones-sp11", "winner")
+	loser := linkTestSeed(t, c, "bones-sp22", "loser")
 
 	if err := c.Link(ctx, winner, loser, EdgeSupersedes); err != nil {
 		t.Fatalf("Link: %v", err)
@@ -312,8 +312,8 @@ func TestReady_HidesSupersededTarget(t *testing.T) {
 func TestReady_HidesDuplicatedTarget(t *testing.T) {
 	c := mustOpen(t)
 	ctx := context.Background()
-	canonical := linkTestSeed(t, c, "agent-infra-dp11", "canonical")
-	dup := linkTestSeed(t, c, "agent-infra-dp22", "duplicate")
+	canonical := linkTestSeed(t, c, "bones-dp11", "canonical")
+	dup := linkTestSeed(t, c, "bones-dp22", "duplicate")
 
 	if err := c.Link(ctx, canonical, dup, EdgeDuplicates); err != nil {
 		t.Fatalf("Link: %v", err)
@@ -330,8 +330,8 @@ func TestReady_HidesDuplicatedTarget(t *testing.T) {
 
 func TestReady_HidesParentWithOpenChild(t *testing.T) {
 	c := mustOpen(t)
-	parent := linkTestSeed(t, c, "agent-infra-pc11", "parent")
-	child := seedChild(t, c, "agent-infra-pc22", "child", parent)
+	parent := linkTestSeed(t, c, "bones-pc11", "parent")
+	child := seedChild(t, c, "bones-pc22", "child", parent)
 
 	got, err := c.Ready(context.Background())
 	if err != nil {
@@ -348,8 +348,8 @@ func TestReady_HidesParentWithOpenChild(t *testing.T) {
 
 func TestReady_UnhidesParentWhenAllChildrenClosed(t *testing.T) {
 	c := mustOpen(t)
-	parent := linkTestSeed(t, c, "agent-infra-pc33", "parent")
-	child := seedChild(t, c, "agent-infra-pc44", "child", parent)
+	parent := linkTestSeed(t, c, "bones-pc33", "parent")
+	child := seedChild(t, c, "bones-pc44", "child", parent)
 	linkTestClose(t, c, child)
 
 	got, err := c.Ready(context.Background())
@@ -365,8 +365,8 @@ func TestReady_DiscoveredFromDoesNotFilter(t *testing.T) {
 	// discovered-from is audit-only (ADR 0014): it must NOT hide its target.
 	c := mustOpen(t)
 	ctx := context.Background()
-	seed := linkTestSeed(t, c, "agent-infra-df11", "seed-parent")
-	discovery := linkTestSeed(t, c, "agent-infra-df22", "discovered")
+	seed := linkTestSeed(t, c, "bones-df11", "seed-parent")
+	discovery := linkTestSeed(t, c, "bones-df22", "discovered")
 
 	if err := c.Link(ctx, discovery, seed, EdgeDiscoveredFrom); err != nil {
 		t.Fatalf("Link: %v", err)

@@ -695,9 +695,9 @@ func TestCLI_Dispatch(t *testing.T) {
 	t.Run("worker_posts_progress", func(t *testing.T) {
 		stdout, stderr, code := runCmd(t, bonesBin, dir,
 			"tasks", "dispatch", "worker",
-			"--task-id=agent-infra-placeholder",
-			"--task-thread=agent-infra-placeholder",
-			"--worker-agent-id=parent-agent/agent-infra-placeholder",
+			"--task-id=bones-placeholder",
+			"--task-thread=bones-placeholder",
+			"--worker-agent-id=parent-agent/bones-placeholder",
 			"--result=success",
 			"--summary=done",
 		)

@@ -5,14 +5,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/agent-infra/internal/tasks"
+	"github.com/danmestas/bones/internal/tasks"
 )
 
 func TestBlocked_FindsOpenTasksBlockedByOpenBlockers(t *testing.T) {
 	c := mustOpen(t)
 	ctx := context.Background()
-	blocker := linkTestSeed(t, c, "agent-infra-bd11", "blocker")
-	target := linkTestSeed(t, c, "agent-infra-bd22", "target")
+	blocker := linkTestSeed(t, c, "bones-bd11", "blocker")
+	target := linkTestSeed(t, c, "bones-bd22", "target")
 	mustLink(t, c, blocker, target, EdgeBlocks)
 
 	got, err := c.Blocked(ctx)
@@ -30,8 +30,8 @@ func TestBlocked_FindsOpenTasksBlockedByOpenBlockers(t *testing.T) {
 func TestBlocked_HidesTasksWhenBlockerClosed(t *testing.T) {
 	c := mustOpen(t)
 	ctx := context.Background()
-	blocker := linkTestSeed(t, c, "agent-infra-bd33", "blocker")
-	target := linkTestSeed(t, c, "agent-infra-bd44", "target")
+	blocker := linkTestSeed(t, c, "bones-bd33", "blocker")
+	target := linkTestSeed(t, c, "bones-bd44", "target")
 	mustLink(t, c, blocker, target, EdgeBlocks)
 	linkTestClose(t, c, blocker)
 
@@ -48,10 +48,10 @@ func TestBlocked_SortsOldestFirst(t *testing.T) {
 	c := mustOpen(t)
 	base := time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC)
 
-	oldBlocker := readyBaseline("agent-infra-bd55", base)
-	oldTarget := readyBaseline("agent-infra-bd66", base.Add(time.Minute))
-	newBlocker := readyBaseline("agent-infra-bd77", base.Add(2*time.Minute))
-	newTarget := readyBaseline("agent-infra-bd88", base.Add(3*time.Minute))
+	oldBlocker := readyBaseline("bones-bd55", base)
+	oldTarget := readyBaseline("bones-bd66", base.Add(time.Minute))
+	newBlocker := readyBaseline("bones-bd77", base.Add(2*time.Minute))
+	newTarget := readyBaseline("bones-bd88", base.Add(3*time.Minute))
 	oldBlocker.Edges = []tasks.Edge{{Type: tasks.EdgeBlocks, Target: oldTarget.ID}}
 	newBlocker.Edges = []tasks.Edge{{Type: tasks.EdgeBlocks, Target: newTarget.ID}}
 	seedTask(t, c, oldBlocker)

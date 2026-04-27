@@ -20,8 +20,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/danmestas/agent-infra/coord"
-	"github.com/danmestas/agent-infra/internal/workspace"
+	"github.com/danmestas/bones/coord"
+	"github.com/danmestas/bones/internal/workspace"
 )
 
 var (
