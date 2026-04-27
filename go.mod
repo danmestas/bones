@@ -33,6 +33,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect
+	github.com/hexops/gotextdiff v1.0.3 // indirect
 	github.com/klauspost/compress v1.18.4 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/minio/highwayhash v1.0.4-0.20251030100505-070ab1a87a76 // indirect
