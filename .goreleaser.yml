@@ -1,0 +1,106 @@
+# GoReleaser config for bones.
+# https://goreleaser.com
+#
+# Cross-compiles bones for macOS and Linux on amd64/arm64, archives as
+# tarballs, generates checksums, publishes a GitHub release, and
+# updates the Homebrew formula in danmestas/homebrew-tap.
+
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: bones
+    main: ./cmd/bones
+    binary: bones
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+      - -buildvcs=false
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.CommitDate}}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: bones
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - LICENSE*
+      - README*
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^chore:'
+      - '^test:'
+      - 'merge conflict'
+      - Merge pull request
+      - Merge remote-tracking branch
+      - Merge branch
+
+release:
+  github:
+    owner: danmestas
+    name: bones
+  draft: false
+  prerelease: auto
+  name_template: "{{.ProjectName}} v{{.Version}}"
+  footer: |
+    **Full Changelog**: https://github.com/danmestas/bones/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+    ## Install
+
+    ### Homebrew (macOS / Linux)
+    ```bash
+    brew install danmestas/tap/bones
+    ```
+
+    ### Go
+    ```bash
+    go install github.com/danmestas/bones/cmd/bones@{{ .Tag }}
+    ```
+
+    ### Direct download
+    Pick a binary from the assets above for your OS/arch.
+
+brews:
+  - name: bones
+    repository:
+      owner: danmestas
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/danmestas/bones
+    description: "Unified CLI for the bones agent-infrastructure substrate (workspace, orchestrator, tasks)."
+    license: Apache-2.0
+    install: |
+      bin.install "bones"
+    test: |
+      system "#{bin}/bones --version"
