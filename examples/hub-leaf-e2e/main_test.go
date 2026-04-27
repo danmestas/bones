@@ -8,20 +8,18 @@ import (
 // TestE2E_3x3 exercises the full hub-leaf orchestration loop with three
 // concurrent agents committing on disjoint files. It asserts:
 //
-//   - aggregate trunk checkins across all three leaf repos >= 3
-//     (each agent committed exactly once; trial #10's fork+merge model
-//     can add a merge commit when a timing race forks one agent's
-//     commit onto a generated branch — the hub tally then includes the
-//     auto-merge commit on top of the original 3);
-//   - aggregate conflict-fork count across all three leaves == 0
-//     (libfossil's `conflict` table — distinct from the auto-fork
-//     branches the trial #10 path creates and immediately merges);
-//   - each slot publishes its tip.changed broadcast;
-//   - no slot returns an unrecoverable error (auto-merge resolves the
-//     friendly disjoint case without surfacing ErrConflictForked).
+//   - aggregate trunk checkins on the hub repo >= 3 (each agent
+//     committed exactly once; the harness counts hub-side checkins via
+//     the event table after Hub.Stop);
+//   - aggregate conflict-fork count == 0 (post-Task-4 there is no
+//     fork+merge in coord; the field stays at 0);
+//   - each slot publishes its tip.changed broadcast (counted by the
+//     successful return of Leaf.Commit, which calls SyncNow);
+//   - no slot returns an unrecoverable error.
 //
-// The test runs in-process (httptest hub + embedded NATS JetStream) so
-// it depends on no external services and finishes within a few seconds.
+// The test runs in-process (coord.Hub embeds the leaf.Agent NATS mesh
+// and HTTP xfer endpoint) so it depends on no external services and
+// finishes within a few seconds.
 func TestE2E_3x3(t *testing.T) {
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())

@@ -1,82 +1,95 @@
 ---
 name: subagent
-description: Execute a slot's task list as a hub-leaf subagent — open the leaf repo, subscribe to tip.changed, execute tasks via coord, exit on completion. Trigger when invoked from a Task-tool prompt that references LEAF_REPO/HUB_URL/NATS_URL env vars.
+description: Execute a slot's task list as a hub-leaf subagent — open a Leaf via coord.OpenLeaf, execute tasks via Claim/Commit/Close, and stop the leaf on exit. Trigger when invoked from a Task-tool prompt that references AGENT_ID/SLOT_ID/HUB_URL env vars.
 when_to_use: Invoked by the orchestrator skill via the Task tool. NOT for general-purpose agent work.
 ---
 
 # Subagent Skill
 
 You are a subagent in a hub-leaf orchestration. The orchestrator gave you
-a slot's task list and these environment values:
+a slot's task list inline in this prompt and injected these environment values:
 
-- LEAF_REPO   — path to your leaf fossil repo (you may need to clone)
-- LEAF_WT     — path to your worktree directory
-- HUB_URL     — hub fossil HTTP base URL
-- NATS_URL    — NATS broker URL
-- AGENT_ID    — your unique agent id
-- SLOT_ID     — slot you're servicing
+- AGENT_ID  — your unique agent id (typically same as SLOT_ID)
+- SLOT_ID   — slot you're servicing
+- HUB_URL   — hub HTTP base URL (e.g. http://127.0.0.1:8765)
+- NATS_URL  — NATS broker URL (e.g. nats://127.0.0.1:4222)
+- WORKDIR   — (optional) root directory for per-slot state; defaults to
+              `.orchestrator/leaves` if absent
 
-## Step 1: Initialize leaf
+Do NOT read `LEAF_REPO` or `LEAF_WT` — those env vars are stale. The leaf
+owns its own paths: `<workdir>/<slotID>/leaf.fossil` and
+`<workdir>/<slotID>/wt`, set internally by `coord.OpenLeaf`.
 
-If LEAF_REPO does not exist, clone from hub:
+## Step 1: Open the Leaf
 
+Call `coord.OpenLeaf` with the hub object and your slot config. In an
+in-process harness (e.g. `cmd/<harness>/main.go`):
+
+```go
+hub, err := coord.OpenHub(ctx, coord.HubConfig{...})
+
+leaf, err := coord.OpenLeaf(ctx, coord.LeafConfig{
+    Hub:     hub,          // required — provides all URL fields
+    Workdir: workdir,      // from WORKDIR env, or .orchestrator/leaves
+    SlotID:  slotID,       // from SLOT_ID env
+})
 ```
-mkdir -p "$(dirname "$LEAF_REPO")"
-fossil clone "$HUB_URL" "$LEAF_REPO"
-```
 
-Open the worktree:
+`OpenLeaf` clones the hub repo into `<workdir>/<slotID>/leaf.fossil`,
+opens a worktree at `<workdir>/<slotID>/wt`, starts the leaf.Agent
+(NATS mesh sync), and wires the claim/task Coord. All sync is handled
+internally; you do not subscribe to any NATS subjects.
 
-```
-mkdir -p "$LEAF_WT"
-fossil open "$LEAF_REPO" --workdir "$LEAF_WT"
-```
+## Step 2: Execute the task list
 
-## Step 2: Open coord with tip.changed enabled
+Your task list is inline in this prompt (not in env vars). For each task:
 
-Use coord.Config with:
-- AgentID = $AGENT_ID
-- NATSURL = $NATS_URL
-- HubURL = $HUB_URL
-- EnableTipBroadcast = true
-- FossilRepoPath = $LEAF_REPO
-- CheckoutRoot = $LEAF_WT
+1. Edit files per the task description (write to `leaf.WT()` paths).
+2. Open the task: `taskID, err := leaf.OpenTask(ctx, title, files)`.
+3. Claim it: `claim, err := leaf.Claim(ctx, taskID)`.
+4. Commit: `uuid, err := leaf.Commit(ctx, claim, files)`.
+   - `files` is `[]coord.File{{Path: "rel/path", Content: []byte{...}}, ...}`.
+   - On `ErrConflict`: this is a defense-in-depth assertion — slot
+     disjointness should make it impossible. If it occurs, stop
+     immediately and escalate to the orchestrator (return an error to
+     the Task tool; the orchestrator skill detects it and re-plans).
+5. Close the task: `err = leaf.Close(ctx, claim)`.
 
-The Open call wires the JetStream subscriber on coord.tip.changed; from
-this point forward, peer commits trigger pulls automatically.
+Coord handles sync-on-commit and retry-on-transient-fault internally.
 
-## Step 3: Execute the task list
-
-For each task in the list:
-
-1. Edit files per the task's Files: block.
-2. Call `coord.Claim(ctx, taskID, AgentID, ttl, files)`.
-3. Call `coord.Commit(ctx, taskID, message, files)`.
-4. If Commit returns `ErrConflictForked`, the slot partition is wrong —
-   stop; surface to the orchestrator (return error to the Task tool
-   harness; the orchestrator skill detects it).
-5. Call `coord.CloseTask(ctx, taskID)`.
-
-Coord handles pull-on-broadcast and retry-on-fork internally; you do not
-need to invoke them explicitly.
-
-## Step 4: Exit cleanly
+## Step 3: Stop the leaf
 
 When the task list is empty:
 
-1. Emit a final presence ping (coord does this automatically on Close).
-2. Call `c.Close(ctx)` to unsub from NATS and free resources.
-3. Return success to the Task tool. The orchestrator collects results.
+```go
+err = leaf.Stop()
+```
+
+`Stop` shuts down the leaf.Agent, closes the NATS connection, and
+releases all resources. Return success to the Task tool.
 
 ## Errors that abort the slot
 
-- ErrConflictForked: planner partitioning is wrong. Surface immediately.
-- Hub unreachable for >30 seconds: surface (operator handles).
-- Repeated NATS reconnect failures: surface (operator handles).
+- `ErrConflict`: slot partition is wrong — surface to orchestrator.
+- Hub unreachable for >30 s: surface (operator handles).
 
 ## Errors that do NOT abort the slot
 
-- Single tip.changed pull failure: log, continue. Subsequent commits will
-  retry on their own fork detection.
-- NATS transient disconnect: JetStream durable consumer replays missed
-  broadcasts on reconnect. No action needed.
+- Single transient Commit error (not ErrConflict): log, retry once.
+- NATS transient disconnect: the leaf.Agent's reconnect loop handles it.
+
+---
+
+### Deviations from prior skill
+
+| Prior (pre-Phase-1 / pre-EdgeSync) | Current (ADR 0018) |
+|---|---|
+| Injected `LEAF_REPO`, `LEAF_WT` env vars | Paths owned by `coord.OpenLeaf`; use `leaf.WT()` |
+| `coord.Config{FossilRepoPath, CheckoutRoot, EnableTipBroadcast}` | `coord.LeafConfig{Hub, Workdir, SlotID}` — no fossil fields, no broadcast flag |
+| `coord.Claim(ctx, taskID, AgentID, ttl, files)` | `leaf.Claim(ctx, taskID)` — two args; TTL/slot are encapsulated in `*Leaf` |
+| `coord.CloseTask(ctx, taskID)` | `leaf.Close(ctx, claim)` — passes `*Claim`, delegates to `l.coord.CloseTask` internally |
+| Subscribe to `coord.tip.changed` JetStream | Gone (Phase 1 Task 8 deleted `sync_broadcast.go`); sync flows through EdgeSync NATS mesh in `leaf.Agent` |
+| `c.Close(ctx)` at exit | `leaf.Stop()` — shuts down agent + coord together |
+
+See ADR 0018 (`docs/adr/0018-edgesync-refactor.md`) for the architectural
+context behind these changes.

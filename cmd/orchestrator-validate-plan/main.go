@@ -5,10 +5,19 @@
 //  3. Each task's Files: paths begin with the slot's owned directory.
 //
 // Exits with status 0 if valid, 1 if violations are reported.
+//
+// Flags:
+//
+//	--list-slots   Parse the plan and emit a JSON slot→task mapping to
+//	               stdout in addition to the validation check. On
+//	               validation failure, violations are printed to stderr
+//	               and the JSON is suppressed; exit 1.
 package main
 
 import (
 	"bufio"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"regexp"
@@ -28,10 +37,10 @@ type taskInfo struct {
 	line    int
 }
 
-func validate(path string) ([]string, error) {
+func validate(path string) ([]taskInfo, []string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() { _ = f.Close() }()
 
@@ -77,9 +86,9 @@ func validate(path string) ([]string, error) {
 		tasks = append(tasks, *current)
 	}
 	if err := scan.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return checkTasks(tasks), nil
+	return tasks, checkTasks(tasks), nil
 }
 
 func checkTasks(tasks []taskInfo) []string {
@@ -145,20 +154,73 @@ func topDir(p string) string {
 	return p
 }
 
+// slotEntry is the JSON shape for one slot in --list-slots output.
+type slotEntry struct {
+	Name  string   `json:"name"`
+	Tasks []string `json:"tasks"`
+}
+
+// slotList is the top-level JSON shape for --list-slots output.
+type slotList struct {
+	Slots []slotEntry `json:"slots"`
+}
+
+// buildSlotList groups task headings by slot in first-seen order.
+func buildSlotList(tasks []taskInfo) slotList {
+	seen := map[string]int{} // slot → index in entries
+	entries := []slotEntry{}
+	for _, t := range tasks {
+		if t.slot == "" {
+			continue
+		}
+		idx, ok := seen[t.slot]
+		if !ok {
+			idx = len(entries)
+			seen[t.slot] = idx
+			entries = append(entries, slotEntry{Name: t.slot})
+		}
+		entries[idx].Tasks = append(entries[idx].Tasks, t.heading)
+	}
+	return slotList{Slots: entries}
+}
+
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: orchestrator-validate-plan <plan.md>")
+	listSlots := flag.Bool("list-slots", false,
+		"emit JSON slot→task list to stdout (still runs validation)")
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: orchestrator-validate-plan [--list-slots] <plan.md>")
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
+	if flag.NArg() != 1 {
+		flag.Usage()
 		os.Exit(2)
 	}
-	violations, err := validate(os.Args[1])
+	path := flag.Arg(0)
+
+	tasks, violations, err := validate(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	for _, v := range violations {
-		fmt.Println(v)
-	}
+
 	if len(violations) > 0 {
+		for _, v := range violations {
+			fmt.Fprintln(os.Stderr, v)
+		}
 		os.Exit(1)
 	}
+
+	if *listSlots {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(buildSlotList(tasks)); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		return
+	}
+
+	// Normal validate-only mode: no violations, print nothing, exit 0.
 }

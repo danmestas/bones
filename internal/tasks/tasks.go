@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -23,10 +21,6 @@ import (
 // ([A-Za-z0-9_-]+); violation is surfaced by the underlying
 // CreateOrUpdateKeyValue call.
 type Config struct {
-	// NATSURL is the URL Open dials to reach the substrate. Open dials
-	// its own connection so the package is standalone-testable.
-	NATSURL string
-
 	// BucketName is the JetStream KV bucket backing the task records.
 	// ADR 0005 pins the coord-visible name to "agent-infra-tasks"; this
 	// package takes the name as input so tests can isolate by bucket.
@@ -39,11 +33,6 @@ type Config struct {
 	// MaxValueSize is the upper bound on an encoded task record value,
 	// in bytes. Enforced at every Create and Update per invariant 14.
 	MaxValueSize int32
-
-	// OperationTimeout bounds a single KV round trip. Currently unused
-	// by this package (callers pass a context with their own deadline)
-	// but present on the Config so operator knobs stay in one place.
-	OperationTimeout time.Duration
 
 	// ChanBuffer sets the channel buffer for Watch. Zero yields the
 	// package default (defaultChanBuffer).
@@ -58,7 +47,6 @@ const defaultChanBuffer = 32
 // public method is safe to call concurrently. Close is idempotent.
 type Manager struct {
 	cfg  Config
-	nc   *nats.Conn
 	js   jetstream.JetStream
 	kv   jetstream.KeyValue
 	buf  int
@@ -68,21 +56,18 @@ type Manager struct {
 	subs []chan Event
 }
 
-// Open dials NATS, creates (or reattaches to) the tasks KV bucket, and
-// returns a Manager. Constructing a Manager does not consume a
+// Open creates (or reattaches to) the tasks KV bucket on the supplied
+// NATS connection and returns a Manager. The caller owns nc's lifecycle;
+// Open does not close it. Constructing a Manager does not consume a
 // goroutine; Watch spawns one per call. Callers must invoke Close to
-// release the NATS connection and every live subscriber channel.
-func Open(ctx context.Context, cfg Config) (*Manager, error) {
+// release every live subscriber channel.
+func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Manager, error) {
 	assert.NotNil(ctx, "tasks.Open: ctx is nil")
+	assert.NotNil(nc, "tasks.Open: nc is nil")
 	assertOpenConfig(cfg)
 
-	nc, err := nats.Connect(cfg.NATSURL)
-	if err != nil {
-		return nil, fmt.Errorf("tasks.Open: nats connect: %w", err)
-	}
 	js, err := jetstream.New(nc)
 	if err != nil {
-		nc.Close()
 		return nil, fmt.Errorf("tasks.Open: jetstream: %w", err)
 	}
 	kv, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
@@ -90,20 +75,18 @@ func Open(ctx context.Context, cfg Config) (*Manager, error) {
 		History: cfg.HistoryDepth,
 	})
 	if err != nil {
-		nc.Close()
 		return nil, fmt.Errorf("tasks.Open: kv bucket: %w", err)
 	}
 	buf := cfg.ChanBuffer
 	if buf == 0 {
 		buf = defaultChanBuffer
 	}
-	return &Manager{cfg: cfg, nc: nc, js: js, kv: kv, buf: buf}, nil
+	return &Manager{cfg: cfg, js: js, kv: kv, buf: buf}, nil
 }
 
 // assertOpenConfig panics on any Config field that would corrupt the
 // bucket construction. Kept separate so Open fits the funlen cap.
 func assertOpenConfig(cfg Config) {
-	assert.NotEmpty(cfg.NATSURL, "tasks.Open: cfg.NATSURL is empty")
 	assert.NotEmpty(
 		cfg.BucketName, "tasks.Open: cfg.BucketName is empty",
 	)
@@ -122,9 +105,9 @@ func assertOpenConfig(cfg Config) {
 }
 
 // Close releases resources held by the Manager. It closes every live
-// Watch channel, tears down the NATS connection Open dialed, and marks
-// the Manager as closed so subsequent public calls return ErrClosed.
-// Safe to call more than once.
+// Watch channel and marks the Manager as closed so subsequent public
+// calls return ErrClosed. The NATS connection is owned by the caller
+// and is not closed here. Safe to call more than once.
 func (m *Manager) Close() error {
 	assert.NotNil(m, "tasks.Close: receiver is nil")
 	if !m.done.CompareAndSwap(false, true) {
@@ -136,9 +119,6 @@ func (m *Manager) Close() error {
 	m.mu.Unlock()
 	for _, ch := range subs {
 		safeClose(ch)
-	}
-	if m.nc != nil {
-		m.nc.Close()
 	}
 	return nil
 }
@@ -221,13 +201,17 @@ func (m *Manager) Update(
 	if m.done.Load() {
 		return ErrClosed
 	}
-	for attempt := 0; attempt < jskv.MaxRetries; attempt++ {
+	var attempt int
+	for attempt = 0; attempt < jskv.MaxRetries; attempt++ {
+		assert.Precondition(attempt < jskv.MaxRetries, "tasks.Update: CAS attempt exceeded bound")
 		done, err := m.updateAttempt(ctx, id, mutate)
 		if done {
 			return err
 		}
 		casRetryHook()
 	}
+	assert.Postcondition(attempt == jskv.MaxRetries,
+		"tasks.Update: exited CAS loop without exhausting retries or returning")
 	return ErrCASConflict
 }
 
@@ -471,17 +455,5 @@ func legalTransition(current, next Task) bool {
 }
 
 func closedCompactionOnlyUpdate(current, next Task) bool {
-	strippedCurrent := current
-	strippedNext := next
-	strippedCurrent.UpdatedAt = time.Time{}
-	strippedNext.UpdatedAt = time.Time{}
-	strippedCurrent.SchemaVersion = 0
-	strippedNext.SchemaVersion = 0
-	strippedCurrent.OriginalSize = 0
-	strippedNext.OriginalSize = 0
-	strippedCurrent.CompactLevel = 0
-	strippedNext.CompactLevel = 0
-	strippedCurrent.CompactedAt = nil
-	strippedNext.CompactedAt = nil
-	return reflect.DeepEqual(strippedCurrent, strippedNext)
+	return current.eqNonCompaction(next)
 }

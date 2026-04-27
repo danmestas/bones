@@ -7,26 +7,27 @@ import (
 )
 
 // baselineConfig returns a fully-valid Config used as the starting
-// point for every Validate subtest.
+// point for every Validate subtest. Tuning fields are set explicitly
+// so mutation tests can zero individual fields below the default.
 func baselineConfig() Config {
 	return Config{
 		AgentID:            "test-agent",
-		HoldTTLDefault:     30 * time.Second,
-		HoldTTLMax:         5 * time.Minute,
-		MaxHoldsPerClaim:   32,
-		MaxSubscribers:     32,
-		MaxTaskFiles:       32,
-		MaxReadyReturn:     256,
-		MaxTaskValueSize:   8 * 1024,
-		TaskHistoryDepth:   8,
-		OperationTimeout:   10 * time.Second,
-		HeartbeatInterval:  5 * time.Second,
-		NATSReconnectWait:  2 * time.Second,
-		NATSMaxReconnects:  5,
 		NATSURL:            "nats://127.0.0.1:4222",
 		ChatFossilRepoPath: "/tmp/coord-baseline-chat.fossil",
-		FossilRepoPath:     "/tmp/coord-baseline-code.fossil",
 		CheckoutRoot:       "/tmp/coord-baseline-checkouts",
+		Tuning: TuningConfig{
+			HoldTTLDefault:    30 * time.Second,
+			HoldTTLMax:        5 * time.Minute,
+			MaxHoldsPerClaim:  32,
+			MaxSubscribers:    32,
+			MaxTaskFiles:      32,
+			MaxReadyReturn:    256,
+			MaxTaskValueSize:  8 * 1024,
+			TaskHistoryDepth:  8,
+			HeartbeatInterval: 5 * time.Second,
+			NATSReconnectWait: 2 * time.Second,
+			NATSMaxReconnects: 5,
+		},
 	}
 }
 
@@ -50,90 +51,85 @@ func TestConfigValidate_Invalid(t *testing.T) {
 		},
 		{
 			name:    "zero HoldTTLDefault",
-			mutate:  func(c *Config) { c.HoldTTLDefault = 0 },
+			mutate:  func(c *Config) { c.Tuning.HoldTTLDefault = 0 },
 			wantKey: "HoldTTLDefault",
 		},
 		{
 			name:    "negative HoldTTLDefault",
-			mutate:  func(c *Config) { c.HoldTTLDefault = -1 },
+			mutate:  func(c *Config) { c.Tuning.HoldTTLDefault = -1 },
 			wantKey: "HoldTTLDefault",
 		},
 		{
 			name:    "zero HoldTTLMax",
-			mutate:  func(c *Config) { c.HoldTTLMax = 0 },
+			mutate:  func(c *Config) { c.Tuning.HoldTTLMax = 0 },
 			wantKey: "HoldTTLMax",
 		},
 		{
 			name: "HoldTTLDefault exceeds HoldTTLMax",
 			mutate: func(c *Config) {
-				c.HoldTTLDefault = 10 * time.Minute
-				c.HoldTTLMax = 1 * time.Minute
+				c.Tuning.HoldTTLDefault = 10 * time.Minute
+				c.Tuning.HoldTTLMax = 1 * time.Minute
 			},
 			wantKey: "HoldTTLDefault",
 		},
 		{
 			name:    "zero MaxHoldsPerClaim",
-			mutate:  func(c *Config) { c.MaxHoldsPerClaim = 0 },
+			mutate:  func(c *Config) { c.Tuning.MaxHoldsPerClaim = 0 },
 			wantKey: "MaxHoldsPerClaim",
 		},
 		{
 			name:    "negative MaxHoldsPerClaim",
-			mutate:  func(c *Config) { c.MaxHoldsPerClaim = -1 },
+			mutate:  func(c *Config) { c.Tuning.MaxHoldsPerClaim = -1 },
 			wantKey: "MaxHoldsPerClaim",
 		},
 		{
 			name:    "zero MaxSubscribers",
-			mutate:  func(c *Config) { c.MaxSubscribers = 0 },
+			mutate:  func(c *Config) { c.Tuning.MaxSubscribers = 0 },
 			wantKey: "MaxSubscribers",
 		},
 		{
 			name:    "zero MaxTaskFiles",
-			mutate:  func(c *Config) { c.MaxTaskFiles = 0 },
+			mutate:  func(c *Config) { c.Tuning.MaxTaskFiles = 0 },
 			wantKey: "MaxTaskFiles",
 		},
 		{
 			name:    "zero MaxReadyReturn",
-			mutate:  func(c *Config) { c.MaxReadyReturn = 0 },
+			mutate:  func(c *Config) { c.Tuning.MaxReadyReturn = 0 },
 			wantKey: "MaxReadyReturn",
 		},
 		{
 			name:    "negative MaxReadyReturn",
-			mutate:  func(c *Config) { c.MaxReadyReturn = -1 },
+			mutate:  func(c *Config) { c.Tuning.MaxReadyReturn = -1 },
 			wantKey: "MaxReadyReturn",
 		},
 		{
 			name:    "zero MaxTaskValueSize",
-			mutate:  func(c *Config) { c.MaxTaskValueSize = 0 },
+			mutate:  func(c *Config) { c.Tuning.MaxTaskValueSize = 0 },
 			wantKey: "MaxTaskValueSize",
 		},
 		{
 			name:    "negative MaxTaskValueSize",
-			mutate:  func(c *Config) { c.MaxTaskValueSize = -1 },
+			mutate:  func(c *Config) { c.Tuning.MaxTaskValueSize = -1 },
 			wantKey: "MaxTaskValueSize",
 		},
 		{
 			name:    "zero TaskHistoryDepth",
-			mutate:  func(c *Config) { c.TaskHistoryDepth = 0 },
+			mutate:  func(c *Config) { c.Tuning.TaskHistoryDepth = 0 },
 			wantKey: "TaskHistoryDepth",
 		},
 		{
-			name:    "zero OperationTimeout",
-			mutate:  func(c *Config) { c.OperationTimeout = 0 },
-			wantKey: "OperationTimeout",
-		},
-		{
 			name:    "zero HeartbeatInterval",
-			mutate:  func(c *Config) { c.HeartbeatInterval = 0 },
+			mutate:  func(c *Config) { c.Tuning.HeartbeatInterval = 0 },
 			wantKey: "HeartbeatInterval",
 		},
 		{
 			name:    "zero NATSReconnectWait",
-			mutate:  func(c *Config) { c.NATSReconnectWait = 0 },
+			mutate:  func(c *Config) { c.Tuning.NATSReconnectWait = 0 },
 			wantKey: "NATSReconnectWait",
 		},
 		{
 			name:    "zero NATSMaxReconnects",
-			mutate:  func(c *Config) { c.NATSMaxReconnects = 0 },
+			mutate:  func(c *Config) { c.Tuning.NATSMaxReconnects = 0 },
 			wantKey: "NATSMaxReconnects",
 		},
 		{
@@ -145,11 +141,6 @@ func TestConfigValidate_Invalid(t *testing.T) {
 			name:    "empty ChatFossilRepoPath",
 			mutate:  func(c *Config) { c.ChatFossilRepoPath = "" },
 			wantKey: "ChatFossilRepoPath",
-		},
-		{
-			name:    "empty FossilRepoPath",
-			mutate:  func(c *Config) { c.FossilRepoPath = "" },
-			wantKey: "FossilRepoPath",
 		},
 		{
 			name:    "empty CheckoutRoot",
@@ -178,25 +169,5 @@ func TestConfigValidate_Invalid(t *testing.T) {
 				)
 			}
 		})
-	}
-}
-
-func TestConfig_HubURLOptional(t *testing.T) {
-	cfg := validConfig(t)
-	cfg.HubURL = ""
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("empty HubURL should validate (broadcast disabled), got: %v", err)
-	}
-	cfg.HubURL = "http://127.0.0.1:8765/"
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("non-empty HubURL should validate, got: %v", err)
-	}
-}
-
-func TestConfig_HubURLMustBeURLOrEmpty(t *testing.T) {
-	cfg := validConfig(t)
-	cfg.HubURL = "not a url"
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected Validate to reject non-URL HubURL, got nil")
 	}
 }

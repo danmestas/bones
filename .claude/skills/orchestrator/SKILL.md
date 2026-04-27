@@ -27,8 +27,7 @@ what the [slot: name] format is.
 Check that the SessionStart hook ran successfully:
 
 ```
-test -f .orchestrator/pids/fossil.pid && \
-  test -f .orchestrator/pids/nats.pid && \
+test -f .orchestrator/pids/leaf.pid && \
   curl -fsS -X POST http://127.0.0.1:8765/xfer >/dev/null
 ```
 
@@ -42,8 +41,16 @@ bash .orchestrator/scripts/hub-bootstrap.sh
 
 ## Step 3: Extract slots and tasks
 
-Parse the plan again (mentally, or by re-running the validator with a
-flag once it grows one) to enumerate slots and the task list per slot.
+Run the validator with `--list-slots` to get a machine-readable slot→task
+mapping:
+
+```
+go run ./cmd/orchestrator-validate-plan/ --list-slots <plan-path> | jq
+```
+
+This emits JSON like `{"slots": [{"name": "alpha", "tasks": [...]}, ...]}`.
+Use the `tasks` array from each slot entry to build the dispatch prompt for
+Step 4 — no manual plan re-parsing needed.
 
 ## Step 4: Dispatch one subagent per slot
 
@@ -55,41 +62,46 @@ For each slot, invoke the Task tool with:
 
   > You are a subagent for slot=<name> in a hub-leaf orchestration. Use
   > the `subagent` skill. Your environment:
-  > - LEAF_REPO: .orchestrator/leaves/<slot>/leaf.fossil
-  > - LEAF_WT:   .orchestrator/leaves/<slot>/wt
-  > - HUB_URL:   http://127.0.0.1:8765
-  > - NATS_URL:  nats://127.0.0.1:4222
   > - AGENT_ID:  <slot>
   > - SLOT_ID:   <slot>
+  > - HUB_URL:   http://127.0.0.1:8765
+  > - NATS_URL:  nats://127.0.0.1:4222
+  > - WORKDIR:   .orchestrator/leaves
+  >
+  > (LEAF_REPO and LEAF_WT are no longer injected — coord.OpenLeaf owns
+  > those paths under WORKDIR/<slot>/. See the subagent skill for details.)
   >
   > Your task list follows. Execute it; emit one fossil commit per task.
 
 The orchestrator dispatches subagents in parallel (single message with N
 Task tool calls).
 
-### Parallelism guidance (per docs/trials/2026-04-25/trial-report.md finding #15)
+### Parallelism guidance (per docs/trials/2026-04-26/trial-report.md)
 
-The architecture is hub-commit-rate-limited, not agent-count-limited.
-Production agents commit on minute timescales (during human-paced coding
-work) so per-agent commit rate is ~0.017 events/sec, leaving head-room
-for 100+ concurrent agents before hitting the hub's ~2 events/sec
-sustained ceiling.
+Post-EdgeSync-refactor: the architecture is no longer hub-rate-limited
+at orchestration scale. The trial sweep at zero think time (worst case)
+shows 100% completion through N=64 with sub-100ms P99; production
+agents commit on minute timescales (~0.017 events/sec) so even N=100+
+is comfortable. The old "100-round Pull-negotiation wall" is gone — the
+EdgeSync NATS mesh sync replaces it.
 
-Tier guidance for picking concurrency:
+Tier guidance for picking concurrency (zero-think trial numbers):
 
-- **Sweet spot (sub-second P50):** N ≤ 4 slots. Use for interactive
+- **Sweet spot (sub-second P99):** N ≤ 32 slots. Use for interactive
   tooling where latency matters.
-- **Acceptable (single-digit P99):** N ≤ 8 slots. Use for batch agents
+- **Acceptable (sub-100ms P99):** N ≤ 64 slots. Use for batch agents
   with bearable latency.
-- **Ceiling under tight-loop stress (50ms commit cadence):** N ≤ 12.
-  Beyond this libfossil's 100-round Pull-negotiation budget is the wall.
-- **Production cadence (1 commit/min/agent):** ~100+ agents fine; the
-  wall is hub-side rate, not agent count.
+- **Stress ceiling (tight-loop):** N ≤ 100 slots, P99 ~450ms,
+  ~98% commit propagation in 30s. Beyond this hub-side serve-nats
+  queueing dominates.
+- **Production cadence (1 commit/min/agent):** 100+ agents
+  comfortable.
 
 If the plan has more slots than fit your concurrency tier, dispatch in
 batches (N at a time, wait for each batch to drain before starting the
-next). The trial harness `examples/herd-hub-leaf/` reproduces the rate
-envelope; consult its README and the trial report for current numbers.
+next). The trial harness `examples/herd-hub-leaf/` reproduces the
+envelope; consult its README and `docs/trials/2026-04-26/trial-report.md`
+for current numbers.
 
 ## Step 5: Monitor
 

@@ -73,26 +73,24 @@ func logTail(path string, maxBytes int) string {
 // waitHealthz polls the given URL until it returns 200 or the timeout elapses.
 // Returns ErrLeafStartTimeout on timeout.
 func waitHealthz(ctx context.Context, url string) error {
-	deadline := time.Now().Add(healthzPollTimeout)
-	ctx, cancel := context.WithDeadline(ctx, deadline)
+	ctx, cancel := context.WithTimeout(ctx, healthzPollTimeout)
 	defer cancel()
 
 	client := &http.Client{Timeout: healthzPollInterval}
+	ticker := time.NewTicker(healthzPollInterval)
+	defer ticker.Stop()
 	for {
-		if time.Now().After(deadline) {
-			return ErrLeafStartTimeout
-		}
-		resp, err := client.Get(url)
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == 200 {
-				return nil
-			}
-		}
 		select {
 		case <-ctx.Done():
 			return ErrLeafStartTimeout
-		case <-time.After(healthzPollInterval):
+		case <-ticker.C:
+			resp, err := client.Get(url)
+			if err == nil {
+				_ = resp.Body.Close()
+				if resp.StatusCode == 200 {
+					return nil
+				}
+			}
 		}
 	}
 }

@@ -79,9 +79,9 @@ func (c *Coord) assertReclaimPreconditions(
 	assert.NotEmpty(string(taskID), "coord.Reclaim: taskID is empty")
 	assert.Precondition(ttl > 0, "coord.Reclaim: ttl must be > 0")
 	assert.Precondition(
-		ttl <= c.cfg.HoldTTLMax,
+		ttl <= c.cfg.Tuning.HoldTTLMax,
 		"coord.Reclaim: ttl=%s exceeds HoldTTLMax=%s",
-		ttl, c.cfg.HoldTTLMax,
+		ttl, c.cfg.Tuning.HoldTTLMax,
 	)
 }
 

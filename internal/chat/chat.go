@@ -218,15 +218,7 @@ func (m *Manager) Watch(
 	assert.NotNil(m, "chat.Watch: receiver is nil")
 	assert.NotNil(ctx, "chat.Watch: ctx is nil")
 	assert.NotEmpty(thread, "chat.Watch: thread is empty")
-	if m.closed.Load() {
-		ch := make(chan notify.Message)
-		close(ch)
-		return ch
-	}
-	return m.service.Watch(ctx, notify.WatchOpts{
-		Project:     m.cfg.ProjectPrefix,
-		ThreadShort: threadShort(m.cfg.ProjectPrefix, thread),
-	})
+	return m.watchByShort(ctx, threadShort(m.cfg.ProjectPrefix, thread))
 }
 
 // WatchAll returns a channel of notify.Message values for every thread
@@ -244,14 +236,7 @@ func (m *Manager) Watch(
 func (m *Manager) WatchAll(ctx context.Context) <-chan notify.Message {
 	assert.NotNil(m, "chat.WatchAll: receiver is nil")
 	assert.NotNil(ctx, "chat.WatchAll: ctx is nil")
-	if m.closed.Load() {
-		ch := make(chan notify.Message)
-		close(ch)
-		return ch
-	}
-	return m.service.Watch(ctx, notify.WatchOpts{
-		Project: m.cfg.ProjectPrefix,
-	})
+	return m.watchByShort(ctx, "")
 }
 
 // WatchPattern returns a channel of notify.Message values for every
@@ -277,6 +262,16 @@ func (m *Manager) WatchPattern(
 	assert.NotNil(m, "chat.WatchPattern: receiver is nil")
 	assert.NotNil(ctx, "chat.WatchPattern: ctx is nil")
 	assert.NotEmpty(pattern, "chat.WatchPattern: pattern is empty")
+	return m.watchByShort(ctx, pattern)
+}
+
+// watchByShort is the shared implementation of Watch, WatchAll, and
+// WatchPattern. threadShort is passed through to notify as-is; an empty
+// string means project-wide (all threads). Use-after-close returns an
+// already-closed channel so consumer drain stays quiet.
+func (m *Manager) watchByShort(
+	ctx context.Context, short string,
+) <-chan notify.Message {
 	if m.closed.Load() {
 		ch := make(chan notify.Message)
 		close(ch)
@@ -284,7 +279,7 @@ func (m *Manager) WatchPattern(
 	}
 	return m.service.Watch(ctx, notify.WatchOpts{
 		Project:     m.cfg.ProjectPrefix,
-		ThreadShort: pattern,
+		ThreadShort: short,
 	})
 }
 

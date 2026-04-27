@@ -20,21 +20,8 @@ func newCoordOnURL(t *testing.T, url, agentID string) *coord.Coord {
 	t.Helper()
 	cfg := coord.Config{
 		AgentID:            agentID,
-		HoldTTLDefault:     30 * time.Second,
-		HoldTTLMax:         5 * time.Minute,
-		MaxHoldsPerClaim:   32,
-		MaxSubscribers:     32,
-		MaxTaskFiles:       32,
-		MaxReadyReturn:     256,
-		MaxTaskValueSize:   8 * 1024,
-		TaskHistoryDepth:   8,
-		OperationTimeout:   10 * time.Second,
-		HeartbeatInterval:  5 * time.Second,
-		NATSReconnectWait:  2 * time.Second,
-		NATSMaxReconnects:  5,
 		NATSURL:            url,
 		ChatFossilRepoPath: filepath.Join(t.TempDir(), agentID+"-chat.fossil"),
-		FossilRepoPath:     filepath.Join(t.TempDir(), agentID+"-code.fossil"),
 		CheckoutRoot:       filepath.Join(t.TempDir(), agentID+"-checkouts"),
 	}
 	c, err := coord.Open(context.Background(), cfg)

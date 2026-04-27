@@ -2,15 +2,16 @@ module github.com/danmestas/agent-infra
 
 go 1.26.0
 
-// EdgeSync is private; both local development and CI consume it via a
-// sibling checkout. CI's ci.yml clones github.com/danmestas/EdgeSync to
-// ../EdgeSync; local devs are expected to have the same layout. Drop
-// this replace once EdgeSync is published or moves to a public mirror.
-replace github.com/danmestas/EdgeSync/leaf => ../EdgeSync/leaf
+// EdgeSync is private. CI authenticates `go get` against it via a
+// PAT-driven URL-insteadOf git rewrite plus GOPRIVATE — see
+// .github/workflows/ci.yml. Local devs need GOPRIVATE=github.com/danmestas/*
+// and either a `gh auth git-credential` configured netrc or an SSH
+// rewrite. Once EdgeSync moves to a public repo, no env setup is
+// needed and this comment can be deleted.
 
 require (
-	github.com/danmestas/EdgeSync/leaf v0.0.1
-	github.com/danmestas/libfossil v0.4.2
+	github.com/danmestas/EdgeSync/leaf v0.0.3
+	github.com/danmestas/libfossil v0.4.4
 	github.com/danmestas/libfossil/db/driver/modernc v0.1.0
 	github.com/google/uuid v1.6.0
 	github.com/nats-io/nats-server/v2 v2.12.6
@@ -27,6 +28,7 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
@@ -42,6 +44,7 @@ require (
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/bridges/otelslog v0.17.0 // indirect
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.67.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.19.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.43.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.43.0 // indirect

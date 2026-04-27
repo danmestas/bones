@@ -2,71 +2,105 @@ package coord
 
 import (
 	"fmt"
-	"net/url"
-	"strings"
 	"time"
 )
 
-// Config is the operator-supplied configuration for a Coord instance.
-// Every field is required; there are no silent defaults. Validate
-// enforces bounded limits per the Phase 1 TigerStyle commitment.
-type Config struct {
-	// AgentID identifies this coord instance across the substrate.
-	AgentID string
-
+// TuningConfig holds substrate knobs that almost no real caller varies.
+// Zero value in any field means "use sane defaults" — Open applies
+// defaultTuning before Validate so callers only set what they need.
+type TuningConfig struct {
 	// HoldTTLDefault is the default TTL callers pass to Claim when they
-	// do not have a TTL of their own.
+	// do not supply a TTL of their own. Default: 30s.
 	HoldTTLDefault time.Duration
 
-	// HoldTTLMax is the upper bound on any Claim's TTL. Enforced at
-	// Claim entry via assertion per invariant 5.
+	// HoldTTLMax is the upper bound on any Claim's TTL. Default: 5m.
 	HoldTTLMax time.Duration
 
 	// MaxHoldsPerClaim caps the file count on a single Claim call per
-	// invariant 4.
+	// invariant 4. Default: 16.
 	MaxHoldsPerClaim int
 
 	// MaxSubscribers caps the number of in-flight chat subscribers.
+	// Default: 8.
 	MaxSubscribers int
 
 	// MaxTaskFiles caps the number of files a single task may touch.
+	// Default: 16.
 	MaxTaskFiles int
 
 	// MaxReadyReturn caps the number of tasks coord.Ready returns in a
-	// single call. Ready scans the tasks bucket client-side, so an
-	// unbounded return would let a large bucket stall the caller and the
-	// substrate proportionally. The operator supplies the number; there
-	// is no silent default, and Validate rejects zero/negative.
+	// single call. Default: 32.
 	MaxReadyReturn int
 
 	// MaxTaskValueSize is the upper bound on a task record's serialized
-	// JSON value, in bytes, enforced at every write in internal/tasks/
-	// per invariant 14. ADR 0005 recommends 8 KB; Config is the
-	// enforcement point and takes no silent default — the operator
-	// supplies the number, and Validate rejects zero/negative.
+	// JSON value, in bytes. Default: 16384.
 	MaxTaskValueSize int
 
 	// TaskHistoryDepth is the per-key JetStream KV history depth for the
-	// tasks bucket. ADR 0005 sets the recommended value at 8 (one entry
-	// per write: open, claim, up to ~4 updates, close, plus slack). The
-	// operator supplies the number; Validate rejects zero so there is no
-	// silent default at the coord layer.
+	// tasks bucket. Default: 8.
 	TaskHistoryDepth uint8
 
-	// OperationTimeout bounds a single coord operation end-to-end.
-	OperationTimeout time.Duration
-
 	// HeartbeatInterval is the cadence at which coord refreshes its
-	// liveness signal to the substrate.
+	// liveness signal. Default: 5s.
 	HeartbeatInterval time.Duration
 
 	// NATSReconnectWait is the delay between NATS reconnection attempts.
+	// Default: 100ms.
 	NATSReconnectWait time.Duration
 
-	// NATSMaxReconnects caps the number of NATS reconnection attempts
-	// before Open returns an error or a live Coord surfaces a terminal
-	// disconnect.
+	// NATSMaxReconnects caps NATS reconnection attempts. Default: 10.
 	NATSMaxReconnects int
+
+	// Buggify is a test-only flag; zero in production.
+	Buggify int
+}
+
+// defaultTuning returns a TuningConfig with sane production defaults.
+// Only zero fields are filled in — callers that set a field explicitly
+// keep their value.
+func defaultTuning(t TuningConfig) TuningConfig {
+	if t.HoldTTLDefault == 0 {
+		t.HoldTTLDefault = 30 * time.Second
+	}
+	if t.HoldTTLMax == 0 {
+		t.HoldTTLMax = 5 * time.Minute
+	}
+	if t.MaxHoldsPerClaim == 0 {
+		t.MaxHoldsPerClaim = 16
+	}
+	if t.MaxSubscribers == 0 {
+		t.MaxSubscribers = 8
+	}
+	if t.MaxTaskFiles == 0 {
+		t.MaxTaskFiles = 16
+	}
+	if t.MaxReadyReturn == 0 {
+		t.MaxReadyReturn = 32
+	}
+	if t.MaxTaskValueSize == 0 {
+		t.MaxTaskValueSize = 16384
+	}
+	if t.TaskHistoryDepth == 0 {
+		t.TaskHistoryDepth = 8
+	}
+	if t.HeartbeatInterval == 0 {
+		t.HeartbeatInterval = 5 * time.Second
+	}
+	if t.NATSReconnectWait == 0 {
+		t.NATSReconnectWait = 100 * time.Millisecond
+	}
+	if t.NATSMaxReconnects == 0 {
+		t.NATSMaxReconnects = 10
+	}
+	return t
+}
+
+// Config is the operator-supplied configuration for a Coord instance.
+// Only the four identity/routing fields are required; Tuning is
+// zero-safe — Open fills missing fields from defaultTuning.
+type Config struct {
+	// AgentID identifies this coord instance across the substrate.
+	AgentID string
 
 	// NATSURL is the URL coord.Open dials to reach the substrate. It
 	// never appears in any coord public method signature per ADR 0003;
@@ -75,87 +109,28 @@ type Config struct {
 
 	// ChatFossilRepoPath is the filesystem path at which coord.Open
 	// creates or opens this agent's chat Fossil repo. The operator owns
-	// cleanup; coord never calls RemoveAll. Pinning the location to
-	// Config (as opposed to the per-Open MkdirTemp used in Phase 3A)
-	// makes chat history replayable across restarts and keeps /tmp
-	// from growing over a long-running agent's lifetime. In tests,
-	// pass t.TempDir() — a fresh directory per test keeps two
-	// concurrent Coords on one substrate from colliding on the repo.
+	// cleanup; coord never calls RemoveAll. In tests, pass t.TempDir().
 	ChatFossilRepoPath string
-
-	// FossilRepoPath is the absolute filesystem path to the shared Fossil
-	// repo DB used for the code-artifact substrate per ADR 0010. The
-	// operator owns cleanup; coord never calls RemoveAll. Distinct from
-	// ChatFossilRepoPath: chat messages and code commits live in separate
-	// Fossil repos so their replay streams stay untangled.
-	FossilRepoPath string
 
 	// CheckoutRoot is the absolute directory under which per-agent
 	// working-copy checkouts live per ADR 0010. Coord writes to
 	// CheckoutRoot/<AgentID>/. In tests, pass t.TempDir().
 	CheckoutRoot string
 
-	// HubURL is the http base URL of the orchestrator's fossil server.
-	// When non-empty, coord enables hub-pull on tip.changed broadcasts
-	// and pull+update+retry on commit fork detection. When empty, coord
-	// behaves as in v0.x — local-only, no hub interaction.
-	HubURL string
-
-	// EnableTipBroadcast, when true and HubURL is non-empty, makes
-	// coord.Commit publish a tip.changed message on NATS after every
-	// successful commit, and makes coord.Open subscribe to it. Default
-	// (false) preserves the v0.x no-broadcast behavior.
-	EnableTipBroadcast bool
+	// Tuning carries substrate knobs. Zero means "use sane defaults".
+	Tuning TuningConfig
 }
 
 // Validate checks every Config field against its documented bounds and
-// returns the first violation as an error. The error message follows
-// the shape "coord.Config: <field>: <reason>". Validate is pure; it
-// does not panic on bad operator input per invariant 9.
+// returns the first violation as an error. Validate is pure; it does
+// not panic on bad operator input per invariant 9.
+//
+// Callers must apply defaultTuning before Validate; Open does this
+// automatically. Direct Validate callers (tests) should call
+// defaultTuning themselves if they rely on zero-value Tuning fields.
 func (c Config) Validate() error {
 	if c.AgentID == "" {
 		return fmt.Errorf("coord.Config: AgentID: must be non-empty")
-	}
-	if c.HoldTTLDefault <= 0 {
-		return fmt.Errorf("coord.Config: HoldTTLDefault: must be > 0")
-	}
-	if c.HoldTTLMax <= 0 {
-		return fmt.Errorf("coord.Config: HoldTTLMax: must be > 0")
-	}
-	if c.HoldTTLDefault > c.HoldTTLMax {
-		return fmt.Errorf(
-			"coord.Config: HoldTTLDefault: must be <= HoldTTLMax",
-		)
-	}
-	if c.MaxHoldsPerClaim <= 0 {
-		return fmt.Errorf("coord.Config: MaxHoldsPerClaim: must be > 0")
-	}
-	if c.MaxSubscribers <= 0 {
-		return fmt.Errorf("coord.Config: MaxSubscribers: must be > 0")
-	}
-	if c.MaxTaskFiles <= 0 {
-		return fmt.Errorf("coord.Config: MaxTaskFiles: must be > 0")
-	}
-	if c.MaxReadyReturn <= 0 {
-		return fmt.Errorf("coord.Config: MaxReadyReturn: must be > 0")
-	}
-	if c.MaxTaskValueSize <= 0 {
-		return fmt.Errorf("coord.Config: MaxTaskValueSize: must be > 0")
-	}
-	if c.TaskHistoryDepth == 0 {
-		return fmt.Errorf("coord.Config: TaskHistoryDepth: must be > 0")
-	}
-	if c.OperationTimeout <= 0 {
-		return fmt.Errorf("coord.Config: OperationTimeout: must be > 0")
-	}
-	if c.HeartbeatInterval <= 0 {
-		return fmt.Errorf("coord.Config: HeartbeatInterval: must be > 0")
-	}
-	if c.NATSReconnectWait <= 0 {
-		return fmt.Errorf("coord.Config: NATSReconnectWait: must be > 0")
-	}
-	if c.NATSMaxReconnects <= 0 {
-		return fmt.Errorf("coord.Config: NATSMaxReconnects: must be > 0")
 	}
 	if c.NATSURL == "" {
 		return fmt.Errorf("coord.Config: NATSURL: must be non-empty")
@@ -165,36 +140,49 @@ func (c Config) Validate() error {
 			"coord.Config: ChatFossilRepoPath: must be non-empty",
 		)
 	}
-	if c.FossilRepoPath == "" {
-		return fmt.Errorf(
-			"coord.Config: FossilRepoPath: must be non-empty",
-		)
-	}
 	if c.CheckoutRoot == "" {
 		return fmt.Errorf(
 			"coord.Config: CheckoutRoot: must be non-empty",
 		)
 	}
-	if err := validateHubURL(c.HubURL); err != nil {
-		return err
+	t := c.Tuning
+	if t.HoldTTLDefault <= 0 {
+		return fmt.Errorf("coord.Config: Tuning.HoldTTLDefault: must be > 0")
 	}
-	return nil
-}
-
-// validateHubURL enforces the HubURL contract: empty is fine (local-only
-// mode); otherwise the value must parse as a valid URI and use http(s).
-func validateHubURL(hubURL string) error {
-	if hubURL == "" {
-		return nil
+	if t.HoldTTLMax <= 0 {
+		return fmt.Errorf("coord.Config: Tuning.HoldTTLMax: must be > 0")
 	}
-	if _, err := url.ParseRequestURI(hubURL); err != nil {
-		return fmt.Errorf("coord.Config: HubURL: %w", err)
-	}
-	if !strings.HasPrefix(hubURL, "http://") &&
-		!strings.HasPrefix(hubURL, "https://") {
+	if t.HoldTTLDefault > t.HoldTTLMax {
 		return fmt.Errorf(
-			"coord.Config: HubURL: must start with http:// or https://",
+			"coord.Config: Tuning.HoldTTLDefault: must be <= HoldTTLMax",
 		)
+	}
+	if t.MaxHoldsPerClaim <= 0 {
+		return fmt.Errorf("coord.Config: Tuning.MaxHoldsPerClaim: must be > 0")
+	}
+	if t.MaxSubscribers <= 0 {
+		return fmt.Errorf("coord.Config: Tuning.MaxSubscribers: must be > 0")
+	}
+	if t.MaxTaskFiles <= 0 {
+		return fmt.Errorf("coord.Config: Tuning.MaxTaskFiles: must be > 0")
+	}
+	if t.MaxReadyReturn <= 0 {
+		return fmt.Errorf("coord.Config: Tuning.MaxReadyReturn: must be > 0")
+	}
+	if t.MaxTaskValueSize <= 0 {
+		return fmt.Errorf("coord.Config: Tuning.MaxTaskValueSize: must be > 0")
+	}
+	if t.TaskHistoryDepth == 0 {
+		return fmt.Errorf("coord.Config: Tuning.TaskHistoryDepth: must be > 0")
+	}
+	if t.HeartbeatInterval <= 0 {
+		return fmt.Errorf("coord.Config: Tuning.HeartbeatInterval: must be > 0")
+	}
+	if t.NATSReconnectWait <= 0 {
+		return fmt.Errorf("coord.Config: Tuning.NATSReconnectWait: must be > 0")
+	}
+	if t.NATSMaxReconnects <= 0 {
+		return fmt.Errorf("coord.Config: Tuning.NATSMaxReconnects: must be > 0")
 	}
 	return nil
 }

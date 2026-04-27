@@ -38,7 +38,7 @@ func (c *Coord) Ready(ctx context.Context) ([]Task, error) {
 	blockers := buildReadyBlockers(records)
 	eligible := filterReady(records, blockers)
 	sortReady(eligible)
-	return capReady(eligible, c.cfg.MaxReadyReturn), nil
+	return capReady(eligible, c.cfg.Tuning.MaxReadyReturn), nil
 }
 
 // readyBlockers holds the reverse-index sets computed in the first

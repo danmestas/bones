@@ -174,7 +174,7 @@ func TestReady_SortOldestFirst(t *testing.T) {
 // MaxReadyReturn=2 and asserts Ready returns exactly the two oldest.
 func TestReady_CapsResultLength(t *testing.T) {
 	c := mustOpen(t)
-	c.cfg.MaxReadyReturn = 2
+	c.cfg.Tuning.MaxReadyReturn = 2
 	base := time.Date(2025, 3, 1, 9, 0, 0, 0, time.UTC)
 
 	ids := []string{

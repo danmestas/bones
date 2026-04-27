@@ -5,6 +5,7 @@
 //	agent-init init           # in the directory you want as the workspace root
 //	agent-init join           # from cwd or any subdir of an existing workspace
 //	agent-init orchestrator   # scaffold hub-leaf orchestrator into the workspace
+//	agent-init up             # full bootstrap: workspace + scaffold + bin/leaf + hub
 package main
 
 import (
@@ -26,6 +27,8 @@ const usage = `Usage:
   agent-init init           - create a new workspace in the current directory
   agent-init join           - locate and verify an existing workspace
   agent-init orchestrator   - install hub-leaf orchestrator scripts, skills, and hooks
+  agent-init up             - full bootstrap from a fresh clone:
+                              workspace + scaffold + bin/leaf + hub
 `
 
 func main() {
@@ -91,6 +94,12 @@ func run(args []string) int {
 			return 1
 		}
 		fmt.Println("orchestrator: scaffolded scripts, skills, and Claude Code hooks")
+		return 0
+	case "up":
+		if err := runUp(cwd); err != nil {
+			fmt.Fprintf(os.Stderr, "agent-init up: %v\n", err)
+			return 1
+		}
 		return 0
 	default:
 		fmt.Fprintf(os.Stderr, "agent-init: unknown command %q\n%s", args[0], usage)
