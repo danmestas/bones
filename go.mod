@@ -11,7 +11,7 @@ go 1.26.0
 
 require (
 	github.com/danmestas/EdgeSync/leaf v0.0.3
-	github.com/danmestas/libfossil v0.4.3
+	github.com/danmestas/libfossil v0.4.4
 	github.com/danmestas/libfossil/db/driver/modernc v0.1.0
 	github.com/google/uuid v1.6.0
 	github.com/nats-io/nats-server/v2 v2.12.6
