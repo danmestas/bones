@@ -24,7 +24,7 @@ make
 # One-command bootstrap: workspace + scaffold + bin/leaf + hub:
 bin/bones up
 # Add and inspect tasks:
-bin/bones tasks add "my first task" --files src/foo.go
+bin/bones tasks create "my first task" --files src/foo.go
 bin/bones tasks open
 bin/bones tasks status
 ```

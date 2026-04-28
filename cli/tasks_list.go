@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/danmestas/bones/coord"
 	"github.com/danmestas/bones/internal/tasks"
+	"github.com/danmestas/bones/internal/workspace"
 )
 
 // TasksListCmd lists tasks. Filter flags compose: status → ready → stale →
@@ -194,4 +196,25 @@ func emitTasks(out []tasks.Task, asJSON bool) error {
 		fmt.Println(formatListLine(t))
 	}
 	return nil
+}
+
+// liveAgentSet collapses a presence list to a set of online agent IDs.
+func liveAgentSet(peers []coord.Presence) map[string]struct{} {
+	out := make(map[string]struct{}, len(peers))
+	for _, p := range peers {
+		out[p.AgentID()] = struct{}{}
+	}
+	return out
+}
+
+// newCoordConfig builds a coord.Config from workspace defaults. Lifted
+// from tasks_ready.go into tasks_list.go when the ready verb folded into
+// 'tasks list --ready'.
+func newCoordConfig(info workspace.Info) coord.Config {
+	return coord.Config{
+		AgentID:            info.AgentID,
+		NATSURL:            info.NATSURL,
+		ChatFossilRepoPath: filepath.Join(info.WorkspaceDir, "chat.fossil"),
+		CheckoutRoot:       info.WorkspaceDir,
+	}
 }

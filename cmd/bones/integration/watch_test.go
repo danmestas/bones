@@ -13,7 +13,7 @@ import (
 // subcommand. It:
 //  1. Bootstraps a workspace (starts a leaf NATS server).
 //  2. Starts "bones tasks watch" in the background with a short timeout.
-//  3. Creates a task via "bones tasks add" while watch is running.
+//  3. Creates a task via "bones tasks create" while watch is running.
 //  4. Verifies that watch printed a "created" line containing the task title.
 func TestCLI_Watch_Smoke(t *testing.T) {
 	if testing.Short() {

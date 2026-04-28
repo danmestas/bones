@@ -47,7 +47,7 @@ bash .orchestrator/scripts/hub-bootstrap.sh # starts the hub
 
 ```sh
 # Add a task with a file scope:
-bin/bones tasks add "wire up coord.Reclaim" --files coord/reclaim.go
+bin/bones tasks create "wire up coord.Reclaim" --files coord/reclaim.go
 
 # Inspect the board:
 bin/bones tasks status

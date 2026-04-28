@@ -20,26 +20,23 @@ import (
 	"github.com/danmestas/bones/internal/workspace"
 )
 
-// TasksCmd groups all `bones tasks <verb>` subcommands.
+// TasksCmd groups all `bones tasks <verb>` subcommands. The Hipp audit
+// folded ready/stale/orphans/preflight (plus the literal 'add' alias of
+// 'create') into 'list' filter flags; dispatch is hub-only and hidden.
 type TasksCmd struct {
-	Add       TasksCreateCmd    `cmd:"" help:"Alias for create"`
 	Create    TasksCreateCmd    `cmd:"" help:"Create a new task"`
 	List      TasksListCmd      `cmd:"" help:"List tasks"`
 	Show      TasksShowCmd      `cmd:"" help:"Show a task"`
 	Update    TasksUpdateCmd    `cmd:"" help:"Update a task"`
 	Claim     TasksClaimCmd     `cmd:"" help:"Claim a task"`
 	Close     TasksCloseCmd     `cmd:"" help:"Close a task"`
-	Ready     TasksReadyCmd     `cmd:"" help:"List tasks ready for claim"`
 	Watch     TasksWatchCmd     `cmd:"" help:"Stream task lifecycle events"`
 	Status    TasksStatusCmd    `cmd:"" help:"Snapshot of all tasks by status"`
 	Link      TasksLinkCmd      `cmd:"" help:"Link two tasks with an edge type"`
 	Prime     TasksPrimeCmd     `cmd:"" help:"Print agent-tasks context (prime)"`
-	Stale     TasksStaleCmd     `cmd:"" help:"List stale tasks"`
-	Orphans   TasksOrphansCmd   `cmd:"" help:"List orphaned (claimed by absent agent) tasks"`
-	Preflight TasksPreflightCmd `cmd:"" help:"Combined stale + orphans report"`
 	Compact   TasksCompactCmd   `cmd:"" help:"Compact closed tasks"`
 	Autoclaim TasksAutoclaimCmd `cmd:"" help:"Run one autoclaim tick"`
-	Dispatch  TasksDispatchCmd  `cmd:"" help:"Dispatch parent/worker"`
+	Dispatch  TasksDispatchCmd  `cmd:"" hidden:"" help:"Dispatch parent/worker (hub-only)"`
 	Aggregate TasksAggregateCmd `cmd:"" help:"Aggregate per-slot task summary"`
 }
 
