@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/danmestas/bones/internal/assert"
 	"github.com/danmestas/bones/internal/chat"
@@ -17,6 +18,12 @@ import (
 	"github.com/danmestas/bones/internal/presence"
 	"github.com/danmestas/bones/internal/tasks"
 )
+
+// swarmSessionsTTL is the bucket TTL for bones-swarm-sessions.
+// Mirrors internal/swarm.DefaultTTL; duplicated here to avoid an
+// import cycle (swarm imports jskv which is fine, but coord must
+// provision the bucket before swarm exists in the call chain).
+const swarmSessionsTTL = 5 * time.Minute
 
 // holdsBucket is the JetStream KV bucket name coord uses to back
 // file-scoped holds. The bucket identifier is a substrate detail per
@@ -32,6 +39,17 @@ const archiveBucket = "bones-task-archive"
 // Config.HeartbeatInterval and is set at bucket-creation time by
 // internal/presence.Open.
 const presenceBucket = "bones-presence"
+
+// swarmSessionsBucket is the JetStream KV bucket name internal/swarm
+// uses to track per-slot swarm sessions per ADR 0028. Listed here
+// for visibility alongside the other coord-managed buckets, but
+// internal/swarm.Manager.Open creates/attaches independently —
+// coord.Coord callers do NOT consume this bucket. Provisioning is
+// best-effort here so any coord.Open guarantees the bucket exists
+// before the first `bones swarm join`. Constant kept exported (in
+// effect — swarm package mirrors it as DefaultBucketName) so tests
+// can assert the same name in both layers.
+const swarmSessionsBucket = "bones-swarm-sessions"
 
 // Coord is the public entry point for bones. Construct one via
 // Open and Close it at shutdown. All coordination — hold acquisition,
@@ -156,7 +174,32 @@ func openSubstrate(
 		s.close()
 		return nil, fmt.Errorf("coord.Open: presence: %w", err)
 	}
+	if err := provisionSwarmSessionsBucket(ctx, nc); err != nil {
+		s.close()
+		return nil, fmt.Errorf("coord.Open: swarm sessions: %w", err)
+	}
 	return s, nil
+}
+
+// provisionSwarmSessionsBucket ensures the bones-swarm-sessions KV
+// bucket exists with the swarm package's TTL. Idempotent: re-running
+// against an existing bucket is a no-op (CreateOrUpdateKeyValue does
+// not overwrite TTL on a hot bucket per JetStream semantics). Kept
+// out of the substrate aggregate because no coord.Coord method reads
+// or writes the bucket — it is a purely substrate-side artifact for
+// internal/swarm to attach to. ADR 0028 §"Coord-bucket integration".
+func provisionSwarmSessionsBucket(ctx context.Context, nc *nats.Conn) error {
+	js, err := jetstream.New(nc)
+	if err != nil {
+		return fmt.Errorf("jetstream: %w", err)
+	}
+	if _, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket: swarmSessionsBucket,
+		TTL:    swarmSessionsTTL,
+	}); err != nil {
+		return fmt.Errorf("kv bucket %q: %w", swarmSessionsBucket, err)
+	}
+	return nil
 }
 
 // projectPrefix derives the <proj> segment from an AgentID shaped

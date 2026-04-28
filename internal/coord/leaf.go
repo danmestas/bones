@@ -64,12 +64,21 @@ type Leaf struct {
 	stopped    bool
 }
 
-// LeafConfig is the configuration passed to OpenLeaf. Hub is required and
-// provides all three URL fields (LeafUpstream, NATSURL, HTTPAddr) so
-// callers do not need to thread them individually.
+// LeafConfig is the configuration passed to OpenLeaf. One of Hub or
+// HubAddrs must be set; HubAddrs is the path for callers (e.g. the
+// `bones swarm` CLI) that hold only URL strings, not an in-process
+// *Hub. When both are set, Hub wins and HubAddrs is ignored.
 type LeafConfig struct {
-	// Hub is the hub this leaf peers against. Required.
+	// Hub is the hub this leaf peers against. Either Hub or HubAddrs
+	// must be set.
 	Hub *Hub
+
+	// HubAddrs supplies the same three URLs Hub would have exposed via
+	// LeafUpstream/NATSURL/HTTPAddr. Set when the hub is in another
+	// process (typical CLI use): the bones hub runs as a separate
+	// daemon, so the agent-side bones binary cannot share an in-process
+	// *Hub object. ADR 0028 §"Detailed design / swarm join".
+	HubAddrs HubAddrs
 
 	// Workdir is the root directory for per-slot state. Required.
 	Workdir string
@@ -99,21 +108,46 @@ type LeafConfig struct {
 	Metadata map[string]string
 }
 
+// HubAddrs holds the three URLs OpenLeaf needs from a hub. Each
+// field corresponds 1-1 with a *Hub method:
+//
+//	LeafUpstream → Hub.LeafUpstream() — leaf-node solicit URL
+//	NATSClient   → Hub.NATSURL()      — client connection URL for KV
+//	HTTPAddr     → Hub.HTTPAddr()     — fossil HTTP base URL
+//
+// Used by LeafConfig.HubAddrs when the hub is in a separate process
+// and the caller has discovered (or hard-coded) its endpoints.
+type HubAddrs struct {
+	LeafUpstream string
+	NATSClient   string
+	HTTPAddr     string
+}
+
+// IsEmpty reports whether all three URL fields are empty. OpenLeaf
+// uses this to choose between Hub and HubAddrs when LeafConfig has
+// both set or both empty.
+func (a HubAddrs) IsEmpty() bool {
+	return a.LeafUpstream == "" && a.NATSClient == "" && a.HTTPAddr == ""
+}
+
 // OpenLeaf starts a leaf at cfg.Workdir/<cfg.SlotID>/leaf.fossil that
-// joins cfg.Hub's mesh as a leaf-node and uses cfg.Hub's NATS client
-// URL for coord's claim/task KV traffic. Clones leaf.fossil from
-// cfg.Hub's HTTP endpoint at open time.
+// joins the hub's mesh as a leaf-node and uses the hub's NATS client
+// URL for coord's claim/task KV traffic. Clones leaf.fossil from the
+// hub's HTTP endpoint at open time.
+//
+// Hub URLs come from cfg.Hub (when set) or cfg.HubAddrs (when Hub is
+// nil). Exactly one of the two must be set.
 //
 // The slot's worktree is at cfg.Workdir/<cfg.SlotID>/wt.
 func OpenLeaf(ctx context.Context, cfg LeafConfig) (*Leaf, error) {
 	assert.NotNil(ctx, "coord.OpenLeaf: ctx is nil")
-	assert.NotNil(cfg.Hub, "coord.OpenLeaf: cfg.Hub is nil")
 	assert.NotEmpty(cfg.Workdir, "coord.OpenLeaf: cfg.Workdir is empty")
 	assert.NotEmpty(cfg.SlotID, "coord.OpenLeaf: cfg.SlotID is empty")
 
-	hubNATSUpstream := cfg.Hub.LeafUpstream()
-	hubNATSClient := cfg.Hub.NATSURL()
-	hubHTTPAddr := cfg.Hub.HTTPAddr()
+	hubNATSUpstream, hubNATSClient, hubHTTPAddr, err := resolveHubAddrs(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	slotDir := filepath.Join(cfg.Workdir, cfg.SlotID)
 	if err := os.MkdirAll(slotDir, 0o755); err != nil {
@@ -207,6 +241,36 @@ func OpenLeaf(ctx context.Context, cfg LeafConfig) (*Leaf, error) {
 		fossilUser: cfg.FossilUser,
 		metadata:   cfg.Metadata,
 	}, nil
+}
+
+// resolveHubAddrs returns the leaf-upstream, NATS-client, and HTTP
+// addresses for OpenLeaf, drawing from cfg.Hub when set or cfg.HubAddrs
+// otherwise. Returns an error if neither (or both empty) source is
+// usable, so OpenLeaf surfaces a clear message rather than panicking
+// in the agent.New call below.
+func resolveHubAddrs(cfg LeafConfig) (upstream, natsClient, httpAddr string, err error) {
+	if cfg.Hub != nil {
+		return cfg.Hub.LeafUpstream(), cfg.Hub.NATSURL(), cfg.Hub.HTTPAddr(), nil
+	}
+	if cfg.HubAddrs.IsEmpty() {
+		return "", "", "",
+			fmt.Errorf("coord.OpenLeaf: neither cfg.Hub nor cfg.HubAddrs is set")
+	}
+	if cfg.HubAddrs.NATSClient == "" {
+		return "", "", "",
+			fmt.Errorf("coord.OpenLeaf: cfg.HubAddrs.NATSClient is empty")
+	}
+	if cfg.HubAddrs.HTTPAddr == "" {
+		return "", "", "",
+			fmt.Errorf("coord.OpenLeaf: cfg.HubAddrs.HTTPAddr is empty")
+	}
+	// LeafUpstream may be empty in CLI scenarios where the slot leaf
+	// peers via the workspace's leaf-daemon NATS server (a regular
+	// client connection on NATSClient is enough — leafnode propagation
+	// then forwards subjects up to the hub mesh through the existing
+	// daemon). Pass "" through; agent.New treats empty NATSUpstream as
+	// "standalone mesh, no upstream solicitation."
+	return cfg.HubAddrs.LeafUpstream, cfg.HubAddrs.NATSClient, cfg.HubAddrs.HTTPAddr, nil
 }
 
 // openLeafCoord builds the *Coord that backs a Leaf's claim/task work.

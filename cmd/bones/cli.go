@@ -15,15 +15,16 @@ type CLI struct {
 	// Daily.
 	Up    bonescli.UpCmd    `cmd:"" group:"daily" help:"Bootstrap workspace, scaffold, leaf, hub"`
 	Tasks bonescli.TasksCmd `cmd:"" group:"daily" help:"Inspect and mutate runtime agent tasks"`
+	Swarm bonescli.SwarmCmd `cmd:"" group:"daily" help:"Run as a slot-shaped swarm participant"`
 
 	// Repository.
 	Repo libfossilcli.RepoCmd `cmd:"" group:"repo" help:"Fossil repository operations"`
 
 	// Sync & messaging.
-	Sync   edgecli.SyncCmd   `cmd:"" group:"sync" help:"Leaf agent sync"`
-	Bridge edgecli.BridgeCmd `cmd:"" group:"sync" help:"NATS-to-Fossil bridge"`
-	Notify edgecli.NotifyCmd `cmd:"" group:"sync" help:"Bidirectional notification messaging"`
-	Doctor edgecli.DoctorCmd `cmd:"" group:"sync" help:"Check development environment health"`
+	Sync   edgecli.SyncCmd    `cmd:"" group:"sync" help:"Leaf agent sync"`
+	Bridge edgecli.BridgeCmd  `cmd:"" group:"sync" help:"NATS-to-Fossil bridge"`
+	Notify edgecli.NotifyCmd  `cmd:"" group:"sync" help:"Bidirectional notification messaging"`
+	Doctor bonescli.DoctorCmd `cmd:"" group:"sync" help:"Check development environment health"`
 
 	// Tooling — used by humans authoring plans/skills.
 	ValidatePlan bonescli.ValidatePlanCmd `cmd:"" group:"tooling" help:"Validate plan"`
