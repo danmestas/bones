@@ -7,6 +7,16 @@
 (`docs/code-review/2026-04-28-swarm-demo-retro.md`). R1, R5, R2 already
 ship as PRs #41, #42, #43 — they unblock this ADR but don't subsume it.
 
+**Revision (2026-04-28):** session state moved from a per-slot
+`state.json` file into a new NATS JetStream KV bucket
+`bones-swarm-sessions`. The original local-file design duplicated
+runtime state already authoritative in KV (task-id in `bones-tasks`,
+claim hold in `bones-holds`, agent in `bones-presence`) and would
+have created a drift surface the substrate-vs-domain split (ADR 0025)
+exists to prevent. See "Lifecycle and state" below for the new shape
+and "Alternatives considered → Local state.json (rejected)" for the
+rationale.
+
 ## Context
 
 When a Claude subagent is dispatched to "be slot X in the bones swarm,"
@@ -76,29 +86,59 @@ vs the current prompt that embeds 8 raw `fossil` invocations.
 
 ### Lifecycle and state
 
-Per-slot state lives at `<workspace>/.bones/swarm/<slot>/state.json`.
-A slot can have at most one active state file at a time; `swarm join`
-errors if one already exists for the slot (callers can pass
-`--force` to clobber). Layout:
+Session state lives in a new NATS JetStream KV bucket,
+`bones-swarm-sessions`, parallel to `bones-tasks` (ADR 0005),
+`bones-holds` (ADR 0002), and `bones-presence` (ADR 0009). Bucket
+shape:
+
+| Field          | Type   | Source / role |
+|----------------|--------|--------------|
+| `slot`         | string | Slot name (key)              |
+| `task_id`      | string | Task this slot is working on |
+| `agent_id`     | string | `slot-<name>` (the slot's fossil + coord identity) |
+| `host`         | string | Hostname running the leaf process |
+| `leaf_pid`     | int    | Local PID of the leaf — only meaningful on `host` |
+| `started_at`   | RFC3339 | When this session opened |
+| `last_renewed` | RFC3339 | Last `swarm commit` / heartbeat |
+
+Key: slot name (workspace-scoped via the bucket itself). One value
+per active slot.
+
+TTL: renewed on every `swarm commit` (heartbeats), same pattern as
+`bones-presence`. Stale entries (no renewal in 5 min default) are
+surfaced by `bones doctor` (R7) and cleanable via `bones swarm
+close --slot=X --result=fail`.
+
+**The claim itself stays in `bones-holds`** — `bones-swarm-sessions`
+records only "this slot is doing this task." Renewal of the actual
+hold goes through the existing holds API, keyed by the same
+slot-agent identity. No state duplication.
+
+Local-only artifacts (the parts that genuinely cannot live in KV):
 
 ```
 .bones/swarm/
 ├── rendering/
-│   ├── state.json          slot, task-id, claim ID, leaf pid, started-at
 │   ├── leaf.fossil         the slot's libfossil repo (cloned from hub)
+│   ├── leaf.pid            host-local PID tracker (mirror of bones-swarm-sessions.leaf_pid)
 │   └── wt/                 the slot's working tree (Leaf.WT())
 └── physics/
-    ├── state.json
     ├── leaf.fossil
+    ├── leaf.pid
     └── wt/
 ```
 
-`swarm join` writes the state file; `swarm commit`/`status`/`close`
-read it; `swarm close` removes it on clean exit.
+`leaf.fossil` and `wt/` must be on disk — libfossil and the agent's
+file edits both need a local filesystem. `leaf.pid` is the same
+host-local OS-process tracker the hub itself uses
+(`.orchestrator/pids/fossil.pid`); KV records the same number for
+cross-host visibility, but only the host that owns the process can
+signal it.
 
-The `wt/` path is what `swarm cwd` prints. Agents `cd $(bones swarm cwd
---slot=X)` and work there. Slot-disjointness (R5) ensures no two slots
-ever modify the same path.
+The `wt/` path is derived from `<workspace>/.bones/swarm/<slot>/wt`
+— `swarm cwd --slot=X` computes it directly without consulting KV.
+Slot-disjointness (R5) ensures no two slots ever modify the same
+path.
 
 ### `swarm join`
 
@@ -115,15 +155,14 @@ Flow:
 
 1. Open the workspace (`workspace.Join`).
 2. Ensure the slot user exists in the hub (`bones hub user add` primitive — R2).
-3. Open a `coord.Leaf` rooted at `.bones/swarm/<slot>/`, identity = `slot-<name>`.
-   Leaf clones `hub.fossil` to `leaf.fossil`, joins the NATS mesh as a leaf node.
-4. Claim the task: `coord.Coord.Claim(ctx, taskID)` with hold TTL = swarm-default (60s).
-5. Verify the task's slot annotation matches `--slot` (sanity check; abort if not).
-6. Write `state.json` capturing slot, task ID, claim handle (renewable), leaf PID, agent ID.
-7. Print `BONES_SLOT_WT=<wt path>\n` to stdout for shell sourcing; print friendly status to stderr.
+3. Verify no live session exists for this slot in `bones-swarm-sessions[<slot>]`. If one does and its PID is still alive on this host, abort (use `--force` to take over after explicit human ack). If PID is dead or session is on a different host, log + take over.
+4. Open a `coord.Leaf` rooted at `.bones/swarm/<slot>/`, identity = `slot-<name>`. Leaf clones `hub.fossil` to `leaf.fossil`, joins the NATS mesh as a leaf node. Write `leaf.pid` for host-local kill semantics.
+5. Claim the task: `coord.Coord.Claim(ctx, taskID)` with hold TTL = swarm-default (60s).
+6. Verify the task's slot annotation matches `--slot` (sanity check; abort if not).
+7. Write the session record to `bones-swarm-sessions[<slot>]` via JetStream KV CAS. Set TTL to 5 min from now.
+8. Print `BONES_SLOT_WT=<wt path>\n` to stdout for shell sourcing; print friendly status to stderr.
 
-The leaf process stays alive in the background until `swarm close`. State
-file holds its PID for liveness probing.
+The leaf process stays alive in the background until `swarm close`. Its PID is recorded both locally (`.bones/swarm/<slot>/leaf.pid`) and in the KV session record — the local file lets `kill` work on the host that owns the leaf, and the KV copy lets every other workspace participant observe liveness.
 
 ### `swarm commit`
 
@@ -137,11 +176,11 @@ type SwarmCommitCmd struct {
 
 Flow:
 
-1. Resolve slot from `--slot` flag, or single-slot inference from `state.json`.
-2. Read the state file; verify the leaf PID is still alive (else error: "leaf died, run `swarm join --force`").
+1. Resolve slot from `--slot` flag, or single-slot inference by listing `bones-swarm-sessions` and finding the unique active slot on this host.
+2. Read the session record from `bones-swarm-sessions[<slot>]`. Verify the leaf PID is still alive (cross-checked against the host-local `leaf.pid`); on mismatch, error: "leaf died, run `swarm join --force`".
 3. If `Files` is empty, scan `wt/` for modifications via libfossil's checkout-state API.
 4. Call `Leaf.Commit(ctx, claim, files)` — this commits via libfossil with the slot user identity, then triggers `Agent.SyncNow` so the hub absorbs the commit immediately.
-5. Renew the claim TTL on success (the hold should outlive a commit).
+5. Renew the claim hold (`bones-holds`) and update `last_renewed` + extend TTL on the session record (`bones-swarm-sessions[<slot>]`) via CAS.
 6. Print the new commit hash + a short timeline line to stdout.
 
 The agent NEVER calls `fossil up` itself. The leaf's tip is the agent's
@@ -163,29 +202,34 @@ type SwarmCloseCmd struct {
 
 Flow:
 
-1. Resolve slot from flag/inference.
-2. Read state file.
+1. Resolve slot from flag/inference (KV lookup).
+2. Read the session record from `bones-swarm-sessions[<slot>]`.
 3. Build a `dispatch.ResultMessage` from `--result/--summary/--branch/--rev`.
 4. Post the result to the task thread (subject `<proj>.tasks.<taskID>.result`) so the
    parent dispatch handler (per ADR 0021 §"Dispatch parent/worker") picks it up.
 5. On `result=success`: call `Leaf.Close(claim)` — this releases the claim AND closes the
    underlying task in NATS KV (per the existing dispatch close-on-success path).
 6. On `result=fail` or `=fork`: release the claim, leave the task open for human inspection.
-7. Stop the leaf process (graceful shutdown via SIGTERM).
-8. Remove `state.json`. The `wt/` and `leaf.fossil` files stay for forensics; cleaned by an explicit `bones swarm prune <slot>` call.
+7. Stop the leaf process (graceful shutdown via SIGTERM); remove `leaf.pid`.
+8. Delete the session record (`bones-swarm-sessions[<slot>]`) via CAS. The `wt/` and `leaf.fossil` files stay for forensics; cleaned by an explicit `bones swarm prune <slot>` call.
 
 ### `swarm status`
 
-Reads `.bones/swarm/*/state.json` and prints a table:
+Iterates `bones-swarm-sessions` and prints a table. Liveness checks
+combine the KV `last_renewed` timestamp (cross-host) with a local PID
+probe when the session's `host` matches this machine:
 
 ```
-SLOT          TASK-ID                                STARTED        STATE
-rendering     7e3c1d-...-deadbeef                    14:32:01       active (leaf pid 4321 alive, claim renewed 12s ago)
-physics       9f02ab-...-cafef00d                    14:33:18       stale (leaf pid 4322 DEAD; run `swarm close --slot=physics --result=fail`)
+SLOT          TASK-ID                                HOST    STARTED        STATE
+rendering     7e3c1d-...-deadbeef                    laptop  14:32:01       active (renewed 12s ago, pid 4321 alive)
+physics       9f02ab-...-cafef00d                    laptop  14:33:18       stale (no renewal in 5m, pid 4322 DEAD)
+audio         5b8a7e-...-8412bb05                    rpi-4   14:34:02       active (renewed 30s ago, on remote host)
 ```
 
 Used by `bones doctor` (R7) to surface stale state, and by humans
-debugging a stuck swarm.
+debugging a stuck swarm. Cross-host visibility is free because the
+data lives in KV — multi-machine swarms work without local-state
+gymnastics.
 
 ### `swarm cwd` and `swarm tasks`
 
@@ -220,14 +264,16 @@ until fan-in.
 The leaf process is a child of `bones swarm join`'s shell. If join's
 parent shell exits, the leaf becomes orphaned but stays alive (it's
 detached on join, similar to `bones hub start --detach`). On the next
-`swarm commit` / `status`, the state file's PID is probed:
+`swarm commit` / `status`, both the KV session record and the host-
+local PID are probed:
 
-- PID alive → continue
-- PID dead, claim still held in NATS KV → state corruption; `swarm join --force` reclaims after manually steeling
-- PID dead, claim TTL expired → state file orphaned; `bones tasks list --orphans` surfaces; `swarm close --slot=X --result=fail` cleans up
+- KV session present + PID alive → continue
+- KV session present + PID dead → leaf crashed; `swarm join --force` reclaims (hold TTL still active)
+- KV session expired (TTL elapsed, no renewal in 5m) + claim TTL expired → fully orphaned; `bones tasks list --orphans` surfaces, `bones doctor` warns, `swarm close --slot=X --result=fail` cleans up
+- KV session host ≠ this host → another machine owns the slot; abort with clear error (cross-host coordination is intentional, not a bug)
 
-Future `bones doctor` (R7) detects orphaned slot state files and
-prompts cleanup.
+Future `bones doctor` (R7) iterates `bones-swarm-sessions` and surfaces
+stale/cross-host entries.
 
 ### Naming and grouping
 
@@ -244,18 +290,34 @@ complementary, not redundant.
 
 ## Alternatives considered
 
+### Local state.json (rejected after review)
+
+The original draft of this ADR proposed `.bones/swarm/<slot>/state.json`
+as the per-slot session record. Rejected because almost every field
+in that file already had an authoritative home in JetStream KV:
+`task_id` in `bones-tasks`, the claim hold in `bones-holds`,
+`agent_id` in `bones-presence`. The local file was a denormalized
+cache, and exactly the kind of substrate-vs-domain drift surface
+ADR 0025 exists to prevent. Replaced with `bones-swarm-sessions` KV
+bucket; only `leaf.pid` (host-local OS-process tracker) and the
+libfossil files (`leaf.fossil` + `wt/`) remain on disk, mirroring
+how `bones hub` already manages its own embedded NATS + Fossil
+processes (`.orchestrator/pids/fossil.pid`).
+
 ### Stateless: every command takes full context
 
 ```
 bones swarm commit --slot=X --task-id=T --leaf-pid=P -m "..."
 ```
 
-**Pro:** No state file. **Con:** Every agent prompt repeats the
+**Pro:** No KV bucket needed. **Con:** Every agent prompt repeats the
 context. Verbose, error-prone (typos), and the leaf PID still has
 to be tracked somewhere — pushed to env vars, more brittle.
 
-**Rejected.** State file is small (~100 bytes per slot) and lives in
-`.bones/` which is already gitignored.
+**Rejected.** The KV bucket gives the same ergonomic win as the
+state-file design (single-slot inference, no flag repetition) plus
+cross-host visibility, single source of truth, and observability via
+`bones doctor`.
 
 ### One slot per workspace (no per-slot subdirs)
 
@@ -319,12 +381,13 @@ is the only honest path.
 - The retro's three concurrent-commit footguns (file-loss-on-up, sibling-leaf merges, missing slot users) are structurally impossible: no `fossil up` between own commits, no cross-slot work in the agent's tree, slot users auto-created at join.
 - Substrate evolution (different fossil version, different transport) ripples through one place — the verb implementations — instead of N agent prompts.
 - The CLI surface aligns with the design's intent (per-leaf agents) for the first time. `bones-the-experience` matches `bones-the-design`.
+- Single source of truth (KV) for runtime swarm state. Cross-host visibility free; observability via `bones doctor` falls out for free; no local-vs-remote drift. Future multi-machine swarms cost zero architectural change.
 
 ### Negative
 
 - One more subsystem to maintain; ~600-800 LOC across `cli/swarm_*.go` + `internal/swarm/` package.
 - A leaf process per slot is heavier than one shared process — N leaves means N libfossil-on-disk repos + N NATS connections. For typical N (4-8) this is fine; for very large N (>50) we'd need swarmd.
-- State files in `.bones/swarm/` add a new state surface to keep clean. `bones doctor` and `bones swarm prune` cover it but it's another moving part.
+- New KV bucket (`bones-swarm-sessions`) adds one more substrate-side artifact to provision at `coord.Open`. Consistent with `bones-tasks`/`bones-holds`/`bones-presence`, so the cost is small.
 
 ### Migration
 
@@ -338,14 +401,14 @@ In implementation order, each independently shippable:
 
 | # | Step | Effort |
 |---|---|---|
-| 1 | `internal/swarm/` package: state.json schema, file io, slot dir layout | 0.5 day |
-| 2 | `bones swarm join` — wires `internal/swarm` + `coord.OpenLeaf` + `Coord.Claim` + R2 user creation | 1 day |
-| 3 | `bones swarm commit` — wires `internal/swarm` + `Leaf.Commit` | 0.5 day |
-| 4 | `bones swarm close` — wires `internal/swarm` + `Leaf.Close` + dispatch.ResultMessage | 0.5 day |
-| 5 | `bones swarm status / cwd / tasks` — read-only helpers | 0.25 day |
-| 6 | Integration test: full join→commit→close cycle end-to-end against a live workspace | 0.5 day |
+| 1 | `internal/swarm/` package: session record schema (the `Session` struct), KV bucket helpers (Open/Get/Put/Delete/List with CAS + TTL), slot dir layout helpers | 0.5 day |
+| 2 | `bones swarm join` — wires `internal/swarm` + `coord.OpenLeaf` + `Coord.Claim` + R2 user creation, writes session to `bones-swarm-sessions` bucket | 1 day |
+| 3 | `bones swarm commit` — reads session from KV, calls `Leaf.Commit`, renews session TTL via CAS | 0.5 day |
+| 4 | `bones swarm close` — reads session, releases claim + posts dispatch.ResultMessage + deletes session record | 0.5 day |
+| 5 | `bones swarm status / cwd / tasks` — `status` iterates the KV bucket; `cwd` is purely path-derivation; `tasks` wraps `tasks list --ready` with slot filter | 0.25 day |
+| 6 | Integration test: full join→commit→close cycle end-to-end against a live workspace, plus a cross-host simulation that confirms KV-backed visibility | 0.5 day |
 | 7 | Orchestrator SKILL.md rewrite using `swarm` verbs (R6 + R3 fold-in) | 0.25 day |
-| 8 | `bones doctor` reads slot state files, surfaces orphans (R7) | 0.25 day |
+| 8 | `bones doctor` iterates `bones-swarm-sessions`, surfaces stale/cross-host entries (R7) | 0.25 day |
 
 Total: ~4 dev-days. Could be a single PR or split (1-5 then 6-8).
 
