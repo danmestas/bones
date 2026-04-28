@@ -38,7 +38,20 @@ func (c *TasksCloseCmd) Run(g *libfossilcli.Globals) error {
 			now := time.Now().UTC()
 			t.Status = tasks.StatusClosed
 			t.ClosedAt = &now
-			t.ClosedBy = info.AgentID
+			// ClosedBy attributes the work, not the click. If the task
+			// was claimed, the claimer did the work — even if the
+			// workspace agent (or an admin) is what physically ran
+			// `bones tasks close`. Without this, invariant 11 (claimed_by
+			// empty when not claimed) erases the original claimer and
+			// every closed-task aggregate buckets under the workspace
+			// UUID. Coord-level close already attributes to the caller
+			// (which equals the claimer there, since it enforces a
+			// claim-match precondition), so this aligns the two paths.
+			if t.ClaimedBy != "" {
+				t.ClosedBy = t.ClaimedBy
+			} else {
+				t.ClosedBy = info.AgentID
+			}
 			t.ClosedReason = c.Reason
 			t.UpdatedAt = now
 			// Invariant 11: claimed_by must be empty when status != claimed.
