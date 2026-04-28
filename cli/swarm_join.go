@@ -88,7 +88,7 @@ func (c *SwarmJoinCmd) run(ctx context.Context, info workspace.Info) error {
 	// simplicity; subsequent commit/close re-take the claim each
 	// time. ADR 0028 §"Process lifecycle" outlines the future
 	// detached-leaf design that would change this.
-	if err := c.writeSession(ctx, mgr, info); err != nil {
+	if err := c.writeSession(ctx, mgr, info, c.resolvedHubURL()); err != nil {
 		_ = claim.Release()
 		_ = leaf.Stop()
 		return err
@@ -172,6 +172,16 @@ func (c *SwarmJoinCmd) checkExistingSession(
 	return nil
 }
 
+// resolvedHubURL returns the configured hub URL or the package
+// default if the flag was unset. Pulled into a helper so writeSession
+// stamps the same value openSwarmLeaf used.
+func (c *SwarmJoinCmd) resolvedHubURL() string {
+	if c.HubURL != "" {
+		return c.HubURL
+	}
+	return defaultHubFossilURL
+}
+
 // openSwarmLeaf opens the per-slot leaf rooted at the workspace's
 // .bones/swarm directory. Uses HubAddrs (URL-string variant of
 // LeafConfig) because the hub runs in a separate process and the
@@ -187,10 +197,7 @@ func (c *SwarmJoinCmd) checkExistingSession(
 func (c *SwarmJoinCmd) openSwarmLeaf(
 	ctx context.Context, info workspace.Info,
 ) (*coord.Leaf, error) {
-	hubURL := c.HubURL
-	if hubURL == "" {
-		hubURL = defaultHubFossilURL
-	}
+	hubURL := c.resolvedHubURL()
 	swarmRoot := filepath.Join(info.WorkspaceDir, ".bones", "swarm")
 	if err := os.MkdirAll(swarmRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir swarm root: %w", err)
@@ -219,7 +226,7 @@ func (c *SwarmJoinCmd) openSwarmLeaf(
 }
 
 func (c *SwarmJoinCmd) writeSession(
-	ctx context.Context, mgr *swarm.Manager, info workspace.Info,
+	ctx context.Context, mgr *swarm.Manager, info workspace.Info, hubURL string,
 ) error {
 	host, _ := os.Hostname()
 	now := timeNow()
@@ -229,6 +236,7 @@ func (c *SwarmJoinCmd) writeSession(
 		AgentID:     c.slotAgentID(),
 		Host:        host,
 		LeafPID:     os.Getpid(),
+		HubURL:      hubURL,
 		StartedAt:   now,
 		LastRenewed: now,
 	}
