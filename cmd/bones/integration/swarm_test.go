@@ -293,3 +293,135 @@ func createSwarmTask(t *testing.T, dir, absFile, title string) string {
 	}
 	return id
 }
+
+// createSwarmTaskNoFiles creates a task with NO --files= and only a
+// --slot= context. Mirrors the orchestrator-skill flow where agents
+// create per-slot tasks without enumerating files up front; the slot
+// owns its wt/ and `swarm commit` should announce holds + auto-
+// discover files at commit time.
+func createSwarmTaskNoFiles(t *testing.T, dir, slot, title string) string {
+	t.Helper()
+	stdout, stderr, code := runCmd(t, bonesBin, dir, "tasks", "create",
+		"--context", "slot="+slot,
+		title)
+	if code != 0 {
+		t.Fatalf("tasks create (no files) exit=%d stderr=%s", code, stderr)
+	}
+	id := firstLine(stdout)
+	if len(id) < 16 {
+		t.Fatalf("expected uuid on stdout, got %q", stdout)
+	}
+	return id
+}
+
+// TestCLI_SwarmAutoDiscover exercises the no-pre-populated-files
+// path: a task created with --slot= but NO --files=, joined,
+// populated with two new files in wt/, then committed via `swarm
+// commit -m "..."` with NO positional file args. Auto-discovery
+// must pick up both files and the commit must land in the hub
+// timeline. Regression guard for the two gaps surfaced by the
+// 2026-04-28 swarm-demo retro.
+func TestCLI_SwarmAutoDiscover(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	requireBinaries(t)
+	dir := setupSwarmWorkspace(t)
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	httpPort, natsPort := pickPortPair(t)
+	startSwarmHub(t, dir, httpPort, natsPort)
+	hubURL := fmt.Sprintf("http://127.0.0.1:%d", httpPort)
+
+	slot := "rendering"
+	taskID := createSwarmTaskNoFiles(t, dir, slot, "[slot: rendering] no-files task")
+
+	// Join.
+	if _, stderr, code := runCmd(t, bonesBin, dir,
+		"swarm", "join",
+		"--slot="+slot, "--task-id="+taskID,
+		"--hub-url="+hubURL,
+	); code != 0 {
+		t.Fatalf("swarm join exit=%d stderr=%s", code, stderr)
+	}
+
+	// Populate wt/ with two files. Both untracked.
+	wt := filepath.Join(dir, ".bones", "swarm", slot, "wt")
+	files := map[string][]byte{
+		filepath.Join(wt, "out", "a.txt"):      []byte("first auto file\n"),
+		filepath.Join(wt, "out", "b", "c.txt"): []byte("second auto file\n"),
+	}
+	for path, content := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir wt subdir: %v", err)
+		}
+		if err := os.WriteFile(path, content, 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	// Commit with NO file args — auto-discovery should pick up both.
+	stdout, stderr, code := runCmd(t, bonesBin, dir,
+		"swarm", "commit",
+		"--slot="+slot, "-m=auto-discover both files",
+		"--hub-url="+hubURL,
+	)
+	if code != 0 {
+		t.Fatalf("swarm commit (auto) exit=%d stderr=%s stdout=%s", code, stderr, stdout)
+	}
+	uuid := firstLine(stdout)
+	if len(uuid) < 16 {
+		t.Fatalf("expected commit uuid on stdout, got %q", stdout)
+	}
+	if !strings.Contains(stderr, "files=2") {
+		t.Errorf("stderr should report files=2 from auto-discover; got: %s", stderr)
+	}
+
+	// Hub timeline must carry the commit.
+	hubRepoPath := filepath.Join(dir, ".orchestrator", "hub.fossil")
+	tlOut, err := exec.Command("fossil",
+		"timeline", "-R", hubRepoPath, "-n", "5", "-t", "ci",
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("fossil timeline -R %s: %v\n%s", hubRepoPath, err, tlOut)
+	}
+	uuidPrefix := uuid
+	if len(uuidPrefix) > 10 {
+		uuidPrefix = uuidPrefix[:10]
+	}
+	if !strings.Contains(string(tlOut), uuidPrefix) {
+		t.Fatalf("commit %s not in hub timeline; commit-stderr=%s\ntimeline:\n%s",
+			uuid, stderr, tlOut)
+	}
+
+	// Verify both files landed in the manifest. `fossil artifact
+	// <uuid>` dumps the raw checkin manifest; the F-cards list
+	// every file with its name and content hash. We grep for the
+	// workspace-relative tail because the in-fossil filename is
+	// the disk-absolute path with the leading slash trimmed (per
+	// gatherFiles' Path mapping — the hold-bucket key is the
+	// abs path, and Leaf.Commit reuses File.Path as the commit
+	// filename via normalizeLeadingSlash).
+	manifestOut, mErr := exec.Command("fossil",
+		"artifact", "-R", hubRepoPath, uuid,
+	).CombinedOutput()
+	if mErr != nil {
+		t.Fatalf("fossil artifact -R %s %s: %v\n%s",
+			hubRepoPath, uuid, mErr, manifestOut)
+	}
+	for _, want := range []string{"out/a.txt", "out/b/c.txt"} {
+		if !strings.Contains(string(manifestOut), want) {
+			t.Errorf("hub commit missing %q; artifact:\n%s", want, manifestOut)
+		}
+	}
+
+	// Clean shutdown.
+	if _, stderr, code := runCmd(t, bonesBin, dir,
+		"swarm", "close",
+		"--slot="+slot, "--result=success", "--summary=auto",
+		"--hub-url="+hubURL,
+	); code != 0 {
+		t.Fatalf("swarm close exit=%d stderr=%s", code, stderr)
+	}
+}

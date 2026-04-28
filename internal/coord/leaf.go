@@ -315,6 +315,55 @@ func (l *Leaf) Claim(ctx context.Context, taskID TaskID) (*Claim, error) {
 	return &Claim{taskID: taskID, release: rel}, nil
 }
 
+// AnnounceHolds acquires file-scoped holds under the leaf's slot
+// identity for every path in paths. Idempotent for files already held
+// by this slot (holds.Announce treats same-agent re-announce as a
+// lease renewal); returns an error if any path is currently held by a
+// DIFFERENT identity (ErrHeldByAnother, wrapped). On success returns
+// a release closure that releases every successfully-held file.
+//
+// Designed for swarm-style flows where the slot's worktree is its
+// territory but the task record's Files list may not have been
+// pre-populated at task-create time. Callers (e.g. `bones swarm
+// commit`) call AnnounceHolds before Commit so the hold-gate (see
+// checkHolds / Invariant 20) sees the per-path holds the slot needs
+// to commit.
+//
+// Paths must be absolute (holds.Announce asserts on this). The
+// release closure swallows individual release errors — best-effort
+// cleanup, mirroring the semantics of the Claim release closure.
+func (l *Leaf) AnnounceHolds(
+	ctx context.Context, paths []string,
+) (release func(), err error) {
+	assert.NotNil(l, "coord.Leaf.AnnounceHolds: receiver is nil")
+	assert.NotNil(ctx, "coord.Leaf.AnnounceHolds: ctx is nil")
+	if len(paths) == 0 {
+		return func() {}, nil
+	}
+	ttl := l.coord.cfg.Tuning.HoldTTLDefault
+	if l.claimTTL != 0 {
+		ttl = l.claimTTL
+	}
+	// Reuse the Coord's claimAll helper: same semantics as Claim's
+	// per-file Announce loop, parameterized on a synthetic taskID
+	// (the slot identity) so the holds-bucket value carries a
+	// meaningful CheckoutPath. No task CAS happens here — these
+	// holds are purely the file-level locks the commit-time gate
+	// reads via WhoHas.
+	held, herr := l.coord.claimAll(ctx, TaskID(l.slotID), paths, ttl)
+	if herr != nil {
+		// Roll back any partially-acquired holds before surfacing the
+		// error so we don't leak holds on a path the caller never got
+		// to see succeed.
+		l.coord.rollback(ctx, held)
+		return nil, fmt.Errorf("coord.Leaf.AnnounceHolds: %w", herr)
+	}
+	rel := func() {
+		l.coord.rollback(ctx, held)
+	}
+	return rel, nil
+}
+
 // Commit writes files into the leaf's libfossil repo as a new checkin
 // authored by the slot, then triggers a sync round (SyncNow).
 //
