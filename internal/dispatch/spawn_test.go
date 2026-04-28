@@ -6,15 +6,6 @@ import (
 	"testing"
 )
 
-func hasEnv(env []string, want string) bool {
-	for _, e := range env {
-		if e == want {
-			return true
-		}
-	}
-	return false
-}
-
 func TestBuildWorkerCommand_EncodesSpecForChildProcess(t *testing.T) {
 	spec := Spec{
 		TaskID:        "bones-abc12345",
@@ -29,14 +20,19 @@ func TestBuildWorkerCommand_EncodesSpecForChildProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildWorkerCommand: %v", err)
 	}
-	if got := strings.Join(cmd.Args, " "); !strings.Contains(got, "dispatch worker") {
-		t.Fatalf("Args=%q, want dispatch worker", got)
+	got := strings.Join(cmd.Args, " ")
+	for _, want := range []string{
+		"dispatch worker",
+		"--task-id=bones-abc12345",
+		"--task-thread=bones-abc12345",
+		"--worker-agent-id=parent-agent/bones-abc12345",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Args=%q missing %q", got, want)
+		}
 	}
 	if cmd.Dir != "/workspace" {
 		t.Fatalf("Dir=%q", cmd.Dir)
-	}
-	if !hasEnv(cmd.Env, "AGENT_INFRA_WORKER_AGENT_ID=parent-agent/bones-abc12345") {
-		t.Fatalf("Env missing worker agent id: %#v", cmd.Env)
 	}
 }
 
