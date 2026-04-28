@@ -136,7 +136,9 @@ func TestCLI_Swarm(t *testing.T) {
 		// we assert on the commit UUID prefix instead, which is
 		// stable and cross-version.
 		hubRepoPath := filepath.Join(dir, ".orchestrator", "hub.fossil")
-		tlOut, err := exec.Command("fossil", "timeline", "-R", hubRepoPath, "-n", "5", "-t", "ci").CombinedOutput()
+		tlOut, err := exec.Command("fossil",
+			"timeline", "-R", hubRepoPath, "-n", "5", "-t", "ci",
+		).CombinedOutput()
 		if err != nil {
 			t.Fatalf("fossil timeline -R %s: %v\n%s", hubRepoPath, err, tlOut)
 		}
