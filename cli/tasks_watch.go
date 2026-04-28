@@ -30,7 +30,7 @@ func (c *TasksWatchCmd) Run(g *libfossilcli.Globals) error {
 	defer nc.Close()
 
 	m, err := tasks.Open(ctx, nc, tasks.Config{
-		BucketName:   "agent_tasks",
+		BucketName:   tasks.DefaultBucketName,
 		HistoryDepth: 10,
 		MaxValueSize: 64 * 1024,
 		ChanBuffer:   64,

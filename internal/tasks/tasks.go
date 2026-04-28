@@ -14,6 +14,13 @@ import (
 	"github.com/danmestas/bones/internal/jskv"
 )
 
+// DefaultBucketName is the canonical JetStream KV bucket name for task
+// records, pinned by ADR 0005. Both the CLI's openManager helper and
+// internal/coord must point at this same bucket; otherwise create-then-
+// link/prime/autoclaim cross-store and silently miss the just-created
+// task. Tests may override via Config.BucketName for isolation.
+const DefaultBucketName = "bones-tasks"
+
 // Config configures Open. Every field is required; there are no silent
 // defaults. ADR 0005 fixes the recommended values — HistoryDepth 8,
 // MaxValueSize 8 KB — and coord.Config is the enforcement surface for
