@@ -63,24 +63,35 @@ func TestJoinErrorsWhenBothMarkersExist(t *testing.T) {
 	}
 }
 
-// TestInitMigratesLegacyMarker verifies that Init() also runs the
-// migration. After migration, Init should treat the migrated .bones/
-// as already-initialized rather than starting a second leaf.
+// TestInitMigratesLegacyMarker verifies that Init() runs the migration
+// when only a legacy .agent-infra/ exists. The migrated marker is
+// populated with a config.json (the marker-with-config invariant Init
+// now uses to decide already-initialized), so Init treats the post-
+// migration .bones/ as already-initialized — exactly like a real
+// pre-rename workspace would behave.
 func TestInitMigratesLegacyMarker(t *testing.T) {
 	dir := t.TempDir()
 	legacy := filepath.Join(dir, ".agent-infra")
 	if err := os.MkdirAll(legacy, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Drop a populated config.json into the legacy marker so that, post-
+	// migration, .bones/ looks like a real already-initialized workspace.
+	cfg := []byte(
+		`{"version":1,"agent_id":"legacy","nats_url":"nats://x",` +
+			`"leaf_http_url":"http://x","repo_path":"/x",` +
+			`"created_at":"2026-01-01T00:00:00Z"}`,
+	)
+	if err := os.WriteFile(filepath.Join(legacy, "config.json"), cfg, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	_, err := workspace.Init(context.Background(), dir)
-	// After migration, .bones/ exists and Init must short-circuit with
-	// ErrAlreadyInitialized (not attempt to spawn a leaf).
 	if err == nil {
-		t.Fatal("expected ErrAlreadyInitialized after migration")
+		t.Fatal("expected ErrAlreadyInitialized after migration of populated marker")
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, ".bones")); statErr != nil {
-		t.Fatalf("expected .bones/ after migration: %v", statErr)
+	if _, statErr := os.Stat(filepath.Join(dir, ".bones", "config.json")); statErr != nil {
+		t.Fatalf("expected .bones/config.json after migration: %v", statErr)
 	}
 	if _, statErr := os.Stat(legacy); !os.IsNotExist(statErr) {
 		t.Fatalf("expected .agent-infra/ removed, got err=%v", statErr)
