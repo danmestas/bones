@@ -32,7 +32,7 @@ func (c *TasksStatusCmd) Run(g *libfossilcli.Globals) error {
 	defer stop()
 
 	// Hub liveness: read the PID file.
-	pidPath := filepath.Join(info.WorkspaceDir, ".agent-infra", "leaf.pid")
+	pidPath := filepath.Join(info.WorkspaceDir, ".bones", "leaf.pid")
 	pidStr, err := os.ReadFile(pidPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr,

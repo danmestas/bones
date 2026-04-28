@@ -42,7 +42,7 @@ Triggered when the user asks to remove bones from a project ("uninstall bones", 
 2. Remove `.orchestrator/` and the scaffolded `.claude/skills/{orchestrator,subagent,uninstall-bones}/`.
 3. Edit `.claude/settings.json` to remove the `hub-bootstrap.sh` and `hub-shutdown.sh` hooks (preserves unrelated hooks).
 4. Remove the Fossil checkout at root (`.fslckout`, `.fossil-settings/`) per ADR 0024.
-5. Remove `.agent-infra/` workspace marker.
+5. Remove `.bones/` workspace marker.
 6. Optionally remove the `.gitignore` entries bones added.
 7. Optionally `brew uninstall danmestas/tap/bones` (or `rm $(command -v bones)`).
 

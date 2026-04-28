@@ -93,7 +93,7 @@ func newWorkspace(t *testing.T) string {
 	t.Helper()
 	requireBinaries(t)
 	dir := t.TempDir()
-	t.Cleanup(func() { killPidFile(t, filepath.Join(dir, ".agent-infra", "leaf.pid")) })
+	t.Cleanup(func() { killPidFile(t, filepath.Join(dir, ".bones", "leaf.pid")) })
 	if _, stderr, code := runCmd(t, bonesBin, dir, "init"); code != 0 {
 		t.Fatalf("init failed: %s", stderr)
 	}

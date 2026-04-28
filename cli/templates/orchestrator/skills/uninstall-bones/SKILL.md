@@ -51,7 +51,7 @@ rm -rf .fslckout .fossil-settings/
 ## Step 5: Remove the workspace marker
 
 ```
-rm -rf .agent-infra/
+rm -rf .bones/
 ```
 
 This only clears bones runtime state. Task data already published to NATS

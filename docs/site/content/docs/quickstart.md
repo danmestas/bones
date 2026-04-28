@@ -36,12 +36,12 @@ bin/bones up
 This is shorthand for the three explicit steps:
 
 ```sh
-bin/bones init                              # creates .agent-infra/ workspace + starts leaf
+bin/bones init                              # creates .bones/ workspace + starts leaf
 bin/bones orchestrator                      # scaffolds .orchestrator/ for hub-leaf runs
 bash .orchestrator/scripts/hub-bootstrap.sh # starts the hub
 ```
 
-`init` walks up to find an existing `.agent-infra/` marker if you're inside a workspace already; otherwise it creates one.
+`init` walks up to find an existing `.bones/` marker if you're inside a workspace already; otherwise it creates one. Pre-rename `.agent-infra/` markers auto-migrate to `.bones/` on first touch.
 
 ## First task
 
