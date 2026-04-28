@@ -182,8 +182,8 @@ func (c *SwarmCommitCmd) openLeafForCommit(
 
 // gatherFiles materializes the file set passed to Leaf.Commit. When
 // the caller listed files explicitly, read them from the slot's
-// worktree. Otherwise, surface a clear error: explicit-file commit is
-// required for now (auto-discovery of modified files is a follow-up).
+// worktree. Otherwise, walk the slot's wt/ for regular files and
+// commit them all (auto-discovery — ADR 0028 §"swarm commit").
 //
 // Each File.Path is set to the absolute workspace path so the
 // holds-gate (Invariant 4 / coord.checkHolds) sees a key matching
@@ -192,13 +192,10 @@ func (c *SwarmCommitCmd) openLeafForCommit(
 // relative-to-repo Name, so the same Path field works as both the
 // hold key and the commit target.
 func (c *SwarmCommitCmd) gatherFiles(info workspace.Info, slot string) ([]coord.File, error) {
-	if len(c.Files) == 0 {
-		return nil, fmt.Errorf(
-			"swarm commit: at least one file argument required" +
-				" (auto-discovery of dirty files is not yet implemented)",
-		)
-	}
 	wt := swarm.SlotWorktree(info.WorkspaceDir, slot)
+	if len(c.Files) == 0 {
+		return c.discoverDirtyFiles(info, wt)
+	}
 	out := make([]coord.File, 0, len(c.Files))
 	for _, rel := range c.Files {
 		// Strip prefixes so callers can pass any of:
@@ -218,6 +215,76 @@ func (c *SwarmCommitCmd) gatherFiles(info workspace.Info, slot string) ([]coord.
 		// bucket. Search via filepath.Join(workspaceDir, ...).
 		taskPath := filepath.Join(info.WorkspaceDir, clean)
 		out = append(out, coord.File{Path: taskPath, Content: data})
+	}
+	return out, nil
+}
+
+// discoverDirtyFiles walks the slot's worktree for regular files and
+// returns one coord.File per discovered path. Used when `swarm
+// commit` is invoked with no positional file arguments.
+//
+// libfossil exposes a Checkout.Status() that reports tracked-file
+// changes, but the slot's wt/ has no .fslckout (Phase 1 swarm join
+// creates wt as a plain directory — see internal/coord/leaf.go
+// OpenLeaf), so a checkout-based scan would error before returning
+// any results. Walking the directory directly mirrors the actual
+// swarm workflow: the slot writes new files under wt/ as it works
+// and Leaf.Commit ships the bytes via libfossil's content-addressed
+// FileToCommit path (no checkout required).
+//
+// Skipped: anything under .fslckout / .fossil-settings (fossil
+// metadata that may appear if a future change wires checkouts in),
+// hidden directories starting with "." (common scratch dirs like
+// .git, .vscode), and non-regular files (symlinks, sockets,
+// devices). Returns ErrNothingToCommit when wt/ has no commitable
+// files so callers see a clear "nothing to commit" error rather
+// than a downstream Leaf.Commit precondition panic.
+func (c *SwarmCommitCmd) discoverDirtyFiles(
+	info workspace.Info, wt string,
+) ([]coord.File, error) {
+	var out []coord.File
+	err := filepath.WalkDir(wt, func(path string, d os.DirEntry, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		if d.IsDir() {
+			// Skip fossil metadata + hidden dirs at any depth.
+			name := d.Name()
+			if path != wt && (name == ".fslckout" ||
+				name == ".fossil-settings" ||
+				strings.HasPrefix(name, ".")) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		// Belt-and-suspenders: also skip the .fslckout database file
+		// itself if it ever appears as a file rather than a dir.
+		if d.Name() == ".fslckout" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+		rel, err := filepath.Rel(wt, path)
+		if err != nil {
+			return fmt.Errorf("rel %s: %w", path, err)
+		}
+		// Same path convention as the explicit-files branch: the
+		// holds-gate key is workspaceDir/<rel>, which is what the
+		// task record carries when --files= is passed.
+		taskPath := filepath.Join(info.WorkspaceDir, rel)
+		out = append(out, coord.File{Path: taskPath, Content: data})
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scan wt %s: %w", wt, err)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("swarm commit: nothing to commit (wt %s is empty)", wt)
 	}
 	return out, nil
 }
