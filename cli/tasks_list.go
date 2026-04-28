@@ -71,7 +71,18 @@ func (c *TasksListCmd) Run(g *libfossilcli.Globals) error {
 
 		out := filterTasks(allTasks, c.All, filterStatus, c.ClaimedBy)
 		if c.Ready {
-			out = selectReady(out, time.Now().UTC())
+			// Delegate readiness to coord — it knows the full edge
+			// model (blocks/supersedes/duplicates/parent) that a flat
+			// per-task check would miss.
+			readies, err := co.Ready(ctx)
+			if err != nil {
+				return fmt.Errorf("coord ready: %w", err)
+			}
+			readyIDs := make(map[string]struct{}, len(readies))
+			for _, r := range readies {
+				readyIDs[string(r.ID())] = struct{}{}
+			}
+			out = filterByIDSet(out, readyIDs)
 		}
 		if c.Stale > 0 {
 			out = selectStale(out, c.Stale, time.Now().UTC())
@@ -113,18 +124,15 @@ func filterTasks(in []tasks.Task, all bool, status tasks.Status, claimedBy strin
 	return out
 }
 
-// selectReady returns open, non-deferred tasks (claimable right now).
-// `now` is injected for testability.
-func selectReady(in []tasks.Task, now time.Time) []tasks.Task {
-	out := make([]tasks.Task, 0, len(in))
+// filterByIDSet returns the subset of in whose IDs are in keep.
+// Used by --ready, where coord.Ready computes the eligible-ID set
+// using the full edge model (blocks/supersedes/duplicates/parent).
+func filterByIDSet(in []tasks.Task, keep map[string]struct{}) []tasks.Task {
+	out := make([]tasks.Task, 0, len(keep))
 	for _, t := range in {
-		if t.Status != tasks.StatusOpen {
-			continue
+		if _, ok := keep[t.ID]; ok {
+			out = append(out, t)
 		}
-		if t.DeferUntil != nil && t.DeferUntil.After(now) {
-			continue
-		}
-		out = append(out, t)
 	}
 	return out
 }

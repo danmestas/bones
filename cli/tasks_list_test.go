@@ -7,34 +7,25 @@ import (
 	"github.com/danmestas/bones/internal/tasks"
 )
 
-func TestSelectReady(t *testing.T) {
-	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
-	future := now.Add(time.Hour)
-	past := now.Add(-time.Hour)
+func TestFilterByIDSet(t *testing.T) {
 	all := []tasks.Task{
-		{ID: "open-now", Status: tasks.StatusOpen},
-		{ID: "open-deferred-future", Status: tasks.StatusOpen, DeferUntil: &future},
-		{ID: "open-deferred-past", Status: tasks.StatusOpen, DeferUntil: &past},
-		{ID: "claimed", Status: tasks.StatusClaimed, ClaimedBy: "a"},
-		{ID: "closed", Status: tasks.StatusClosed},
+		{ID: "a", Title: "alpha"},
+		{ID: "b", Title: "bravo"},
+		{ID: "c", Title: "charlie"},
 	}
-	got := selectReady(all, now)
+	keep := map[string]struct{}{"a": {}, "c": {}}
 
-	gotIDs := make(map[string]bool, len(got))
-	for _, ts := range got {
-		gotIDs[ts.ID] = true
+	got := filterByIDSet(all, keep)
+	if len(got) != 2 {
+		t.Fatalf("len=%d want 2", len(got))
 	}
-	if !gotIDs["open-now"] {
-		t.Errorf("selectReady missing open-now; got %v", gotIDs)
+	if got[0].ID != "a" || got[1].ID != "c" {
+		t.Errorf("order/contents wrong: %+v", got)
 	}
-	if !gotIDs["open-deferred-past"] {
-		t.Errorf("selectReady missing open-deferred-past; got %v", gotIDs)
-	}
-	if gotIDs["open-deferred-future"] {
-		t.Errorf("selectReady should exclude open-deferred-future; got %v", gotIDs)
-	}
-	if gotIDs["claimed"] || gotIDs["closed"] {
-		t.Errorf("selectReady should exclude non-open tasks; got %v", gotIDs)
+
+	// Empty keep set returns empty slice.
+	if got := filterByIDSet(all, nil); len(got) != 0 {
+		t.Errorf("nil keep should yield empty; got %+v", got)
 	}
 }
 
