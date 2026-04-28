@@ -7,6 +7,12 @@ Builds on ADR 0005's roadmap note that old closed tasks should eventually
 be compacted out of the hot KV scan path, and on ADR 0010's Fossil
 code-artifact substrate for durable append-only summary storage.
 
+**Partially superseded by ADR 0027 (2026-04-28):** the user-facing
+`bones tasks compact` CLI command was removed; `coord.Leaf.Compact` and
+the `Summarizer` interface remain. The substrate decisions in this ADR
+(eligibility, summary artifact path, archive-vs-prune, level scheme)
+still apply to any future re-binding. See ADR 0027 for the rationale.
+
 ## Context
 
 Agent-infra keeps closed tasks in NATS KV so they remain readable for audit and

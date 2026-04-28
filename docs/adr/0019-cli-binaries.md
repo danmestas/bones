@@ -2,17 +2,19 @@
 
 ## Status
 
-Accepted 2026-04-20. Phase 4 deliverable. Establishes the human-facing
-CLI surface for bones workspaces; pairs with ADR 0005 (tasks in
-NATS KV) and ADR 0007 (claim semantics) by giving operators a verb
-vocabulary to drive both. Compressed from three plan/spec pairs
+**Superseded** by the bones consolidation (PR #20, 2026-04). The
+`agent-init`, `agent-tasks`, and `orchestrator-validate-plan` binaries
+were merged into a single `bones` CLI; current behavior, verb list, and
+packaging live under `cmd/bones/`. Subsequent verb-trim and tiered-help
+work landed in PR #33 (Hipp audit) and PR #34/#35 (further pruning).
+
+Originally accepted 2026-04-20 as a Phase 4 deliverable establishing
+the human-facing CLI surface for bones workspaces; paired with ADR 0005
+(tasks in NATS KV) and ADR 0007 (claim semantics) by giving operators a
+verb vocabulary to drive both. Compressed from three plan/spec pairs
 (`cmd/agent-init`, `cmd/agent-tasks`, `examples/two-agents`).
 
-Superseded by the bones consolidation — the `agent-init`,
-`agent-tasks`, and `orchestrator-validate-plan` binaries were merged
-into a single `bones` CLI in 2026-04 (PR #20). The split rationale
-below is preserved for historical context; current behavior, verb
-list, and packaging live under `cmd/bones/`.
+The split rationale below is preserved for historical context.
 
 ## Context
 

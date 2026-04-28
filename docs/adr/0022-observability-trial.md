@@ -8,6 +8,14 @@ findings) and the `examples/herd-observability/` harness. This ADR
 captures the durable design decisions surfaced by the trial; the
 implementation steps and TDD task list do not need to persist.
 
+**Trial paused (2026-04-28).** The SigNoz endpoint that consumed these
+spans/metrics is broken; the Hipp audit (PR #33) gated all OpenTelemetry
+imports behind a `-tags=otel` build flag via `internal/telemetry`, so
+the default bones binary records nothing. Re-enable by building with
+`-tags=otel` once a stable backend is in place. The instrumentation
+patterns this ADR documents (span shape, attribute set, metric naming)
+are still the contract any future re-enable should match.
+
 ## Context
 
 After Phase 4–5 closed (CLIs, code-artifact substrate), bones had

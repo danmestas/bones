@@ -6,6 +6,13 @@ Accepted 2026-04-27. Closes the v1 stub in ADR 0023 §"Orchestrator skill
 responsibilities" step 5 (PR generation skipped — implement in v2).
 Implements the swarm→git bridge.
 
+**Implementation moved to Go** in ADR 0026 (PR #33). The bash
+`hub-bootstrap.sh` referenced throughout this ADR became a thin shim
+around `bones hub start --detach`; the seeding logic, fresh-start
+detection, and PID handling now live in `internal/hub/`. The contract
+this ADR pins (checkout = git working tree, Fossil metadata gitignored,
+seed from `git ls-files`) is unchanged.
+
 ## Context
 
 ADR 0023 ships a hub-and-leaf orchestration model: a bare Fossil repo at

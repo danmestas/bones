@@ -2,16 +2,27 @@
 
 ## Status
 
-Accepted 2026-04-25. Predates and is **substantially modified by** ADR
-0018 (EdgeSync refactor, 2026-04-26). The hub/leaf topology, slot
-partitioning, planner contract, and orchestrator/subagent skill
-responsibilities all carry forward. The custom NATS broadcast +
-fork-retry layer specified here was deleted in ADR 0018 in favor of
-`leaf.Agent`'s native mesh sync. Read this ADR for the orchestrator
-contract; read 0018 for the current sync substrate.
+**Superseded in part** by ADR 0018 (EdgeSync refactor, 2026-04-26) and
+ADR 0024 (orchestrator Fossil checkout = git working tree, 2026-04-27).
 
-Compressed from `2026-04-25-hub-leaf-orchestrator-design.md` and the
-matching plan. Empirical results in `docs/trials/2026-04-25/trial-report.md`.
+What carries forward from this ADR (the orchestrator contract):
+hub/leaf topology, slot partitioning, planner contract, and
+orchestrator/subagent skill responsibilities.
+
+What was replaced:
+- The custom NATS broadcast + fork-retry layer specified here was
+  deleted in ADR 0018 in favor of `leaf.Agent`'s native mesh sync.
+- The "v1 stub" of the Fossil-checkout-vs-git-worktree relationship
+  was closed by ADR 0024.
+- The bash hub-bootstrap implementation referenced here was rewritten
+  in Go in ADR 0026 (PR #33).
+
+Read this ADR for the orchestrator contract; read 0018 for the sync
+substrate, 0024 for checkout-as-worktree, and 0026 for the Go hub.
+
+Originally accepted 2026-04-25. Compressed from
+`2026-04-25-hub-leaf-orchestrator-design.md` and the matching plan.
+Empirical results in `docs/trials/2026-04-25/trial-report.md`.
 
 ## Context
 
