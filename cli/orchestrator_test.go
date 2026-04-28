@@ -121,25 +121,42 @@ func verifyHooks(t *testing.T, path string) {
 	}
 }
 
-func TestScaffoldOrchestrator_HubBootstrapHasADR0024Seed(t *testing.T) {
+func TestScaffoldOrchestrator_HubBootstrapShimsToGoCmd(t *testing.T) {
+	// The bash hub-bootstrap.sh used to enforce ADR 0024 directly via
+	// `git ls-files`, `fossil open --force`, etc. After ADR 0026 the
+	// Go path in internal/hub owns those invariants and the shipped
+	// shim only re-execs `bones hub start --detach`. Both shims must
+	// stay short (so any drift back into bash is obvious) and must
+	// dispatch to the Go subcommand.
 	dir := t.TempDir()
 	if err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
+
 	bootstrap, err := os.ReadFile(
 		filepath.Join(dir, ".orchestrator", "scripts", "hub-bootstrap.sh"),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{
-		"git ls-files",
-		"fossil open --force",
-		`$ROOT/.fslckout`,
-	} {
-		if !strings.Contains(string(bootstrap), want) {
-			t.Errorf("hub-bootstrap.sh missing %q (ADR 0024)", want)
-		}
+	if !strings.Contains(string(bootstrap), "bones hub start --detach") {
+		t.Errorf("hub-bootstrap.sh must shim to `bones hub start --detach`, got:\n%s", bootstrap)
+	}
+	if n := strings.Count(string(bootstrap), "\n"); n > 10 {
+		t.Errorf("hub-bootstrap.sh shim grew to %d lines; keep it minimal", n)
+	}
+
+	shutdown, err := os.ReadFile(
+		filepath.Join(dir, ".orchestrator", "scripts", "hub-shutdown.sh"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(shutdown), "bones hub stop") {
+		t.Errorf("hub-shutdown.sh must shim to `bones hub stop`, got:\n%s", shutdown)
+	}
+	if n := strings.Count(string(shutdown), "\n"); n > 10 {
+		t.Errorf("hub-shutdown.sh shim grew to %d lines; keep it minimal", n)
 	}
 }
 
