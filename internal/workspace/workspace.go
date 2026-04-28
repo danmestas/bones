@@ -23,10 +23,8 @@ import (
 	"github.com/danmestas/libfossil"
 	_ "github.com/danmestas/libfossil/db/driver/modernc"
 	"github.com/google/uuid"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/trace"
+
+	"github.com/danmestas/bones/internal/telemetry"
 )
 
 // Info describes a live workspace. Returned by both Init and Join.
@@ -65,26 +63,6 @@ func ExitCode(err error) int {
 	}
 }
 
-var (
-	tracer = otel.Tracer("github.com/danmestas/bones/internal/workspace")
-	meter  = otel.Meter("github.com/danmestas/bones/internal/workspace")
-
-	opCounter  metric.Int64Counter
-	opDuration metric.Float64Histogram
-)
-
-func init() {
-	var err error
-	opCounter, err = meter.Int64Counter("agent_init.operations.total")
-	if err != nil {
-		panic(err)
-	}
-	opDuration, err = meter.Float64Histogram("agent_init.operation.duration.seconds")
-	if err != nil {
-		panic(err)
-	}
-}
-
 // spawnParams is the input to spawnLeafFunc. Split out for test seams.
 type spawnParams struct {
 	LeafBinary     string
@@ -98,16 +76,20 @@ type spawnParams struct {
 // pointer to isolate subprocess behavior.
 var spawnLeafFunc = spawnLeaf
 
-// instrumented wraps op with a span, slog start/complete events, and op metrics.
-// The span is carried in ctx; logic functions pull it via trace.SpanFromContext
-// when they need to attach attributes.
+// instrumented wraps op with a tracing span (via the telemetry seam) plus
+// slog start/complete events. The previous OTel meter-based op counters
+// were dropped during the audit's seam migration: SigNoz endpoint is broken
+// (project memory: signoz-trial-blocker) and ADR 0022 marks the
+// observability trial as paused, so no consumer reads them today.
 func instrumented(
 	ctx context.Context,
 	op, cwd string,
 	fn func(context.Context) (Info, error),
 ) (Info, error) {
-	ctx, span := tracer.Start(ctx, "agent_init."+op)
-	defer span.End()
+	ctx, end := telemetry.RecordCommand(ctx, "agent_init."+op,
+		telemetry.String("op", op),
+		telemetry.String("cwd", cwd),
+	)
 	start := time.Now()
 	slog.InfoContext(ctx, op+" start", "cwd", cwd)
 
@@ -117,17 +99,11 @@ func instrumented(
 	if err != nil {
 		result = "error"
 	}
-	opAttrs := []attribute.KeyValue{
-		attribute.String("op", op),
-		attribute.String("result", result),
-	}
-	opCounter.Add(ctx, 1, metric.WithAttributes(opAttrs...))
-	opDuration.Record(ctx, time.Since(start).Seconds(),
-		metric.WithAttributes(attribute.String("op", op)))
 	slog.InfoContext(ctx, op+" complete",
 		"cwd", cwd,
 		"duration_ms", time.Since(start).Milliseconds(),
 		"result", result)
+	end(err)
 	return info, err
 }
 
@@ -175,7 +151,6 @@ func initLogic(ctx context.Context, cwd string) (Info, error) {
 	}
 
 	slog.InfoContext(ctx, "agent_id generated", "agent_id", cfg.AgentID)
-	trace.SpanFromContext(ctx).SetAttributes(attribute.String("agent_id", cfg.AgentID))
 
 	repo, err := libfossil.Create(repoPath, libfossil.CreateOpts{User: cfg.AgentID})
 	if err != nil {
@@ -241,7 +216,6 @@ func joinLogic(ctx context.Context, cwd string) (Info, error) {
 	}
 
 	slog.InfoContext(ctx, "config loaded", "agent_id", cfg.AgentID)
-	trace.SpanFromContext(ctx).SetAttributes(attribute.String("agent_id", cfg.AgentID))
 
 	pidData, err := os.ReadFile(filepath.Join(workspaceDir, markerDirName, "leaf.pid"))
 	if err != nil {
