@@ -132,9 +132,13 @@ func openSubstrate(
 		s.close()
 		return nil, fmt.Errorf("coord.Open: archive tasks: %w", err)
 	}
+	chatProject := cfg.ProjectPrefix
+	if chatProject == "" {
+		chatProject = projectPrefix(cfg.AgentID)
+	}
 	if s.chat, err = chat.Open(ctx, chat.Config{
 		AgentID:        cfg.AgentID,
-		ProjectPrefix:  projectPrefix(cfg.AgentID),
+		ProjectPrefix:  chatProject,
 		Nats:           nc,
 		FossilRepoPath: cfg.ChatFossilRepoPath,
 		MaxSubscribers: cfg.Tuning.MaxSubscribers,

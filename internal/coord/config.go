@@ -117,8 +117,26 @@ type Config struct {
 	// CheckoutRoot/<AgentID>/. In tests, pass t.TempDir().
 	CheckoutRoot string
 
+	// ProjectPrefix scopes chat threads, presence, and KV subjects.
+	// Zero means "derive from AgentID" (everything before the last
+	// '-'); single-agent callers can leave it blank. Multi-process
+	// flows where the agent identities don't share a prefix (e.g.
+	// dispatch worker = parentID + "/" + taskID) must set this
+	// explicitly to the workspace identity so all participants meet
+	// on the same NATS subject namespace.
+	ProjectPrefix string
+
 	// Tuning carries substrate knobs. Zero means "use sane defaults".
 	Tuning TuningConfig
+}
+
+// DeriveProjectPrefix exposes the default ProjectPrefix derivation —
+// everything in agentID before the last '-' — for callers that need to
+// build a Config whose AgentID does not itself contain a sensible
+// project prefix (e.g. the dispatch-worker compound identity). Mirrors
+// the unexported projectPrefix used by Open's default path.
+func DeriveProjectPrefix(agentID string) string {
+	return projectPrefix(agentID)
 }
 
 // Validate checks every Config field against its documented bounds and
