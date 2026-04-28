@@ -14,6 +14,10 @@ git cleanup tax that multi-agent divergence imposes on branch-based VCS.
 
 ## Quickstart
 
+Prerequisites: only `git` and `bones` (built below) on `PATH`. The Fossil
+hub and NATS server are embedded in the `bones` binary and need no
+separate install.
+
 ```bash
 git clone https://github.com/danmestas/bones
 cd bones
@@ -34,7 +38,7 @@ Or use fine-grained control (`bones up` is equivalent to):
 ```bash
 bin/bones init
 bin/bones orchestrator
-bash .orchestrator/scripts/hub-bootstrap.sh
+bin/bones hub start --detach
 ```
 
 See `bin/bones --help` for the full subcommand list (`add`, `claim`,
