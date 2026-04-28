@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -129,7 +130,14 @@ func checkTasks(tasks []taskInfo) []string {
 		if t.slot == "" || len(t.files) == 0 {
 			continue
 		}
-		dir := topDir(t.files[0])
+		dir := slotDir(t.files[0], t.slot)
+		if dir == "" {
+			violations = append(violations, fmt.Sprintf(
+				"line %d: file %q has no path component matching slot %q",
+				t.line, t.files[0], t.slot,
+			))
+			continue
+		}
 		if existing, ok := slotDirs[t.slot]; ok && existing != dir {
 			violations = append(violations, fmt.Sprintf(
 				"line %d: slot %q used for both %q and %q",
@@ -141,24 +149,30 @@ func checkTasks(tasks []taskInfo) []string {
 	}
 	dirOwners := map[string]string{}
 	for slot, dir := range slotDirs {
-		if other, ok := dirOwners[dir]; ok && other != slot {
-			violations = append(violations, fmt.Sprintf(
-				"slot %q overlap with %q: both own directory %q",
-				slot, other, dir,
-			))
-		} else {
-			dirOwners[dir] = slot
+		for otherDir, otherSlot := range dirOwners {
+			if otherSlot == slot {
+				continue
+			}
+			if dirOverlap(dir, otherDir) {
+				violations = append(violations, fmt.Sprintf(
+					"slot %q overlap with %q: %q vs %q",
+					slot, otherSlot, dir, otherDir,
+				))
+			}
 		}
+		dirOwners[dir] = slot
 	}
 	for _, t := range tasks {
 		if t.slot == "" {
 			continue
 		}
+		want := slotDirs[t.slot]
 		for _, f := range t.files {
-			if topDir(f) != t.slot {
+			got := slotDir(f, t.slot)
+			if got != want {
 				violations = append(violations, fmt.Sprintf(
 					"line %d: file %q outside slot directory %q (slot=%s)",
-					t.line, f, t.slot, t.slot,
+					t.line, f, want, t.slot,
 				))
 			}
 		}
@@ -166,11 +180,42 @@ func checkTasks(tasks []taskInfo) []string {
 	return violations
 }
 
-func topDir(p string) string {
-	if i := strings.IndexAny(p, "/\\"); i >= 0 {
-		return p[:i]
+// slotDir returns the path to (and including) the LAST component of p
+// that equals slotName, e.g. slotDir("src/rendering/renderer.js",
+// "rendering") = "src/rendering". Empty when no path component matches
+// slotName. Lets slot directories live anywhere in the tree
+// ("rendering/" at root, "src/rendering/" nested under src, "pkg/foo/
+// rendering/" nested arbitrarily) without forcing the validator to
+// guess; the slot name in the plan IS the disambiguator.
+func slotDir(p, slotName string) string {
+	parts := strings.Split(filepath.ToSlash(p), "/")
+	lastIdx := -1
+	for i, part := range parts {
+		if part == slotName {
+			lastIdx = i
+		}
 	}
-	return p
+	if lastIdx < 0 {
+		return ""
+	}
+	return strings.Join(parts[:lastIdx+1], "/")
+}
+
+// dirOverlap returns true if a and b are equal, or one is a strict
+// path-component prefix of the other ("src/foo" overlaps "src/foo/bar"
+// but NOT "src/foobar"). Used to detect slot directories that would
+// shadow each other at the filesystem level.
+func dirOverlap(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if strings.HasPrefix(a+"/", b+"/") {
+		return true
+	}
+	if strings.HasPrefix(b+"/", a+"/") {
+		return true
+	}
+	return false
 }
 
 type slotEntry struct {
