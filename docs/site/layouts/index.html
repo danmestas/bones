@@ -444,9 +444,9 @@ $ bones --help</pre>
   <span class="num">§04</span>
   <h2>How it fits together <span class="anchor">architecture</span></h2>
   <div class="table-scroll">
-    <svg class="diagram" viewBox="0 0 640 280" role="img" aria-labelledby="arch-title arch-desc" preserveAspectRatio="xMidYMid meet">
+    <svg class="diagram" viewBox="0 0 640 380" role="img" aria-labelledby="arch-title arch-desc" preserveAspectRatio="xMidYMid meet">
       <title id="arch-title">bones architecture</title>
-      <desc id="arch-desc">Callers (Claude subagents, humans, CI) invoke bones subcommands. The bones binary assembles three command surfaces (libfossil, EdgeSync, agent-infra). The substrates beneath are NATS for task/hold/presence state, Fossil for code and chat artifacts, and per-leaf clones synced by EdgeSync's leaf agent.</desc>
+      <desc id="arch-desc">Three layers: callers (orchestrator skill, subagents, humans, CI) on top; the bones binary in the middle exposing four command groups; two durable substrates underneath, NATS for live coordination state and Fossil for content-addressed artifacts.</desc>
 
       <defs>
         <marker id="b-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -454,58 +454,52 @@ $ bones --help</pre>
         </marker>
       </defs>
 
-      <g class="rule">
-        <line x1="40" y1="38" x2="160" y2="38"/>
-        <line x1="240" y1="38" x2="400" y2="38"/>
-        <line x1="480" y1="38" x2="600" y2="38"/>
-      </g>
-
       <g class="head">
-        <text x="100" y="28" text-anchor="middle">callers</text>
-        <text x="320" y="28" text-anchor="middle">bones</text>
-        <text x="540" y="28" text-anchor="middle">substrates</text>
+        <text x="320" y="20" text-anchor="middle">callers</text>
       </g>
-
+      <rect class="box" x="60" y="32" width="520" height="48"/>
       <g class="item">
-        <text x="100" y="76" text-anchor="middle">orchestrator</text>
-        <text x="100" y="100" text-anchor="middle">subagents</text>
-        <text x="100" y="124" text-anchor="middle">humans</text>
-        <text x="100" y="148" text-anchor="middle">CI</text>
-      </g>
-
-      <rect class="box" x="240" y="60" width="160" height="120"/>
-      <g class="item">
-        <text x="320" y="84" text-anchor="middle">init / up / orchestrator</text>
-        <text x="320" y="108" text-anchor="middle">tasks (claim/close)</text>
-        <text x="320" y="132" text-anchor="middle">repo (commit/timeline)</text>
-        <text x="320" y="156" text-anchor="middle">sync / bridge / notify</text>
-      </g>
-
-      <rect class="box" x="490" y="60" width="100" height="120"/>
-      <g class="item">
-        <text x="540" y="84" text-anchor="middle">NATS KV</text>
-        <text x="540" y="108" text-anchor="middle">Fossil hub</text>
-        <text x="540" y="132" text-anchor="middle">leaf agents</text>
-        <text x="540" y="156" text-anchor="middle">notify mesh</text>
-      </g>
-
-      <rect class="box" x="240" y="220" width="160" height="40"/>
-      <g class="item">
-        <text x="320" y="245" text-anchor="middle">.agent-infra/ · .orchestrator/</text>
+        <text x="320" y="62" text-anchor="middle">orchestrator skill · subagent skill · humans · CI</text>
       </g>
 
       <g class="flow">
-        <line x1="160" y1="100" x2="234" y2="100" marker-end="url(#b-arrow)"/>
-        <line x1="400" y1="108" x2="486" y2="108" marker-end="url(#b-arrow)"/>
-        <line x1="490" y1="156" x2="404" y2="156" marker-end="url(#b-arrow)"/>
-        <line x1="320" y1="180" x2="320" y2="216" marker-end="url(#b-arrow)"/>
+        <line x1="320" y1="80" x2="320" y2="120" marker-end="url(#b-arrow)"/>
+      </g>
+      <g class="flow-label">
+        <text x="332" y="103" text-anchor="start">invoke</text>
       </g>
 
+      <g class="head">
+        <text x="320" y="138" text-anchor="middle">bones (single binary)</text>
+      </g>
+      <rect class="box" x="60" y="150" width="520" height="120"/>
+      <g class="item">
+        <text x="320" y="180" text-anchor="middle">init  ·  up  ·  join  ·  orchestrator</text>
+        <text x="320" y="206" text-anchor="middle">tasks (add/list/claim/close)  ·  validate-plan</text>
+        <text x="320" y="232" text-anchor="middle">repo (commit · timeline · diff)</text>
+        <text x="320" y="258" text-anchor="middle">sync  ·  bridge  ·  notify  ·  doctor</text>
+      </g>
+
+      <g class="flow">
+        <line x1="180" y1="270" x2="180" y2="310" marker-end="url(#b-arrow)"/>
+        <line x1="460" y1="270" x2="460" y2="310" marker-end="url(#b-arrow)"/>
+      </g>
       <g class="flow-label">
-        <text x="197" y="92" text-anchor="middle">invoke</text>
-        <text x="443" y="100" text-anchor="middle">drives</text>
-        <text x="447" y="174" text-anchor="middle">events</text>
-        <text x="334" y="203" text-anchor="start">workspace</text>
+        <text x="192" y="293" text-anchor="start">live state</text>
+        <text x="472" y="293" text-anchor="start">artifacts</text>
+      </g>
+
+      <g class="head">
+        <text x="180" y="328" text-anchor="middle">NATS</text>
+        <text x="460" y="328" text-anchor="middle">Fossil</text>
+      </g>
+      <rect class="box" x="60" y="340" width="240" height="32"/>
+      <g class="item">
+        <text x="180" y="361" text-anchor="middle">KV (tasks · holds · presence) · notify</text>
+      </g>
+      <rect class="box" x="340" y="340" width="240" height="32"/>
+      <g class="item">
+        <text x="460" y="361" text-anchor="middle">hub repo · leaf clones · code · chat</text>
       </g>
     </svg>
   </div>
