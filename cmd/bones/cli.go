@@ -28,6 +28,7 @@ type CLI struct {
 	// Tooling — used by humans authoring plans/skills.
 	ValidatePlan bonescli.ValidatePlanCmd `cmd:"" group:"tooling" help:"Validate plan"`
 	Orchestrator bonescli.OrchestratorCmd `cmd:"" group:"tooling" help:"Install orchestrator"`
+	Peek         bonescli.PeekCmd         `cmd:"" group:"tooling" help:"Browse hub via fossil ui"`
 
 	// Plumbing — rarely invoked directly.
 	Init bonescli.InitCmd `cmd:"" group:"plumbing" help:"Create a workspace"`
