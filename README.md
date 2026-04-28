@@ -1,5 +1,11 @@
 # bones
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/danmestas/bones.svg)](https://pkg.go.dev/github.com/danmestas/bones)
+[![Go Report Card](https://goreportcard.com/badge/github.com/danmestas/bones)](https://goreportcard.com/report/github.com/danmestas/bones)
+[![CI](https://github.com/danmestas/bones/actions/workflows/ci.yml/badge.svg)](https://github.com/danmestas/bones/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](./LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.26+-00ADD8.svg)](https://go.dev)
+
 State memory and real-time comms for embedded agent processes, built on Fossil
 (durable state) and NATS (live coordination). Beads-inspired — but without the
 git cleanup tax that multi-agent divergence imposes on branch-based VCS.
