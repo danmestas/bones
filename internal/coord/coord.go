@@ -23,10 +23,6 @@ import (
 // ADR 0003 and therefore lives here, not on Config.
 const holdsBucket = "bones-holds"
 
-// tasksBucket is the JetStream KV bucket name coord uses to back task
-// records per ADR 0005. Also substrate-internal per ADR 0003.
-const tasksBucket = "bones-tasks"
-
 // archiveBucket is the cold JetStream KV bucket name coord uses for
 // pruned closed-task snapshots after compaction.
 const archiveBucket = "bones-task-archive"
@@ -121,7 +117,7 @@ func openSubstrate(
 		return nil, fmt.Errorf("coord.Open: holds: %w", err)
 	}
 	if s.tasks, err = tasks.Open(ctx, nc, tasks.Config{
-		BucketName:   tasksBucket,
+		BucketName:   tasks.DefaultBucketName,
 		HistoryDepth: cfg.Tuning.TaskHistoryDepth,
 		MaxValueSize: int32(cfg.Tuning.MaxTaskValueSize),
 	}); err != nil {

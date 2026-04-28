@@ -554,7 +554,7 @@ func TestCLI_Ready(t *testing.T) {
 	}
 
 	t.Run("empty_bucket", func(t *testing.T) {
-		stdout, stderr, code := runCmd(t, bonesBin, dir, "tasks", "ready")
+		stdout, stderr, code := runCmd(t, bonesBin, dir, "tasks", "list", "--ready")
 		if code != 0 {
 			t.Fatalf("ready exit=%d stderr=%s", code, stderr)
 		}
@@ -565,7 +565,7 @@ func TestCLI_Ready(t *testing.T) {
 
 	t.Run("shows_open_tasks", func(t *testing.T) {
 		id := seed("ready task")
-		stdout, stderr, code := runCmd(t, bonesBin, dir, "tasks", "ready")
+		stdout, stderr, code := runCmd(t, bonesBin, dir, "tasks", "list", "--ready")
 		if code != 0 {
 			t.Fatalf("ready exit=%d stderr=%s", code, stderr)
 		}
@@ -580,7 +580,7 @@ func TestCLI_Ready(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("seed claim failed code=%d", code)
 		}
-		stdout, _, _ := runCmd(t, bonesBin, dir, "tasks", "ready")
+		stdout, _, _ := runCmd(t, bonesBin, dir, "tasks", "list", "--ready")
 		if strings.Contains(stdout, id) {
 			t.Errorf("claimed task should be hidden; got:\n%s", stdout)
 		}
@@ -594,7 +594,7 @@ func TestCLI_Ready(t *testing.T) {
 			t.Fatalf("create exit=%d stderr=%s", code, stderr)
 		}
 		id := firstLine(stdout)
-		ready, _, code := runCmd(t, bonesBin, dir, "tasks", "ready")
+		ready, _, code := runCmd(t, bonesBin, dir, "tasks", "list", "--ready")
 		if code != 0 {
 			t.Fatalf("ready exit=%d", code)
 		}
@@ -605,7 +605,7 @@ func TestCLI_Ready(t *testing.T) {
 
 	t.Run("json", func(t *testing.T) {
 		id := seed("json ready")
-		stdout, stderr, code := runCmd(t, bonesBin, dir, "tasks", "ready", "--json")
+		stdout, stderr, code := runCmd(t, bonesBin, dir, "tasks", "list", "--ready", "--json")
 		if code != 0 {
 			t.Fatalf("ready --json exit=%d stderr=%s", code, stderr)
 		}
@@ -825,7 +825,7 @@ func TestCLI_Link(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("link exit=%d stderr=%s", code, stderr)
 		}
-		stdout, _, _ := runCmd(t, bonesBin, dir, "tasks", "ready")
+		stdout, _, _ := runCmd(t, bonesBin, dir, "tasks", "list", "--ready")
 		if strings.Contains(stdout, to) {
 			t.Errorf("blocked target should be hidden; got:\n%s", stdout)
 		}
@@ -842,7 +842,7 @@ func TestCLI_Link(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("link exit=%d stderr=%s", code, stderr)
 		}
-		stdout, _, _ := runCmd(t, bonesBin, dir, "tasks", "ready")
+		stdout, _, _ := runCmd(t, bonesBin, dir, "tasks", "list", "--ready")
 		if strings.Contains(stdout, to) {
 			t.Errorf("superseded task should be hidden; got:\n%s", stdout)
 		}
@@ -856,7 +856,7 @@ func TestCLI_Link(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("link exit=%d stderr=%s", code, stderr)
 		}
-		stdout, _, _ := runCmd(t, bonesBin, dir, "tasks", "ready")
+		stdout, _, _ := runCmd(t, bonesBin, dir, "tasks", "list", "--ready")
 		if !strings.Contains(stdout, to) {
 			t.Errorf("discovered-from should not hide target; got:\n%s", stdout)
 		}
