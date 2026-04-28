@@ -397,7 +397,7 @@ footer a { color: inherit; border-bottom-color: var(--mute); }
     <tbody>
       <tr><td>Project</td>      <td>bones — unified CLI for the bones agent-infra substrate</td></tr>
       <tr><td>Language</td>     <td>Go (module <code>github.com/danmestas/bones</code>)</td></tr>
-      <tr><td>Runtime deps</td> <td><code>fossil</code> binary · NATS server · optional <code>leaf</code> daemon</td></tr>
+      <tr><td>Runtime deps</td> <td><a href="https://github.com/danmestas/libfossil">libfossil</a> (embedded) · NATS server · optional <code>bin/leaf</code></td></tr>
       <tr><td>Binaries</td>     <td>1 (bones)</td></tr>
       <tr><td>License</td>      <td>Apache-2.0</td></tr>
       <tr><td>Status</td>       <td>v{{ .Site.Params.version | default "0.1.0" }} · alpha · breaking changes possible</td></tr>
@@ -423,9 +423,11 @@ $ bones --help</pre>
   <span class="num">§02</span>
   <h2>What it is <span class="anchor">overview</span></h2>
   <p>bones is the CLI for orchestrating multiple AI coding agents against a shared codebase without merge conflicts, race conditions, or lost work. It bundles three command surfaces — Fossil repository operations, NATS sync and bridging, and workspace/orchestrator/task management native to bones — into a single binary.</p>
-  <p>The substrate underneath is purpose-built for parallel agent work: NATS JetStream KV holds tasks with CAS-gated claims, Fossil stores code artifacts and chat history with content-addressed forks, and a slot-partitioned plan format keeps agents on disjoint files by construction. Agents come and go; durable state outlasts them.</p>
+  <p>The substrate underneath is purpose-built for parallel agent work: NATS JetStream KV holds tasks with CAS-gated claims, an embedded <a href="https://github.com/danmestas/libfossil">libfossil</a> stores code artifacts and chat history with content-addressed commits, and a slot-partitioned plan format keeps agents on disjoint files by construction. Agents come and go; durable state outlasts them.</p>
   <ul>
-    <li><strong>Three surfaces, one binary.</strong> <code>bones repo</code> (Fossil ops, from libfossil), <code>bones sync</code>/<code>bridge</code>/<code>notify</code> (from EdgeSync), <code>bones tasks</code>/<code>orchestrator</code>/<code>validate-plan</code> (native).</li>
+    <li><strong>Three surfaces, one binary.</strong> <code>bones repo</code> (Fossil ops, from libfossil), <code>bones sync</code>/<code>bridge</code>/<code>notify</code> (from <a href="https://github.com/danmestas/EdgeSync">EdgeSync</a>), <code>bones tasks</code>/<code>orchestrator</code>/<code>validate-plan</code> (native).</li>
+    <li><strong>Augments your VCS — never replaces it.</strong> bones opens a Fossil sandbox alongside your git working tree (Fossil metadata is gitignored). Agents commit into the sandbox, race-resolve safely, then the merged result materializes in git as ordinary file changes. Your git stays the source of truth.</li>
+    <li><strong>Leaves memory to you.</strong> No <code>remember</code>/<code>recall</code> primitive baked in. Per-agent memory is the harness's concern (Claude Code's auto-memory); cross-agent facts go through chat threads or task context maps. Your memory tool stays your memory tool.</li>
     <li><strong>Conflict-free by construction.</strong> Slot annotations on plan tasks are validated for directory disjointness before dispatch; runtime forks become impossible by design, not by lock contention.</li>
     <li><strong>Pre-built Claude Code skills.</strong> <code>bones orchestrator</code> scaffolds three skills into <code>.claude/skills/</code>: orchestrator, subagent, and uninstall-bones. The substrate stays policy-neutral; the skills encode the orchestration policy.</li>
   </ul>
@@ -520,27 +522,30 @@ $ bones --help</pre>
       </tr>
     </thead>
     <tbody>
-      <tr><td>Multi-agent first-class</td>   <td class="col-self">yes</td>                          <td>no</td>                          <td>yes</td></tr>
-      <tr><td>Parallel safety</td>            <td class="col-self">slot disjointness, validated</td><td>merge conflicts at PR time</td>   <td>per-task locks</td></tr>
-      <tr><td>Task store</td>                 <td class="col-self">NATS JetStream KV</td>           <td>external (Linear)</td>            <td>SQLite</td></tr>
-      <tr><td>Code store</td>                 <td class="col-self">Fossil (content-addressed)</td>  <td>git</td>                          <td>git</td></tr>
-      <tr><td>Real-time agent chat</td>       <td class="col-self">NATS notify substrate</td>       <td>Slack-or-similar (out-of-band)</td><td>none</td></tr>
-      <tr><td>Pre-built AI skills</td>        <td class="col-self">orchestrator + subagent</td>     <td>none</td>                         <td>workflow doc</td></tr>
-      <tr><td>Single CLI</td>                 <td class="col-self">yes</td>                         <td>no (multiple tools)</td>          <td>yes</td></tr>
-      <tr><td>API stability</td>              <td class="col-self">alpha · v0.1.x</td>              <td>stable</td>                       <td>stable</td></tr>
+      <tr><td>Multi-agent first-class</td>   <td class="col-self">yes</td>                                  <td>no</td>                          <td>yes</td></tr>
+      <tr><td>Owns your VCS</td>              <td class="col-self">no &mdash; sandbox alongside git</td>     <td>git is the VCS</td>              <td>yes &mdash; replaces git with Dolt</td></tr>
+      <tr><td>Owns your memory</td>           <td class="col-self">no &mdash; leaves it to the harness</td> <td>n/a</td>                         <td>yes &mdash; <code>bd remember</code> built in</td></tr>
+      <tr><td>Parallel safety</td>            <td class="col-self">slot disjointness, validated</td>        <td>merge conflicts at PR time</td>   <td>file lock + atomic CAS claim</td></tr>
+      <tr><td>Task store</td>                 <td class="col-self">NATS JetStream KV</td>                   <td>external (Linear)</td>            <td>Dolt</td></tr>
+      <tr><td>Code store</td>                 <td class="col-self">Fossil (sandbox)</td>                    <td>git</td>                          <td>git (managed by bd)</td></tr>
+      <tr><td>Real-time agent chat</td>       <td class="col-self">NATS notify (push)</td>                  <td>Slack-or-similar (out-of-band)</td><td>durable messages (no push)</td></tr>
+      <tr><td>Pre-built AI skills</td>        <td class="col-self">orchestrator + subagent</td>             <td>none</td>                         <td>Claude plugin + MCP server</td></tr>
+      <tr><td>Single CLI</td>                 <td class="col-self">yes</td>                                 <td>no (multiple tools)</td>          <td>yes</td></tr>
+      <tr><td>API stability</td>              <td class="col-self">alpha &middot; v0.1.x</td>               <td>stable</td>                       <td>stable &middot; v1.0.x</td></tr>
     </tbody>
   </table>
   </div>
-  <p class="fineprint">bones replaces beads' substrate (SQLite-backed task tracker) with a content-addressed Fossil + NATS pair. Beads remains the right answer when the durable-state needs are simpler and you don't need per-slot leaf isolation.</p>
+  <p class="fineprint">Different shapes for different bets. <a href="https://github.com/gastownhall/beads">beads</a> goes deep on a single managed substrate (Dolt-versioned task graph plus integrated memory) and ships the most mature plugin and MCP today. bones takes the opposite stance: it doesn't take over your VCS or your memory tool, and it splits state across NATS (live) and Fossil (durable) so real-time agent chat and slot-validated parallelism are first-class. Pick beads if you want one tool that owns task state, memory, and code-tracking. Pick bones if you want agent coordination without giving up git or your existing memory tooling.</p>
 </section>
 
 <section>
   <span class="num">§06</span>
   <h2>What it is not <span class="anchor">limits</span></h2>
   <p><strong>Not a hosted service.</strong> bones is a CLI; you run it locally or in CI. The orchestrator skill assumes a Claude Code session; the substrate is usable from any client that speaks NATS + Fossil.</p>
+  <p><strong>Not a VCS replacement.</strong> This is deliberate. Your git history stays your git history. bones opens a Fossil checkout <em>alongside</em> the working tree (per ADR 0024, the Fossil metadata is gitignored) and uses it only as the agent sandbox where parallel commits race-resolve safely. After the swarm finishes, the merged result materializes in git as ordinary file changes. git stays the source of truth.</p>
+  <p><strong>Not a memory system.</strong> Also deliberate. Per-agent memory is the harness's job (Claude Code's auto-memory writes to <code>~/.claude/projects/&lt;project&gt;/memory/</code>). Cross-agent shared facts go through chat threads or task context maps. bones does not provide a <code>remember</code>/<code>recall</code> primitive &mdash; your memory tool stays your memory tool.</p>
   <p><strong>Not a Linear or Jira replacement.</strong> No roadmap views, no SLA tracking, no dashboards. Tasks here are agent-runtime artifacts, not product-management artifacts.</p>
-  <p><strong>Not a single-agent tool.</strong> bones works for a single-agent workflow but the substrate cost (NATS server, Fossil hub) outweighs the benefit. If you have one agent, run <code>fossil</code> directly.</p>
-  <p><strong>Not a memory system.</strong> Per-agent memory is the harness's job (Claude Code auto-memory). Cross-agent shared facts go through chat threads or task context maps; bones does not provide a separate <code>remember</code> primitive.</p>
+  <p><strong>Not a single-agent tool.</strong> bones works for a single-agent workflow but the substrate cost (NATS server, Fossil hub) outweighs the benefit. If you have one agent, use <code>libfossil</code> directly &mdash; or just stick with git.</p>
 </section>
 
 <section>
@@ -553,8 +558,7 @@ $ bones --help</pre>
     </div>
     <pre id="quickstart">$ brew install danmestas/tap/bones
 $ cd my-project
-$ bones init                                  # workspace + leaf
-$ bones orchestrator                          # scaffold skills + scripts
+$ bones up                                    # workspace + scaffold + leaf + hub
 $ bones tasks add "first task" --files src/foo.go
 $ bones tasks list</pre>
   </div>
