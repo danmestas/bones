@@ -685,7 +685,8 @@ func TestCLI_Dispatch(t *testing.T) {
 		if code != 1 {
 			t.Fatalf("exit=%d, want 1", code)
 		}
-		if !strings.Contains(stderr, "parent|worker") {
+		// Kong emits: expected one of "parent", "worker"
+		if !strings.Contains(stderr, "parent") || !strings.Contains(stderr, "worker") {
 			t.Fatalf("stderr=%q", stderr)
 		}
 	})
