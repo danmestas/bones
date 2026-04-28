@@ -65,7 +65,15 @@ func (c *SwarmCommitCmd) run(ctx context.Context, info workspace.Info) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = leaf.Stop() }()
+	// leafStopped tracks whether the explicit Stop below ran so the
+	// defer doesn't call it twice (Agent.Stop is not idempotent on
+	// double-close).
+	leafStopped := false
+	defer func() {
+		if !leafStopped {
+			_ = leaf.Stop()
+		}
+	}()
 
 	files, err := c.gatherFiles(info, slot)
 	if err != nil {
@@ -75,17 +83,27 @@ func (c *SwarmCommitCmd) run(ctx context.Context, info workspace.Info) error {
 	if err != nil {
 		return err
 	}
-	// The Leaf.Commit above broadcasts a fossil-sync NATS announce
-	// over the workspace leaf's NATS connection — but the hub's
-	// xfer subscriber lives on a separate NATS deployment, so the
-	// commit lands locally in <swarm>/<slot>/leaf.fossil only. Push
-	// it explicitly to the hub via HTTP /xfer here so `bones peek`
-	// and the hub timeline see the commit. Soft-fail: if the hub is
-	// unreachable, stderr-warn but don't roll back the local commit.
-	if err := pushSlotToHub(ctx, info.WorkspaceDir, slot, hubURL); err != nil {
+	// Stop the leaf BEFORE pushing so the agent's libfossil.Repo
+	// handle is closed; pushSlotToHub then opens its own handle on
+	// leaf.fossil cleanly. The Leaf.Commit above broadcasts a
+	// fossil-sync NATS announce over the workspace leaf's NATS
+	// connection — but the hub's xfer subscriber lives on a
+	// separate NATS deployment, so the commit lands locally in
+	// <swarm>/<slot>/leaf.fossil only. Push it explicitly to the
+	// hub via HTTP /xfer here so `bones peek` and the hub timeline
+	// see the commit. Soft-fail: if the hub is unreachable,
+	// stderr-warn but don't roll back the local commit.
+	_ = leaf.Stop()
+	leafStopped = true
+	if res, perr := pushSlotToHub(ctx, info.WorkspaceDir, slot, sess.AgentID, hubURL); perr != nil {
 		fmt.Fprintf(os.Stderr,
 			"swarm commit: warning: push to hub %s failed: %v\n",
-			hubURL, err,
+			hubURL, perr,
+		)
+	} else if res != nil {
+		fmt.Fprintf(os.Stderr,
+			"swarm commit: pushed to hub %s rounds=%d files_sent=%d bytes_sent=%d\n",
+			hubURL, res.Rounds, res.FilesSent, res.BytesSent,
 		)
 	}
 	if err := c.renewSession(ctx, mgr, sess, rev); err != nil {
@@ -249,23 +267,40 @@ func (c *SwarmCommitCmd) renewSession(
 // the hub's NATS subscriber (the two NATS deployments are separate by
 // design — see ADR 0028 retro for the bug this fixes).
 //
-// The function opens leaf.fossil read/write, runs Sync(Push: true),
-// and closes the repo. Errors propagate; the caller decides whether
-// a hub-unreachable failure is fatal (commit success keeps the data
-// locally either way).
-func pushSlotToHub(ctx context.Context, workspaceDir, slot, hubURL string) error {
+// The fossilUser is the hub login the push authenticates as. Slot
+// users (created at join time by ensureSlotUser) have caps that
+// include "i" (check-in), so the hub accepts the push. Anonymous
+// "nobody" pushes would be rejected because hubs only grant "g" /
+// "h" / "o" by default — checkin requires authenticated identity.
+//
+// Errors propagate; the caller decides whether a hub-unreachable
+// failure is fatal (commit success keeps the data locally either way).
+func pushSlotToHub(
+	ctx context.Context, workspaceDir, slot, fossilUser, hubURL string,
+) (*libfossil.SyncResult, error) {
 	leafRepoPath := filepath.Join(swarm.SlotDir(workspaceDir, slot), "leaf.fossil")
 	leafRepo, err := libfossil.Open(leafRepoPath)
 	if err != nil {
-		return fmt.Errorf("open leaf repo: %w", err)
+		return nil, fmt.Errorf("open leaf repo: %w", err)
 	}
 	defer func() { _ = leafRepo.Close() }()
-	transport := libfossil.NewHTTPTransport(hubURL)
-	if _, err := leafRepo.Sync(ctx, transport, libfossil.SyncOpts{
-		Push: true,
-		Pull: false,
-	}); err != nil {
-		return fmt.Errorf("sync push: %w", err)
+	// project-code is required for the login-card nonce; libfossil
+	// panics in computeLogin if it's blank. Read it from the cloned
+	// leaf repo (same code as the hub since clone copies the
+	// project-code config row).
+	projectCode, err := leafRepo.Config("project-code")
+	if err != nil {
+		return nil, fmt.Errorf("read project-code: %w", err)
 	}
-	return nil
+	transport := libfossil.NewHTTPTransport(hubURL)
+	res, err := leafRepo.Sync(ctx, transport, libfossil.SyncOpts{
+		Push:        true,
+		Pull:        false,
+		User:        fossilUser,
+		ProjectCode: projectCode,
+	})
+	if err != nil {
+		return res, fmt.Errorf("sync push: %w", err)
+	}
+	return res, nil
 }
