@@ -32,7 +32,6 @@ type TasksCmd struct {
 	Status    TasksStatusCmd    `cmd:"" help:"Snapshot of all tasks by status"`
 	Link      TasksLinkCmd      `cmd:"" help:"Link two tasks with an edge type"`
 	Prime     TasksPrimeCmd     `cmd:"" help:"Print agent-tasks context (prime)"`
-	Compact   TasksCompactCmd   `cmd:"" help:"Compact closed tasks"`
 	Autoclaim TasksAutoclaimCmd `cmd:"" help:"Run one autoclaim tick"`
 	Dispatch  TasksDispatchCmd  `cmd:"" hidden:"" help:"Dispatch parent/worker (hub-only)"`
 	Aggregate TasksAggregateCmd `cmd:"" help:"Aggregate per-slot task summary"`

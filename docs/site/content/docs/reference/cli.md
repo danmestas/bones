@@ -47,7 +47,6 @@ The `bones` binary is a single Kong-driven entry point covering workspace setup,
 | `bones tasks status` | Snapshot of all tasks by status |
 | `bones tasks link <from> <to>` | Link two tasks with an edge type |
 | `bones tasks prime` | Print agent-tasks context (prime) |
-| `bones tasks compact` | Compact closed tasks |
 | `bones tasks autoclaim` | Run one autoclaim tick |
 | `bones tasks aggregate` | Aggregate per-slot task summary |
 
