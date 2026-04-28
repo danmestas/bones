@@ -32,6 +32,7 @@ The `bones` binary is a single Kong-driven entry point covering workspace setup,
 |---|---|
 | `bones orchestrator` | Install orchestrator scaffolding (`.orchestrator/`) |
 | `bones validate-plan <path>` | Validate a slot-annotated plan; `--list-slots` emits JSON |
+| `bones peek` | Open the hub Fossil repo in the system `fossil ui` web view (timeline, branches, files). Optional enhancement — prints a one-line install hint and exits cleanly when `fossil` isn't on PATH. `--port=N` to pin the UI port. |
 
 ### Tasks
 
