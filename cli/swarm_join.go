@@ -37,18 +37,18 @@ type SwarmJoinCmd struct {
 	TaskID        string `name:"task-id" required:"" help:"open task id to claim"`
 	Caps          string `name:"caps" default:"oih" help:"fossil caps for the slot user"`
 	ForceTakeover bool   `name:"force" help:"clobber an existing slot session (recovery only)"`
-	HubURL        string `name:"hub-url" help:"override hub fossil HTTP URL (default: http://127.0.0.1:8765)"`
+	HubURL        string `name:"hub-url" help:"override hub fossil HTTP URL"`
 }
 
 // Run implements the join flow per ADR 0028 §"swarm join":
 //
-//	1. Open workspace.
-//	2. Ensure slot user in hub repo (idempotent).
-//	3. Verify no live session record on this slot (or --force).
-//	4. coord.OpenLeaf rooted at .bones/swarm/<slot>/.
-//	5. Claim the task via Leaf.Claim.
-//	6. Write session record to bones-swarm-sessions[<slot>].
-//	7. Print BONES_SLOT_WT=<wt path> for shell sourcing.
+//  1. Open workspace.
+//  2. Ensure slot user in hub repo (idempotent).
+//  3. Verify no live session record on this slot (or --force).
+//  4. coord.OpenLeaf rooted at .bones/swarm/<slot>/.
+//  5. Claim the task via Leaf.Claim.
+//  6. Write session record to bones-swarm-sessions[<slot>].
+//  7. Print BONES_SLOT_WT=<wt path> for shell sourcing.
 func (c *SwarmJoinCmd) Run(g *libfossilcli.Globals) error {
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
@@ -80,10 +80,14 @@ func (c *SwarmJoinCmd) run(ctx context.Context, info workspace.Info) error {
 		_ = leaf.Stop()
 		return fmt.Errorf("claim task: %w", err)
 	}
-	// Don't release the claim on success — it stays held until
-	// `swarm close` runs. We DO release on any failure between here
-	// and the session-record write so a half-formed session does not
-	// leak a hold.
+	// Release the claim once the session record is persisted. The
+	// underlying hold survives only as long as its TTL — but the
+	// session record is the durable handle for `swarm commit` and
+	// `swarm close` to re-claim atomically by slot identity. Phase
+	// 1 trades hold persistence across verbs for implementation
+	// simplicity; subsequent commit/close re-take the claim each
+	// time. ADR 0028 §"Process lifecycle" outlines the future
+	// detached-leaf design that would change this.
 	if err := c.writeSession(ctx, mgr, info); err != nil {
 		_ = claim.Release()
 		_ = leaf.Stop()
@@ -95,6 +99,8 @@ func (c *SwarmJoinCmd) run(ctx context.Context, info workspace.Info) error {
 		return err
 	}
 	c.emitJoinReport(info, leaf)
+	_ = claim.Release()
+	_ = leaf.Stop()
 	return nil
 }
 
@@ -148,12 +154,14 @@ func (c *SwarmJoinCmd) checkExistingSession(
 		switch {
 		case existing.Host == host && existing.LeafPID > 0 && pidAlive(existing.LeafPID):
 			return fmt.Errorf(
-				"slot %q already has a live session on this host (pid %d) — pass --force to take over",
+				"slot %q already has a live session on this host"+
+					" (pid %d) — pass --force to take over",
 				c.Slot, existing.LeafPID,
 			)
 		case existing.Host != host:
 			return fmt.Errorf(
-				"slot %q is owned by host %q (pid %d) — refusing to take over; pass --force on the owning host",
+				"slot %q is owned by host %q (pid %d) — refusing"+
+					" to take over; pass --force on the owning host",
 				c.Slot, existing.Host, existing.LeafPID,
 			)
 		}
@@ -168,6 +176,14 @@ func (c *SwarmJoinCmd) checkExistingSession(
 // .bones/swarm directory. Uses HubAddrs (URL-string variant of
 // LeafConfig) because the hub runs in a separate process and the
 // agent-side bones binary cannot share an in-process *Hub.
+//
+// Phase 1 invariant: the bones CLI itself is the leaf-host process —
+// each swarm verb opens a fresh *Leaf, does its work, then stops it
+// at end of the verb. Process-detach (per ADR 0028 §"Process
+// lifecycle") is future work; the current contract is "every verb
+// is a self-contained invocation against the persisted leaf.fossil."
+// This keeps the implementation small while preserving the same
+// observable surface for the test integration.
 func (c *SwarmJoinCmd) openSwarmLeaf(
 	ctx context.Context, info workspace.Info,
 ) (*coord.Leaf, error) {
@@ -191,6 +207,13 @@ func (c *SwarmJoinCmd) openSwarmLeaf(
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open leaf: %w", err)
+	}
+	// coord.OpenLeaf computes wtPath but does not mkdir it; the
+	// agent-side `swarm cwd` consumer expects a real directory it
+	// can `cd` into, so create it eagerly here. Idempotent.
+	if err := os.MkdirAll(leaf.WT(), 0o755); err != nil {
+		_ = leaf.Stop()
+		return nil, fmt.Errorf("mkdir worktree: %w", err)
 	}
 	return leaf, nil
 }

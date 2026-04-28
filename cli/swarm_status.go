@@ -120,16 +120,20 @@ func emitStatusTable(rows []statusRow) error {
 		return nil
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "SLOT\tTASK-ID\tHOST\tPID\tSTATE\tRENEWED")
+	if _, err := fmt.Fprintln(w, "SLOT\tTASK-ID\tHOST\tPID\tSTATE\tRENEWED"); err != nil {
+		return err
+	}
 	for _, r := range rows {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\n",
+		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\n",
 			r.Slot,
 			truncateID(r.TaskID, 8),
 			r.Host,
 			r.LeafPID,
 			r.State,
 			fmt.Sprintf("%ds ago", r.StaleSeconds),
-		)
+		); err != nil {
+			return err
+		}
 	}
 	return w.Flush()
 }

@@ -21,9 +21,9 @@ type CLI struct {
 	Repo libfossilcli.RepoCmd `cmd:"" group:"repo" help:"Fossil repository operations"`
 
 	// Sync & messaging.
-	Sync   edgecli.SyncCmd   `cmd:"" group:"sync" help:"Leaf agent sync"`
-	Bridge edgecli.BridgeCmd `cmd:"" group:"sync" help:"NATS-to-Fossil bridge"`
-	Notify edgecli.NotifyCmd `cmd:"" group:"sync" help:"Bidirectional notification messaging"`
+	Sync   edgecli.SyncCmd    `cmd:"" group:"sync" help:"Leaf agent sync"`
+	Bridge edgecli.BridgeCmd  `cmd:"" group:"sync" help:"NATS-to-Fossil bridge"`
+	Notify edgecli.NotifyCmd  `cmd:"" group:"sync" help:"Bidirectional notification messaging"`
 	Doctor bonescli.DoctorCmd `cmd:"" group:"sync" help:"Check development environment health"`
 
 	// Tooling — used by humans authoring plans/skills.

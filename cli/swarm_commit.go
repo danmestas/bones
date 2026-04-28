@@ -25,7 +25,7 @@ type SwarmCommitCmd struct {
 	Slot    string   `name:"slot" help:"slot name (defaults to single active slot on this host)"`
 	Message string   `name:"message" short:"m" required:"" help:"commit message"`
 	Files   []string `arg:"" optional:"" help:"files to commit (default: all modified)"`
-	HubURL  string   `name:"hub-url" help:"override hub fossil HTTP URL (default: http://127.0.0.1:8765)"`
+	HubURL  string   `name:"hub-url" help:"override hub fossil HTTP URL"`
 }
 
 func (c *SwarmCommitCmd) Run(g *libfossilcli.Globals) error {
@@ -81,24 +81,28 @@ func (c *SwarmCommitCmd) run(ctx context.Context, info workspace.Info) error {
 		fmt.Fprintf(os.Stderr, "swarm commit: warning: renew session failed: %v\n", err)
 	}
 	fmt.Printf("%s\n", uuid)
-	fmt.Fprintf(os.Stderr, "swarm commit: slot=%s task=%s files=%d\n", slot, sess.TaskID, len(files))
+	fmt.Fprintf(os.Stderr,
+		"swarm commit: slot=%s task=%s files=%d\n",
+		slot, sess.TaskID, len(files))
 	return nil
 }
 
 // assertSessionLocal returns an error if the session's host does not
 // match this machine. Cross-host commit attempts are programmer
 // errors per ADR 0028 §"Process lifecycle and crash recovery".
+//
+// Phase 1 does NOT check leaf pid liveness: every swarm verb is a
+// self-contained CLI invocation that opens its own leaf, so the
+// session's recorded pid (the join's bones process) is naturally
+// dead by the time commit runs. Future detached-leaf work (per ADR
+// 0028 §"Process lifecycle") will reintroduce a "leaf still
+// running?" check; for now the leaf.fossil file's mere existence is
+// the cross-invocation handle.
 func (c *SwarmCommitCmd) assertSessionLocal(sess swarm.Session, host string) error {
 	if sess.Host != host {
 		return fmt.Errorf(
 			"slot %q is owned by host %q (this machine is %q) — cross-host operation refused",
 			sess.Slot, sess.Host, host,
-		)
-	}
-	if sess.LeafPID > 0 && !pidAlive(sess.LeafPID) {
-		return fmt.Errorf(
-			"leaf for slot %q (pid %d) is not running — run `bones swarm join --force` to recover",
-			sess.Slot, sess.LeafPID,
 		)
 	}
 	return nil
@@ -135,18 +139,28 @@ func (c *SwarmCommitCmd) openLeafForCommit(
 // the caller listed files explicitly, read them from the slot's
 // worktree. Otherwise, surface a clear error: explicit-file commit is
 // required for now (auto-discovery of modified files is a follow-up).
+//
+// Each File.Path is set to the absolute workspace path so the
+// holds-gate (Invariant 4 / coord.checkHolds) sees a key matching
+// the absolute path the task record carries. libfossil's
+// normalizeLeadingSlash trims the leading slash to derive its
+// relative-to-repo Name, so the same Path field works as both the
+// hold key and the commit target.
 func (c *SwarmCommitCmd) gatherFiles(info workspace.Info, slot string) ([]coord.File, error) {
 	if len(c.Files) == 0 {
 		return nil, fmt.Errorf(
-			"swarm commit: at least one file argument required (auto-discovery of dirty files is not yet implemented)",
+			"swarm commit: at least one file argument required" +
+				" (auto-discovery of dirty files is not yet implemented)",
 		)
 	}
 	wt := swarm.SlotWorktree(info.WorkspaceDir, slot)
 	out := make([]coord.File, 0, len(c.Files))
 	for _, rel := range c.Files {
-		// Strip a leading slot/wt/ prefix if present so callers can
-		// pass either "src/foo.go" (relative to wt) or
-		// ".bones/swarm/<slot>/wt/src/foo.go" (relative to workspace).
+		// Strip prefixes so callers can pass any of:
+		//   "src/foo.go"                              (rel to wt)
+		//   "wt/src/foo.go"                           (rel to slot)
+		//   ".bones/swarm/<slot>/wt/src/foo.go"       (rel to workspace)
+		//   "/abs/path/to/.bones/swarm/<slot>/wt/foo" (absolute)
 		clean := strings.TrimPrefix(rel, wt+string(os.PathSeparator))
 		clean = strings.TrimPrefix(clean, "wt/")
 		abs := filepath.Join(wt, clean)
@@ -154,7 +168,11 @@ func (c *SwarmCommitCmd) gatherFiles(info workspace.Info, slot string) ([]coord.
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", abs, err)
 		}
-		out = append(out, coord.File{Path: clean, Content: data})
+		// Prefer the workspace-relative absolute path on the task's
+		// files list — that is what was registered in the holds
+		// bucket. Search via filepath.Join(workspaceDir, ...).
+		taskPath := filepath.Join(info.WorkspaceDir, clean)
+		out = append(out, coord.File{Path: taskPath, Content: data})
 	}
 	return out, nil
 }

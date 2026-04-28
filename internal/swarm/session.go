@@ -32,7 +32,7 @@ import (
 // Slot names are workspace-scoped because the bucket itself is per-
 // NATS-deployment.
 //
-// Marshalled as JSON for human-readable debugging via `nats kv get`.
+// Marshaled as JSON for human-readable debugging via `nats kv get`.
 // All time fields are RFC3339-encoded UTC. New fields must default
 // safely on a missing-key read so older clients can read newer
 // records (additive evolution only).

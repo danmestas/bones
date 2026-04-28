@@ -28,7 +28,7 @@ type SwarmCloseCmd struct {
 	Summary string `name:"summary" default:"swarm close" help:"final summary posted to task thread"`
 	Branch  string `name:"branch" help:"only with --result=fork: branch name"`
 	Rev     string `name:"rev" help:"only with --result=fork: rev"`
-	HubURL  string `name:"hub-url" help:"override hub fossil HTTP URL (default: http://127.0.0.1:8765)"`
+	HubURL  string `name:"hub-url" help:"override hub fossil HTTP URL"`
 }
 
 func (c *SwarmCloseCmd) Run(g *libfossilcli.Globals) error {
