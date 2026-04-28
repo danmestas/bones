@@ -125,6 +125,30 @@ func TestCLI_Swarm(t *testing.T) {
 		if len(uuid) < 16 {
 			t.Errorf("expected commit uuid, got %q", stdout)
 		}
+		// Hub-side propagation: the commit's UUID must land in the
+		// hub repo's timeline. Without the post-commit HTTP push the
+		// commit only lives in the slot's leaf.fossil — `bones peek`
+		// and any hub consumer would see nothing. This is the
+		// regression guard for the swarm-commit-hub-sync fix.
+		//
+		// Phase 1 ignores the -m flag at the libfossil layer (the
+		// leaf hardcodes a "leaf commit for task <id>" message), so
+		// we assert on the commit UUID prefix instead, which is
+		// stable and cross-version.
+		hubRepoPath := filepath.Join(dir, ".orchestrator", "hub.fossil")
+		tlOut, err := exec.Command("fossil", "timeline", "-R", hubRepoPath, "-n", "5", "-t", "ci").CombinedOutput()
+		if err != nil {
+			t.Fatalf("fossil timeline -R %s: %v\n%s", hubRepoPath, err, tlOut)
+		}
+		// fossil timeline shortens UUIDs to 10 chars; compare on the prefix.
+		uuidPrefix := uuid
+		if len(uuidPrefix) > 10 {
+			uuidPrefix = uuidPrefix[:10]
+		}
+		if !strings.Contains(string(tlOut), uuidPrefix) {
+			t.Fatalf("commit %s not in hub timeline; commit-stderr=%s\ntimeline:\n%s",
+				uuid, stderr, tlOut)
+		}
 	})
 
 	t.Run("close_deletes_session_and_closes_task", func(t *testing.T) {
