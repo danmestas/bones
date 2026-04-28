@@ -8,7 +8,7 @@ import (
 
 const configVersion = 1
 
-// config is the on-disk schema for .agent-infra/config.json.
+// config is the on-disk schema for .bones/config.json.
 // Fields are JSON-tagged for snake_case on disk; version gates schema migrations.
 type config struct {
 	Version     int    `json:"version"`

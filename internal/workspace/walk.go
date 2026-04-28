@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 )
 
-const markerDirName = ".agent-infra"
+const markerDirName = ".bones"
 
 // maxWalkUpDepth caps the number of directory levels walkUp will ascend.
 // 64 levels is preposterous for any real filesystem; exceeding it indicates

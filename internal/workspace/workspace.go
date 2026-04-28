@@ -1,5 +1,7 @@
-// Package workspace manages a bones workspace: the .agent-infra/
-// directory, its on-disk config, and the associated leaf daemon process.
+// Package workspace manages a bones workspace: the .bones/ directory,
+// its on-disk config, and the associated leaf daemon process. Workspaces
+// created before the rename used .agent-infra/; both Init and Join
+// silently migrate that legacy name to .bones/ on first touch.
 //
 // Two entry points:
 //
@@ -108,8 +110,9 @@ func instrumented(
 }
 
 // Init creates a fresh workspace rooted at cwd, starts a leaf daemon, and
-// returns its connection info. Returns ErrAlreadyInitialized if .agent-infra/
-// already exists in cwd.
+// returns its connection info. Returns ErrAlreadyInitialized if .bones/
+// already exists in cwd. A pre-rename .agent-infra/ marker is silently
+// migrated to .bones/ before the existence check.
 func Init(ctx context.Context, cwd string) (Info, error) {
 	return instrumented(ctx, "init", cwd, func(ctx context.Context) (Info, error) {
 		return initLogic(ctx, cwd)
@@ -117,6 +120,9 @@ func Init(ctx context.Context, cwd string) (Info, error) {
 }
 
 func initLogic(ctx context.Context, cwd string) (Info, error) {
+	if err := migrateLegacyMarker(cwd); err != nil {
+		return Info{}, err
+	}
 	markerDir := filepath.Join(cwd, markerDirName)
 	if _, err := os.Stat(markerDir); err == nil {
 		return Info{}, ErrAlreadyInitialized
@@ -197,8 +203,9 @@ func killPID(pid int) {
 	}
 }
 
-// Join locates the nearest .agent-infra/ walking up from cwd and verifies
-// the recorded leaf is still reachable.
+// Join locates the nearest .bones/ walking up from cwd and verifies
+// the recorded leaf is still reachable. A pre-rename .agent-infra/
+// marker rooted at cwd is silently migrated to .bones/ before walkUp.
 func Join(ctx context.Context, cwd string) (Info, error) {
 	return instrumented(ctx, "join", cwd, func(ctx context.Context) (Info, error) {
 		return joinLogic(ctx, cwd)
@@ -206,6 +213,9 @@ func Join(ctx context.Context, cwd string) (Info, error) {
 }
 
 func joinLogic(ctx context.Context, cwd string) (Info, error) {
+	if err := migrateLegacyMarker(cwd); err != nil {
+		return Info{}, err
+	}
 	workspaceDir, err := walkUp(cwd)
 	if err != nil {
 		return Info{}, err
