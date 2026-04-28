@@ -1,36 +1,56 @@
 ---
 name: orchestrator
-description: Orchestrate hub-and-leaf parallel agent execution from a slot-annotated plan. Trigger when the user invokes a plan that contains [slot: name] task annotations or asks to "run plan in parallel" / "orchestrate this plan" / "dispatch agents from plan".
-when_to_use: Plan parser approved a [slot: name]-annotated plan and the user asks for parallel execution. NOT for serial single-agent execution.
+description: Orchestrate hub-and-leaf parallel agent execution from a slot-annotated plan via the `bones swarm` verbs. Trigger when the user invokes a plan that contains [slot: name] task annotations or asks to "run plan in parallel" / "orchestrate this plan" / "dispatch agents from plan".
+when_to_use: Plan validator approved a [slot: name]-annotated plan and the user asks for parallel execution. NOT for serial single-agent execution.
 ---
 
 # Orchestrator Skill
 
 You are the orchestrator. Your job is to validate a plan, bootstrap a hub
 (if it isn't already up), dispatch one Task-tool subagent per slot, monitor
-their progress, and clean up at completion.
+their progress, run a Phase 2 integration agent to wire the slots together,
+and clean up at completion.
+
+## Prerequisites
+
+This skill assumes the `bones` binary is on `$PATH` (it was when the skill
+was scaffolded). If `bones` is not found, stop and tell the user to reinstall:
+
+```
+brew install danmestas/tap/bones
+# or
+go install github.com/danmestas/bones/cmd/bones@latest
+# or download from https://github.com/danmestas/bones/releases
+```
+
+Do not auto-install. Wait for the user.
 
 ## Step 1: Validate the plan
 
-Run the validator against the plan path the user provided:
+Run the validator with the slot list flag — you'll need the slot→task
+mapping below:
 
 ```
-bones validate-plan <plan-path>
+bones validate-plan --list-slots <plan-path>
 ```
-
-(Or `go run ./cmd/bones/ validate-plan <plan-path>` if the binary
-isn't on `$PATH`.)
 
 If it exits non-zero, print the violations and stop. Do not dispatch
 subagents against an invalid plan. Tell the user which lines failed and
-what the [slot: name] format is.
+what the [slot: name] format is. The validator's slot-dir derivation
+walks file paths for the slot-name component, so nested layouts like
+`src/rendering/`, `src/physics/` validate cleanly.
+
+Capture the JSON output. Each entry has the slot's name and its task
+headings. You'll need the task IDs from `bones tasks list` to feed
+`bones swarm join`.
 
 ## Step 2: Verify hub is up
 
 Check that the SessionStart hook ran successfully:
 
 ```
-test -f .orchestrator/pids/leaf.pid && \
+test -f .orchestrator/pids/fossil.pid && \
+  test -f .orchestrator/pids/nats.pid && \
   curl -fsS -X POST http://127.0.0.1:8765/xfer >/dev/null
 ```
 
@@ -42,18 +62,20 @@ bash .orchestrator/scripts/hub-bootstrap.sh
 
 (Idempotent — safe to re-run.)
 
-## Step 3: Extract slots and tasks
+## Step 3: Create tasks and seed slot users
 
-Run the validator with `--list-slots` to get a machine-readable slot→task
-mapping:
+For each slot in the plan, create a task and pre-seed the slot's hub
+user (the `bones swarm join` flow does this lazily, but doing it once
+up-front is cleaner and lets you fail fast if something's wrong):
 
 ```
-bones validate-plan --list-slots <plan-path> | jq
+bones hub user add slot-<name>            # idempotent
+TASK_ID=$(bones tasks create "slot=<name>: <task title from plan>")
+echo "$TASK_ID"
 ```
 
-This emits JSON like `{"slots": [{"name": "alpha", "tasks": [...]}, ...]}`.
-Use the `tasks` array from each slot entry to build the dispatch prompt for
-Step 4 — no manual plan re-parsing needed.
+Record each `(slot, task_id)` pair. You'll pass them to `bones swarm
+join` in the next step.
 
 ## Step 4: Dispatch one subagent per slot
 
@@ -61,93 +83,134 @@ For each slot, invoke the Task tool with:
 
 - `subagent_type`: "general-purpose"
 - `description`: "subagent for slot=<name>"
-- `prompt`: the slot's task list verbatim, plus this preamble:
+- `prompt`: the slot's task list from the plan, plus this preamble:
 
-  > You are a subagent for slot=<name> in a hub-leaf orchestration. Use
-  > the `subagent` skill. Your environment:
-  > - AGENT_ID:  <slot>
-  > - SLOT_ID:   <slot>
-  > - HUB_URL:   http://127.0.0.1:8765
-  > - NATS_URL:  nats://127.0.0.1:4222
-  > - WORKDIR:   .orchestrator/leaves
+  > You are a subagent for slot=<name> in a bones swarm. Use the
+  > `subagent` skill. Your scope is the directory `<slot-dir>/`
+  > (per `[slot: <name>]` in the plan). Your task ID is `<task_id>`.
   >
-  > (LEAF_REPO and LEAF_WT are no longer injected — coord.OpenLeaf owns
-  > those paths under WORKDIR/<slot>/. See the subagent skill for details.)
+  > Lifecycle (the subagent skill spells these out further):
   >
-  > Your task list follows. Execute it; emit one fossil commit per task.
+  > 1. `bones swarm join --slot=<name> --task-id=<task_id>`
+  > 2. `cd $(bones swarm cwd --slot=<name>)`
+  > 3. Edit files in your slot's directory only. Commit each logical
+  >    unit with `bones swarm commit -m "slot-<name>: <message>"`.
+  >    NEVER call `fossil up` or `fossil commit` directly.
+  > 4. `bones swarm close --result=success --summary="<one-line summary>"`
+  >
+  > Concurrent slot work appears as separate branches at the hub —
+  > that is normal. Your `wt/` only ever shows your own commits +
+  > the seed.
+  >
+  > Your task list follows.
 
 The orchestrator dispatches subagents in parallel (single message with N
-Task tool calls).
-
-### Parallelism guidance (per docs/trials/2026-04-26/trial-report.md)
-
-Post-EdgeSync-refactor: the architecture is no longer hub-rate-limited
-at orchestration scale. The trial sweep at zero think time (worst case)
-shows 100% completion through N=64 with sub-100ms P99; production
-agents commit on minute timescales (~0.017 events/sec) so even N=100+
-is comfortable. The old "100-round Pull-negotiation wall" is gone — the
-EdgeSync NATS mesh sync replaces it.
-
-Tier guidance for picking concurrency (zero-think trial numbers):
-
-- **Sweet spot (sub-second P99):** N ≤ 32 slots. Use for interactive
-  tooling where latency matters.
-- **Acceptable (sub-100ms P99):** N ≤ 64 slots. Use for batch agents
-  with bearable latency.
-- **Stress ceiling (tight-loop):** N ≤ 100 slots, P99 ~450ms,
-  ~98% commit propagation in 30s. Beyond this hub-side serve-nats
-  queueing dominates.
-- **Production cadence (1 commit/min/agent):** 100+ agents
-  comfortable.
-
-If the plan has more slots than fit your concurrency tier, dispatch in
-batches (N at a time, wait for each batch to drain before starting the
-next). The trial harness `examples/herd-hub-leaf/` reproduces the
-envelope; consult its README and `docs/trials/2026-04-26/trial-report.md`
-for current numbers.
+Task tool calls). Each subagent's prompt includes its slot's task list
+verbatim from the plan.
 
 ## Step 5: Monitor
 
-Subscribe to NATS subjects to watch progress (in v1, this is mostly
-informational — you do not need to take action unless a subagent surfaces
-ErrConflictForked):
+While slots run, periodically check status:
 
-- `coord.tip.changed` — confirms commits landing
-- `coord.task.closed` — confirms task completion
+```
+bones swarm status               # active slots, their tasks, last-renewed timestamps
+bones tasks list                 # task-side view: open, claimed, closed
+```
 
-If a subagent surfaces ErrConflictForked, the planner partitioned slots
-incorrectly. Stop the run, report which two slots overlap on which paths,
-and recommend re-planning.
+The hub's Fossil timeline is the visual progress feed:
 
-## Step 6: Completion
+```
+bones peek                       # opens fossil ui in your browser, lands on /timeline
+```
 
-When all subagents return:
+Each `bones swarm commit` adds a check-in to the hub timeline,
+attributed to `slot-<name>`. Refresh as commits land.
 
-1. Verify fossil_commits == sum(tasks per slot) by querying the hub repo:
+If a subagent surfaces a fork-related error from `bones swarm commit`,
+the planner partitioned slots incorrectly. Stop the run, report which
+two slots overlap on which paths, and recommend re-planning.
+
+## Step 6: Phase 2 — integration / wiring agent
+
+When all Phase 1 subagents return DONE, **dispatch one more subagent** to
+wire the slots together. Without this step the swarm produces N disjoint
+subsystem modules and a half-empty entry point — the user-visible app
+loads but doesn't run end-to-end.
+
+For each plan, the integration agent:
+
+- Owns a separate `[slot: integration]` (or similar) — reserved by you,
+  writes typically `<root>/main.js` (or `cmd/<app>/main.go`, etc.) plus
+  any shared bus / event-router glue
+- Imports from the per-slot subsystems and wires their public APIs
+- Does an end-to-end smoke test (loads the page, runs the binary, etc.)
+
+Dispatch protocol is identical to Step 4 (a `bones swarm join` /
+`commit` / `close` agent). Wait for its DONE before proceeding.
+
+## Step 7: Completion
+
+When the integration agent returns:
+
+1. Verify the hub absorbed every slot's work:
 
    ```
-   fossil timeline --type ci -R .orchestrator/hub.fossil --limit <N>
+   fossil timeline -t ci -R .orchestrator/hub.fossil --limit <N>
    ```
 
-2. Print a summary: slots completed, tasks per slot, fork retries (from
-   span data if available), unrecoverable conflicts.
+   You should see one commit per `bones swarm commit` invocation across
+   all slots plus the integration agent's commits.
 
-3. (v2 stub for now) Log "PR generation skipped — implement in v2".
+2. Materialize the merged tip into the host project's working tree
+   (per ADR 0024). Run from the project root (where `.fslckout` lives):
+
+   ```
+   ROOT="$(git rev-parse --show-toplevel)"
+   (cd "$ROOT" && fossil update && git status)
+   ```
+
+3. Print a summary: slots completed, tasks per slot, integration
+   commits, any fan-in conflicts, peek URL the user can revisit.
+
+4. Tell the user: "Swarm complete. Browse the timeline with `bones peek`,
+   review the working-tree changes with `git diff`, stage the files you
+   want with `git add -u` (modified) or `git add <paths>` (specific),
+   then `git commit -m '...' && git push`."
 
 The hub itself stays running across the session — Stop hook will tear it
 down.
 
 ## Failure modes
 
-- Plan validation fails: report violations, stop.
-- Hub not reachable after bootstrap: print bootstrap log, stop.
-- Subagent dispatch fails (Task tool error): retry once; if still failing,
-  report and stop.
-- Subagent surfaces ErrConflictForked: report; do not auto-respawn.
+- **Plan validation fails:** report violations, stop.
+- **Hub not reachable after bootstrap:** print bootstrap log, stop.
+- **Subagent dispatch fails (Task tool error):** retry once; if still
+  failing, report and stop.
+- **Subagent surfaces fork on `bones swarm commit`:** the planner
+  partitioning is wrong. Stop; do not auto-respawn.
+- **`bones swarm status` shows a stale slot** (last_renewed >5 min ago,
+  no DONE return from subagent): the leaf may have crashed. Run
+  `bones swarm close --slot=<name> --result=fail` to clean up the
+  session record, then either redispatch or surface to the user.
 
-## What this skill does NOT do (v2 work)
+## Why this skill uses `bones swarm` instead of raw fossil
 
-- GitHub PR creation
+Earlier versions of this skill embedded `fossil add` / `fossil commit` /
+`fossil up trunk` literals in subagent prompts. That worked in
+serial-agent demos but broke under concurrent slots (the `fossil up`
+between own commits silently dropped files when sibling slots forked
+trunk — see `docs/code-review/2026-04-28-swarm-demo-retro.md`). The
+`bones swarm` verbs (ADR 0028) wrap the substrate so an agent never
+calls `fossil up` itself; concurrent forks become invisible to the
+slot's lineage and surface only at fan-in time.
+
+## What this skill does NOT do (future work)
+
+- Auto git-add/commit/push (user runs these after Step 7)
+- GitHub PR creation (user runs `gh pr create` after committing)
 - Remote-harness subagents (multi-cloud)
 - Auto-replan on conflict
 - Multi-session hub coordination beyond persistence
+- `bones swarm fan-in` — currently the integration agent is just a
+  Phase 2 dispatch; a dedicated verb that auto-merges open leaves is
+  future work
