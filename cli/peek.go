@@ -23,7 +23,7 @@ import (
 // shells out to the canonical `fossil ui` for that.
 type PeekCmd struct {
 	Port int    `name:"port" help:"bind the UI on this port (default: fossil chooses)"`
-	Page string `name:"page" default:"timeline?y=ci&n=50" help:"fossil page to land on; e.g. 'timeline', 'brlist', 'dir'"`
+	Page string `name:"page" default:"timeline?y=ci&n=50" help:"fossil page (e.g. timeline)"`
 }
 
 func (c *PeekCmd) Run(g *libfossilcli.Globals) error {
