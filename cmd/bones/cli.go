@@ -15,6 +15,7 @@ type CLI struct {
 	// Daily.
 	Up    bonescli.UpCmd    `cmd:"" group:"daily" help:"Bootstrap workspace, scaffold, leaf, hub"`
 	Tasks bonescli.TasksCmd `cmd:"" group:"daily" help:"Inspect and mutate runtime agent tasks"`
+	Swarm bonescli.SwarmCmd `cmd:"" group:"daily" help:"Run as a slot-shaped swarm participant"`
 
 	// Repository.
 	Repo libfossilcli.RepoCmd `cmd:"" group:"repo" help:"Fossil repository operations"`
