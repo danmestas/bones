@@ -38,3 +38,9 @@ go.work.sum
 # Local scratch — code reviews and implementation plans (ephemeral, per-session)
 docs/code-review/
 docs/plans/
+
+# Hugo build artifacts (docs site)
+docs/site/public/
+docs/site/resources/
+docs/site/.hugo_build.lock
+docs/site/_vendor/
