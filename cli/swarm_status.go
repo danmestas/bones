@@ -15,9 +15,18 @@ import (
 	"github.com/danmestas/bones/internal/workspace"
 )
 
+// activeThresholdSec is the seconds-since-LastRenewed cutoff between
+// "active" and "stale" sessions. Sessions younger than this are
+// treated as alive; older ones are stale candidates for `bones doctor`
+// to flag. Mirrors the 90s heartbeat-skew window used elsewhere in
+// the codebase.
+const activeThresholdSec = 90
+
 // SwarmStatusCmd lists every active swarm session in the workspace.
-// Output combines KV state with a host-local PID liveness probe so a
-// crashed leaf surfaces as DEAD even before the bucket TTL evicts it.
+// Output is derived purely from KV state — there is no per-process
+// liveness probe because every swarm verb is a fresh CLI invocation
+// whose pid dies at end of verb. LastRenewed is the canonical signal:
+// active = renewed within activeThresholdSec, stale = older.
 type SwarmStatusCmd struct {
 	JSON bool `name:"json" help:"emit JSON"`
 }
@@ -67,10 +76,15 @@ func (c *SwarmStatusCmd) run(ctx context.Context, info workspace.Info) error {
 
 // buildStatusRows attaches a state label and a stale-seconds counter
 // to each session. State derivation:
-//   - "active" — last_renewed within 90s of now AND (cross-host OR pid alive)
-//   - "stale"  — older renewal but not yet TTL'd
-//   - "dead"   — pid dead on this host
-//   - "remote" — session lives on another host
+//   - "active"        — last_renewed within activeThresholdSec on this host
+//   - "stale"         — older than activeThresholdSec on this host
+//   - "remote"        — session lives on another host, recently renewed
+//   - "remote-stale"  — session lives on another host, last renewal old
+//
+// Note: there is no "dead" state. The Phase 1 contract is "every swarm
+// verb is its own CLI invocation," so the recorded pid is always
+// dead by the time a sibling verb reads the record. LastRenewed is
+// the canonical signal.
 func buildStatusRows(sessions []swarm.Session, host string, now time.Time) []statusRow {
 	out := make([]statusRow, 0, len(sessions))
 	for _, s := range sessions {
@@ -92,17 +106,13 @@ func buildStatusRows(sessions []swarm.Session, host string, now time.Time) []sta
 }
 
 func classifyState(s swarm.Session, host string, staleSec int64) string {
-	const activeThreshold = 90 // seconds since last renewal
 	if s.Host != host {
-		if staleSec > activeThreshold {
+		if staleSec > activeThresholdSec {
 			return "remote-stale"
 		}
 		return "remote"
 	}
-	if s.LeafPID > 0 && !pidAlive(s.LeafPID) {
-		return "dead"
-	}
-	if staleSec > activeThreshold {
+	if staleSec > activeThresholdSec {
 		return "stale"
 	}
 	return "active"

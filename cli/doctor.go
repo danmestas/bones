@@ -78,7 +78,6 @@ func (c *DoctorCmd) runSwarmReport() error {
 	host, _ := os.Hostname()
 	stale := 0
 	remote := 0
-	dead := 0
 	for _, s := range sessions {
 		state := classifySwarmSession(s, host)
 		if state == "stale" || state == "remote-stale" {
@@ -87,17 +86,14 @@ func (c *DoctorCmd) runSwarmReport() error {
 		if state == "remote" {
 			remote++
 		}
-		if state == "dead" {
-			dead++
-		}
-		fmt.Printf("  %-6s  slot=%-12s task=%s host=%s pid=%d\n",
-			labelFor(state), s.Slot, truncateID(s.TaskID, 8), s.Host, s.LeafPID)
+		fmt.Printf("  %-6s  slot=%-12s task=%s host=%s\n",
+			labelFor(state), s.Slot, truncateID(s.TaskID, 8), s.Host)
 	}
-	if stale+remote+dead == 0 {
+	if stale+remote == 0 {
 		fmt.Printf("  OK    %d active session(s)\n", len(sessions))
 	} else {
-		fmt.Printf("  NOTE  %d active, %d remote, %d stale, %d dead\n",
-			len(sessions)-stale-remote-dead, remote, stale, dead)
+		fmt.Printf("  NOTE  %d active, %d remote, %d stale\n",
+			len(sessions)-stale-remote, remote, stale)
 	}
 	return nil
 }
@@ -118,8 +114,6 @@ func labelFor(state string) string {
 		return "OK"
 	case "stale", "remote-stale":
 		return "WARN"
-	case "dead":
-		return "FAIL"
 	}
 	return "INFO"
 }

@@ -139,6 +139,13 @@ func (c *SwarmJoinCmd) ensureSlotUser() error {
 // checkExistingSession enforces invariant "one live session per slot"
 // before opening a fresh leaf. Honors --force for recovery scenarios
 // where a previous join crashed leaving stale state.
+//
+// Liveness signal is LastRenewed, not LeafPID. Every swarm verb is a
+// fresh CLI invocation whose pid is already-dead by the time the next
+// verb reads the record, so a pid-alive probe always fails on local
+// records. LastRenewed is stamped at join and bumped on every commit;
+// a record younger than the active threshold means an agent is
+// actively working the slot.
 func (c *SwarmJoinCmd) checkExistingSession(
 	ctx context.Context, mgr *swarm.Manager,
 ) error {
@@ -150,19 +157,20 @@ func (c *SwarmJoinCmd) checkExistingSession(
 		return fmt.Errorf("read existing session: %w", err)
 	}
 	host, _ := os.Hostname()
+	staleSec := int64(timeNow().Sub(existing.LastRenewed).Seconds())
 	if !c.ForceTakeover {
 		switch {
-		case existing.Host == host && existing.LeafPID > 0 && pidAlive(existing.LeafPID):
+		case existing.Host == host && staleSec <= activeThresholdSec:
 			return fmt.Errorf(
 				"slot %q already has a live session on this host"+
-					" (pid %d) — pass --force to take over",
-				c.Slot, existing.LeafPID,
+					" (renewed %ds ago) — pass --force to take over",
+				c.Slot, staleSec,
 			)
 		case existing.Host != host:
 			return fmt.Errorf(
-				"slot %q is owned by host %q (pid %d) — refusing"+
-					" to take over; pass --force on the owning host",
-				c.Slot, existing.Host, existing.LeafPID,
+				"slot %q is owned by host %q — refusing to take over;"+
+					" pass --force on the owning host",
+				c.Slot, existing.Host,
 			)
 		}
 	}
