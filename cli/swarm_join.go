@@ -88,7 +88,7 @@ func (c *SwarmJoinCmd) run(ctx context.Context, info workspace.Info) error {
 	// simplicity; subsequent commit/close re-take the claim each
 	// time. ADR 0028 §"Process lifecycle" outlines the future
 	// detached-leaf design that would change this.
-	if err := c.writeSession(ctx, mgr, info); err != nil {
+	if err := c.writeSession(ctx, mgr, info, c.resolvedHubURL()); err != nil {
 		_ = claim.Release()
 		_ = leaf.Stop()
 		return err
@@ -139,6 +139,13 @@ func (c *SwarmJoinCmd) ensureSlotUser() error {
 // checkExistingSession enforces invariant "one live session per slot"
 // before opening a fresh leaf. Honors --force for recovery scenarios
 // where a previous join crashed leaving stale state.
+//
+// Liveness signal is LastRenewed, not LeafPID. Every swarm verb is a
+// fresh CLI invocation whose pid is already-dead by the time the next
+// verb reads the record, so a pid-alive probe always fails on local
+// records. LastRenewed is stamped at join and bumped on every commit;
+// a record younger than the active threshold means an agent is
+// actively working the slot.
 func (c *SwarmJoinCmd) checkExistingSession(
 	ctx context.Context, mgr *swarm.Manager,
 ) error {
@@ -150,19 +157,20 @@ func (c *SwarmJoinCmd) checkExistingSession(
 		return fmt.Errorf("read existing session: %w", err)
 	}
 	host, _ := os.Hostname()
+	staleSec := int64(timeNow().Sub(existing.LastRenewed).Seconds())
 	if !c.ForceTakeover {
 		switch {
-		case existing.Host == host && existing.LeafPID > 0 && pidAlive(existing.LeafPID):
+		case existing.Host == host && staleSec <= activeThresholdSec:
 			return fmt.Errorf(
 				"slot %q already has a live session on this host"+
-					" (pid %d) — pass --force to take over",
-				c.Slot, existing.LeafPID,
+					" (renewed %ds ago) — pass --force to take over",
+				c.Slot, staleSec,
 			)
 		case existing.Host != host:
 			return fmt.Errorf(
-				"slot %q is owned by host %q (pid %d) — refusing"+
-					" to take over; pass --force on the owning host",
-				c.Slot, existing.Host, existing.LeafPID,
+				"slot %q is owned by host %q — refusing to take over;"+
+					" pass --force on the owning host",
+				c.Slot, existing.Host,
 			)
 		}
 	}
@@ -170,6 +178,16 @@ func (c *SwarmJoinCmd) checkExistingSession(
 		return fmt.Errorf("clear stale session: %w", err)
 	}
 	return nil
+}
+
+// resolvedHubURL returns the configured hub URL or the package
+// default if the flag was unset. Pulled into a helper so writeSession
+// stamps the same value openSwarmLeaf used.
+func (c *SwarmJoinCmd) resolvedHubURL() string {
+	if c.HubURL != "" {
+		return c.HubURL
+	}
+	return defaultHubFossilURL
 }
 
 // openSwarmLeaf opens the per-slot leaf rooted at the workspace's
@@ -187,10 +205,7 @@ func (c *SwarmJoinCmd) checkExistingSession(
 func (c *SwarmJoinCmd) openSwarmLeaf(
 	ctx context.Context, info workspace.Info,
 ) (*coord.Leaf, error) {
-	hubURL := c.HubURL
-	if hubURL == "" {
-		hubURL = defaultHubFossilURL
-	}
+	hubURL := c.resolvedHubURL()
 	swarmRoot := filepath.Join(info.WorkspaceDir, ".bones", "swarm")
 	if err := os.MkdirAll(swarmRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir swarm root: %w", err)
@@ -219,7 +234,7 @@ func (c *SwarmJoinCmd) openSwarmLeaf(
 }
 
 func (c *SwarmJoinCmd) writeSession(
-	ctx context.Context, mgr *swarm.Manager, info workspace.Info,
+	ctx context.Context, mgr *swarm.Manager, info workspace.Info, hubURL string,
 ) error {
 	host, _ := os.Hostname()
 	now := timeNow()
@@ -229,6 +244,7 @@ func (c *SwarmJoinCmd) writeSession(
 		AgentID:     c.slotAgentID(),
 		Host:        host,
 		LeafPID:     os.Getpid(),
+		HubURL:      hubURL,
 		StartedAt:   now,
 		LastRenewed: now,
 	}

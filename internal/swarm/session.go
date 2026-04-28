@@ -58,10 +58,21 @@ type Session struct {
 	// than try to manage a remote leaf process.
 	Host string `json:"host"`
 
-	// LeafPID is the host-local PID of the leaf process. Only
-	// meaningful on the matching Host. Probed via os.FindProcess +
-	// signal 0 to detect crashes.
+	// LeafPID is the host-local PID of the bones CLI process that
+	// wrote this record at join time. Informational only — every
+	// swarm verb is its own short-lived CLI invocation, so this PID
+	// is already-dead by the time any later verb reads it. Kept as a
+	// debugging crumb (a pid that was alive at join means the join
+	// did happen on this host) but NOT a liveness signal; use
+	// LastRenewed for active/stale classification instead.
 	LeafPID int `json:"leaf_pid"`
+
+	// HubURL is the hub fossil HTTP URL recorded at join time. Later
+	// verbs read this so they can post-commit push the slot's
+	// leaf.fossil to the hub via /xfer without re-deriving the URL
+	// from a flag. Empty on records written by older clients;
+	// callers fall back to the join-flag default.
+	HubURL string `json:"hub_url,omitempty"`
 
 	// StartedAt is when this session record was first written.
 	// Immutable once set; later renewals only touch LastRenewed.
@@ -69,6 +80,8 @@ type Session struct {
 
 	// LastRenewed is updated on every `swarm commit` (which heartbeats
 	// the session) and used by `bones doctor` to flag stale entries.
+	// This is the canonical active/stale signal — see LeafPID for the
+	// "why we don't use the pid" discussion.
 	LastRenewed time.Time `json:"last_renewed"`
 }
 

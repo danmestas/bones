@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/danmestas/libfossil"
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
 	"github.com/danmestas/bones/internal/coord"
@@ -59,11 +60,20 @@ func (c *SwarmCommitCmd) run(ctx context.Context, info workspace.Info) error {
 	if err := c.assertSessionLocal(sess, host); err != nil {
 		return err
 	}
-	leaf, err := c.openLeafForCommit(ctx, info, slot)
+	hubURL := c.resolveHubURL(sess)
+	leaf, err := c.openLeafForCommit(ctx, info, slot, hubURL)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = leaf.Stop() }()
+	// leafStopped tracks whether the explicit Stop below ran so the
+	// defer doesn't call it twice (Agent.Stop is not idempotent on
+	// double-close).
+	leafStopped := false
+	defer func() {
+		if !leafStopped {
+			_ = leaf.Stop()
+		}
+	}()
 
 	files, err := c.gatherFiles(info, slot)
 	if err != nil {
@@ -72,6 +82,29 @@ func (c *SwarmCommitCmd) run(ctx context.Context, info workspace.Info) error {
 	uuid, err := c.commitViaLeaf(ctx, leaf, sess.TaskID, files)
 	if err != nil {
 		return err
+	}
+	// Stop the leaf BEFORE pushing so the agent's libfossil.Repo
+	// handle is closed; pushSlotToHub then opens its own handle on
+	// leaf.fossil cleanly. The Leaf.Commit above broadcasts a
+	// fossil-sync NATS announce over the workspace leaf's NATS
+	// connection — but the hub's xfer subscriber lives on a
+	// separate NATS deployment, so the commit lands locally in
+	// <swarm>/<slot>/leaf.fossil only. Push it explicitly to the
+	// hub via HTTP /xfer here so `bones peek` and the hub timeline
+	// see the commit. Soft-fail: if the hub is unreachable,
+	// stderr-warn but don't roll back the local commit.
+	_ = leaf.Stop()
+	leafStopped = true
+	if res, perr := pushSlotToHub(ctx, info.WorkspaceDir, slot, sess.AgentID, hubURL); perr != nil {
+		fmt.Fprintf(os.Stderr,
+			"swarm commit: warning: push to hub %s failed: %v\n",
+			hubURL, perr,
+		)
+	} else if res != nil {
+		fmt.Fprintf(os.Stderr,
+			"swarm commit: pushed to hub %s rounds=%d files_sent=%d bytes_sent=%d\n",
+			hubURL, res.Rounds, res.FilesSent, res.BytesSent,
+		)
 	}
 	if err := c.renewSession(ctx, mgr, sess, rev); err != nil {
 		// Commit succeeded; failing to extend the heartbeat is a
@@ -85,6 +118,21 @@ func (c *SwarmCommitCmd) run(ctx context.Context, info workspace.Info) error {
 		"swarm commit: slot=%s task=%s files=%d\n",
 		slot, sess.TaskID, len(files))
 	return nil
+}
+
+// resolveHubURL picks the hub URL to use for this commit. Precedence:
+// explicit --hub-url flag > recorded session.HubURL > package default.
+// The session-recorded URL is the canonical source — it was captured
+// at join time and matches the leaf's clone origin. The flag is a
+// recovery escape hatch for sessions written before HubURL existed.
+func (c *SwarmCommitCmd) resolveHubURL(sess swarm.Session) string {
+	if c.HubURL != "" {
+		return c.HubURL
+	}
+	if sess.HubURL != "" {
+		return sess.HubURL
+	}
+	return defaultHubFossilURL
 }
 
 // assertSessionLocal returns an error if the session's host does not
@@ -111,14 +159,11 @@ func (c *SwarmCommitCmd) assertSessionLocal(sess swarm.Session, host string) err
 // openLeafForCommit re-attaches to the slot's already-cloned
 // leaf.fossil. coord.OpenLeaf is idempotent on the clone (skips when
 // leaf.fossil exists), so this resumes the existing slot rather than
-// double-cloning.
+// double-cloning. hubURL is resolved by the caller from --hub-url /
+// session.HubURL / package default in that order.
 func (c *SwarmCommitCmd) openLeafForCommit(
-	ctx context.Context, info workspace.Info, slot string,
+	ctx context.Context, info workspace.Info, slot, hubURL string,
 ) (*coord.Leaf, error) {
-	hubURL := c.HubURL
-	if hubURL == "" {
-		hubURL = defaultHubFossilURL
-	}
 	swarmRoot := filepath.Join(info.WorkspaceDir, ".bones", "swarm")
 	leaf, err := coord.OpenLeaf(ctx, coord.LeafConfig{
 		HubAddrs: coord.HubAddrs{
@@ -212,4 +257,50 @@ func (c *SwarmCommitCmd) renewSession(
 		return err
 	}
 	return nil
+}
+
+// pushSlotToHub HTTP-pushes the slot's leaf.fossil to the hub via
+// libfossil's /xfer transport. Mirrors what raw `fossil sync push`
+// does and what the original swarm-demo used; bones swarm wraps it so
+// commits made through `bones swarm commit` propagate to hub.fossil
+// without depending on the workspace leaf's NATS announce reaching
+// the hub's NATS subscriber (the two NATS deployments are separate by
+// design — see ADR 0028 retro for the bug this fixes).
+//
+// The fossilUser is the hub login the push authenticates as. Slot
+// users (created at join time by ensureSlotUser) have caps that
+// include "i" (check-in), so the hub accepts the push. Anonymous
+// "nobody" pushes would be rejected because hubs only grant "g" /
+// "h" / "o" by default — checkin requires authenticated identity.
+//
+// Errors propagate; the caller decides whether a hub-unreachable
+// failure is fatal (commit success keeps the data locally either way).
+func pushSlotToHub(
+	ctx context.Context, workspaceDir, slot, fossilUser, hubURL string,
+) (*libfossil.SyncResult, error) {
+	leafRepoPath := filepath.Join(swarm.SlotDir(workspaceDir, slot), "leaf.fossil")
+	leafRepo, err := libfossil.Open(leafRepoPath)
+	if err != nil {
+		return nil, fmt.Errorf("open leaf repo: %w", err)
+	}
+	defer func() { _ = leafRepo.Close() }()
+	// project-code is required for the login-card nonce; libfossil
+	// panics in computeLogin if it's blank. Read it from the cloned
+	// leaf repo (same code as the hub since clone copies the
+	// project-code config row).
+	projectCode, err := leafRepo.Config("project-code")
+	if err != nil {
+		return nil, fmt.Errorf("read project-code: %w", err)
+	}
+	transport := libfossil.NewHTTPTransport(hubURL)
+	res, err := leafRepo.Sync(ctx, transport, libfossil.SyncOpts{
+		Push:        true,
+		Pull:        false,
+		User:        fossilUser,
+		ProjectCode: projectCode,
+	})
+	if err != nil {
+		return res, fmt.Errorf("sync push: %w", err)
+	}
+	return res, nil
 }
