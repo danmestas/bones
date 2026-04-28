@@ -16,8 +16,10 @@ import (
 //
 // Subcommands:
 //
-//	hub start [--detach]   bring the hub up
-//	hub stop               tear it down
+//	hub start [--detach]    bring the hub up
+//	hub stop                tear it down
+//	hub user add <login>    pre-create a fossil user in the hub repo
+//	hub user list           list fossil users in the hub repo
 //
 // The shipped scripts under .orchestrator/scripts/ are thin shims around
 // these subcommands, kept for backward compatibility with .claude/settings.json
@@ -25,6 +27,7 @@ import (
 type HubCmd struct {
 	Start HubStartCmd `cmd:"" help:"Start the embedded Fossil hub + NATS server"`
 	Stop  HubStopCmd  `cmd:"" help:"Stop the embedded Fossil hub + NATS server"`
+	User  HubUserCmd  `cmd:"" help:"Manage fossil users in the hub repo"`
 }
 
 // HubStartCmd wires `bones hub start` flags to hub.Start.
