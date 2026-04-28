@@ -22,7 +22,8 @@ import (
 // /xfer for sync) does not implement the rich Fossil web UI; peek
 // shells out to the canonical `fossil ui` for that.
 type PeekCmd struct {
-	Port int `name:"port" help:"bind the UI on this port (default: fossil chooses)"`
+	Port int    `name:"port" help:"bind the UI on this port (default: fossil chooses)"`
+	Page string `name:"page" default:"timeline?y=ci&n=50" help:"fossil page (e.g. timeline)"`
 }
 
 func (c *PeekCmd) Run(g *libfossilcli.Globals) error {
@@ -57,6 +58,9 @@ func (c *PeekCmd) Run(g *libfossilcli.Globals) error {
 	args := []string{"ui", hubRepo}
 	if c.Port > 0 {
 		args = append(args, "--port", strconv.Itoa(c.Port))
+	}
+	if c.Page != "" {
+		args = append(args, "--page", c.Page)
 	}
 
 	fmt.Printf("peek: %s ui %s\n", fossilBin, hubRepo)
