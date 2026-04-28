@@ -40,9 +40,9 @@ func TestCLI_Watch_Smoke(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Create a task — watch should emit a "created" line.
-	_, stderr, code := runCmd(t, bonesBin, dir, "tasks", "add", "watch-smoke-task")
+	_, stderr, code := runCmd(t, bonesBin, dir, "tasks", "create", "watch-smoke-task")
 	if code != 0 {
-		t.Fatalf("add failed code=%d stderr=%s", code, stderr)
+		t.Fatalf("create failed code=%d stderr=%s", code, stderr)
 	}
 
 	// Allow watch to receive and print the event.

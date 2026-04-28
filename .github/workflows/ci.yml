@@ -63,4 +63,8 @@ jobs:
 
       - name: test (-tags=otel)
         working-directory: bones
-        run: go test -tags=otel ./...
+        # Match `make check`'s race target: -short skips integration tests
+        # that require a live leaf binary on PATH. The default 'make check'
+        # step above already covers them via 'go test -race -short ./...';
+        # this lane is only here to keep the otel-tagged paths from rotting.
+        run: go test -tags=otel -short ./...
