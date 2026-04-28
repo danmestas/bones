@@ -28,6 +28,7 @@ type CLI struct {
 
 	// bones orchestrator (bones/cli).
 	Orchestrator bonescli.OrchestratorCmd `cmd:"" help:"Install orchestrator scaffolding"`
+	Hub          bonescli.HubCmd          `cmd:"" help:"Manage the embedded Fossil + NATS hub"`
 	ValidatePlan bonescli.ValidatePlanCmd `cmd:"" name:"validate-plan" help:"Validate plan"`
 
 	// Workspace task operations (bones/cli).
