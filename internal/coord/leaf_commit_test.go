@@ -156,6 +156,74 @@ func TestLeaf_CommitDivergenceBranch(t *testing.T) {
 	}
 }
 
+// TestLeaf_CommitFileNameOverride pins the contract that File.Name,
+// when set, is the libfossil file name in the resulting manifest.
+// Path remains the holds-gate key (must be absolute), but Name is
+// what shows up under "F" cards / fossil ls. Without this override
+// every slot-style caller would see commits land at
+// "<workspace-prefix>/<rel>" inside the repo because Leaf.Commit
+// would derive the file name by stripping a single leading slash off
+// the absolute hold path.
+func TestLeaf_CommitFileNameOverride(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	hubDir := t.TempDir()
+	hub, err := OpenHub(ctx, hubDir, freePort(t))
+	if err != nil {
+		t.Fatalf("OpenHub: %v", err)
+	}
+	t.Cleanup(func() { _ = hub.Stop() })
+
+	l, err := OpenLeaf(ctx, LeafConfig{Hub: hub, Workdir: t.TempDir(), SlotID: "slot-N"})
+	if err != nil {
+		t.Fatalf("OpenLeaf: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Stop() })
+
+	// Path mimics a swarm-style absolute holds key
+	// ("/tmp/ws/.bones/swarm/slot-N/wt/src/foo.go" — but here we just
+	// use a path the holds-gate accepts). Name is the repo-relative
+	// path callers want libfossil to record.
+	holdPath := "/slot-N/abs/with/prefix/src/foo.go"
+	repoName := "src/foo.go"
+
+	taskID, err := l.OpenTask(ctx, "name-override", []string{holdPath})
+	if err != nil {
+		t.Fatalf("OpenTask: %v", err)
+	}
+	cl, err := l.Claim(ctx, taskID)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	t.Cleanup(func() { _ = cl.Release() })
+
+	uuid, err := l.Commit(ctx, cl, []File{
+		{Path: holdPath, Name: repoName, Content: []byte("body")},
+	})
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	repo := l.agent.Repo()
+	rid, err := repo.ResolveVersion(uuid)
+	if err != nil {
+		t.Fatalf("ResolveVersion: %v", err)
+	}
+	entries, err := repo.ListFiles(rid)
+	if err != nil {
+		t.Fatalf("ListFiles: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("ListFiles: got %d entries, want 1: %+v", len(entries), entries)
+	}
+	if entries[0].Name != repoName {
+		t.Fatalf(
+			"file name in manifest: got %q, want %q (Name override should win over Path-derived)",
+			entries[0].Name, repoName,
+		)
+	}
+}
+
 // assertCommitOnHub opens hub.fossil read-only and checks that the
 // manifest with the given UUID exists in the blob table. The hub's
 // running agent owns the write side; a separate read-only handle is

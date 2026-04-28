@@ -409,8 +409,12 @@ func (l *Leaf) Commit(
 	toCommit := make([]libfossil.FileToCommit, 0, len(files))
 	for _, f := range files {
 		assert.NotEmpty(f.Path, "coord.Leaf.Commit: file.Path is empty")
+		name := f.Name
+		if name == "" {
+			name = normalizeLeadingSlash(f.Path)
+		}
 		toCommit = append(toCommit, libfossil.FileToCommit{
-			Name:    normalizeLeadingSlash(f.Path),
+			Name:    name,
 			Content: f.Content,
 		})
 	}
