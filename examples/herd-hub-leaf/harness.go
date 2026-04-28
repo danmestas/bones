@@ -29,8 +29,8 @@ import (
 
 	"github.com/danmestas/libfossil"
 
-	"github.com/danmestas/bones/coord"
 	"github.com/danmestas/bones/internal/assert"
+	"github.com/danmestas/bones/internal/coord"
 )
 
 // Config is the operator-supplied trial configuration.

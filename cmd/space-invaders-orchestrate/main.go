@@ -21,7 +21,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/danmestas/bones/coord"
+	"github.com/danmestas/bones/internal/coord"
 	"github.com/danmestas/libfossil"
 	_ "github.com/danmestas/libfossil/db/driver/modernc"
 )

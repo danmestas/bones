@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danmestas/bones/coord"
+	"github.com/danmestas/bones/internal/coord"
 	"github.com/danmestas/bones/internal/tasks"
 )
 

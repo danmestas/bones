@@ -10,7 +10,7 @@ import (
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
-	"github.com/danmestas/bones/coord"
+	"github.com/danmestas/bones/internal/coord"
 	"github.com/danmestas/bones/internal/dispatch"
 	"github.com/danmestas/bones/internal/workspace"
 )

@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/danmestas/bones/coord"
+	"github.com/danmestas/bones/internal/coord"
 )
 
 const defaultAnthropicVersion = "2023-06-01"

@@ -36,8 +36,8 @@ import (
 
 	"github.com/danmestas/libfossil"
 
-	"github.com/danmestas/bones/coord"
 	"github.com/danmestas/bones/internal/assert"
+	"github.com/danmestas/bones/internal/coord"
 )
 
 // runResult captures the cross-agent invariants the test asserts on.

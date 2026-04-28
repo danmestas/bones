@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/danmestas/bones/coord"
+	"github.com/danmestas/bones/internal/coord"
 )
 
 func WaitWorkerAbsent(

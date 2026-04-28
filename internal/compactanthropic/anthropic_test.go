@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/bones/coord"
+	"github.com/danmestas/bones/internal/coord"
 )
 
 func TestSummarize_SendsRequestAndReturnsText(t *testing.T) {
