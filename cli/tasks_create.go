@@ -18,6 +18,7 @@ type TasksCreateCmd struct {
 	Files      string   `name:"files" help:"comma-separated file list"`
 	Parent     string   `name:"parent" help:"parent task id"`
 	DeferUntil string   `name:"defer-until" help:"RFC3339 time"`
+	Slot       string   `name:"slot" help:"slot name; stamps Context[slot]"`
 	Context    []string `name:"context" help:"key=value (repeatable)" sep:"none"`
 	JSON       bool     `name:"json" help:"emit JSON"`
 }
@@ -45,6 +46,13 @@ func (c *TasksCreateCmd) Run(g *libfossilcli.Globals) error {
 			return err
 		}
 		now := time.Now().UTC()
+		ctxMap := applyContext(nil, c.Context)
+		if c.Slot != "" {
+			if ctxMap == nil {
+				ctxMap = map[string]string{}
+			}
+			ctxMap["slot"] = c.Slot
+		}
 		t := tasks.Task{
 			ID:            uuid.NewString(),
 			Title:         c.Title,
@@ -52,7 +60,7 @@ func (c *TasksCreateCmd) Run(g *libfossilcli.Globals) error {
 			Files:         splitFiles(c.Files),
 			Parent:        c.Parent,
 			DeferUntil:    parsedDeferUntil,
-			Context:       applyContext(nil, c.Context),
+			Context:       ctxMap,
 			CreatedAt:     now,
 			UpdatedAt:     now,
 			SchemaVersion: tasks.SchemaVersion,
