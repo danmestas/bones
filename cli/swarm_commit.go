@@ -227,6 +227,14 @@ func (c *SwarmCommitCmd) gatherFiles(info workspace.Info, slot string) ([]coord.
 // releases (the session record keeps the swarm hold across processes
 // on the bones-holds bucket — claim-release here only undoes the
 // re-claim we just took, not the underlying session ownership).
+//
+// Before Commit we also AnnounceHolds for every file's path, so
+// commits succeed even when the task was created with --slot=X but
+// no --files=. The slot owns its wt/ — files inside that dir are
+// commitable territory whether or not the task record listed them
+// up front. AnnounceHolds is idempotent for files this slot already
+// holds (e.g. via the task's pre-populated Files list at Claim
+// time), so this is safe to call unconditionally.
 func (c *SwarmCommitCmd) commitViaLeaf(
 	ctx context.Context, leaf *coord.Leaf, taskID string, files []coord.File,
 ) (string, error) {
@@ -235,6 +243,15 @@ func (c *SwarmCommitCmd) commitViaLeaf(
 		return "", fmt.Errorf("re-claim task %q: %w", taskID, err)
 	}
 	defer func() { _ = claim.Release() }()
+	paths := make([]string, 0, len(files))
+	for _, f := range files {
+		paths = append(paths, f.Path)
+	}
+	releaseHolds, err := leaf.AnnounceHolds(ctx, paths)
+	if err != nil {
+		return "", fmt.Errorf("announce holds: %w", err)
+	}
+	defer releaseHolds()
 	uuid, err := leaf.Commit(ctx, claim, files, coord.WithMessage(c.Message))
 	if err != nil {
 		return "", fmt.Errorf("leaf commit: %w", err)
