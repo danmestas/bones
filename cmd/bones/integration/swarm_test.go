@@ -349,7 +349,7 @@ func TestCLI_SwarmAutoDiscover(t *testing.T) {
 	// Populate wt/ with two files. Both untracked.
 	wt := filepath.Join(dir, ".bones", "swarm", slot, "wt")
 	files := map[string][]byte{
-		filepath.Join(wt, "out", "a.txt"):     []byte("first auto file\n"),
+		filepath.Join(wt, "out", "a.txt"):      []byte("first auto file\n"),
 		filepath.Join(wt, "out", "b", "c.txt"): []byte("second auto file\n"),
 	}
 	for path, content := range files {
