@@ -12,34 +12,29 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 
 	"github.com/danmestas/bones/internal/tasks"
+	"github.com/danmestas/bones/internal/telemetry"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
-// TasksCmd groups all `bones tasks <verb>` subcommands.
+// TasksCmd groups all `bones tasks <verb>` subcommands. The Hipp audit
+// folded ready/stale/orphans/preflight (plus the literal 'add' alias of
+// 'create') into 'list' filter flags; dispatch is hub-only and hidden.
 type TasksCmd struct {
-	Add       TasksCreateCmd    `cmd:"" help:"Alias for create"`
 	Create    TasksCreateCmd    `cmd:"" help:"Create a new task"`
 	List      TasksListCmd      `cmd:"" help:"List tasks"`
 	Show      TasksShowCmd      `cmd:"" help:"Show a task"`
 	Update    TasksUpdateCmd    `cmd:"" help:"Update a task"`
 	Claim     TasksClaimCmd     `cmd:"" help:"Claim a task"`
 	Close     TasksCloseCmd     `cmd:"" help:"Close a task"`
-	Ready     TasksReadyCmd     `cmd:"" help:"List tasks ready for claim"`
 	Watch     TasksWatchCmd     `cmd:"" help:"Stream task lifecycle events"`
 	Status    TasksStatusCmd    `cmd:"" help:"Snapshot of all tasks by status"`
 	Link      TasksLinkCmd      `cmd:"" help:"Link two tasks with an edge type"`
 	Prime     TasksPrimeCmd     `cmd:"" help:"Print agent-tasks context (prime)"`
-	Stale     TasksStaleCmd     `cmd:"" help:"List stale tasks"`
-	Orphans   TasksOrphansCmd   `cmd:"" help:"List orphaned (claimed by absent agent) tasks"`
-	Preflight TasksPreflightCmd `cmd:"" help:"Combined stale + orphans report"`
 	Compact   TasksCompactCmd   `cmd:"" help:"Compact closed tasks"`
 	Autoclaim TasksAutoclaimCmd `cmd:"" help:"Run one autoclaim tick"`
-	Dispatch  TasksDispatchCmd  `cmd:"" help:"Dispatch parent/worker"`
+	Dispatch  TasksDispatchCmd  `cmd:"" hidden:"" help:"Dispatch parent/worker (hub-only)"`
 	Aggregate TasksAggregateCmd `cmd:"" help:"Aggregate per-slot task summary"`
 }
 
@@ -106,32 +101,17 @@ func taskCLIError(err error) error {
 	return nil
 }
 
-var (
-	tracer = otel.Tracer("github.com/danmestas/bones/cli")
-	meter  = otel.Meter("github.com/danmestas/bones/cli")
-
-	opCounter  metric.Int64Counter
-	opDuration metric.Float64Histogram
-)
-
-func init() {
-	var err error
-	opCounter, err = meter.Int64Counter("agent_tasks.operations.total")
-	if err != nil {
-		panic(err)
-	}
-	opDuration, err = meter.Float64Histogram(
-		"agent_tasks.operation.duration.seconds",
-	)
-	if err != nil {
-		panic(err)
-	}
-}
-
-// runOp wraps op with a span, slog start/complete events, and op metrics.
+// runOp wraps op with a tracing span (via the telemetry seam) plus slog
+// start/complete events. The previous OTel meter-based op counters were
+// removed alongside the audit's seam migration: SigNoz endpoint is broken
+// (project memory: signoz-trial-blocker) and ADR 0022 marks the
+// observability trial as paused, so no consumer reads them today. If a
+// counter becomes load-bearing later, surface it through the telemetry
+// package's seam rather than reintroducing a direct OTel dependency here.
 func runOp(ctx context.Context, op string, fn func(context.Context) error) error {
-	ctx, span := tracer.Start(ctx, "agent_tasks."+op)
-	defer span.End()
+	ctx, end := telemetry.RecordCommand(ctx, "agent_tasks."+op,
+		telemetry.String("op", op),
+	)
 	start := time.Now()
 	slog.InfoContext(ctx, op+" start")
 
@@ -141,16 +121,10 @@ func runOp(ctx context.Context, op string, fn func(context.Context) error) error
 	if err != nil {
 		result = "error"
 	}
-	opCounter.Add(ctx, 1,
-		metric.WithAttributes(
-			attribute.String("op", op),
-			attribute.String("result", result),
-		))
-	opDuration.Record(ctx, time.Since(start).Seconds(),
-		metric.WithAttributes(attribute.String("op", op)))
 	slog.InfoContext(ctx, op+" complete",
 		"duration_ms", time.Since(start).Milliseconds(),
 		"result", result)
+	end(err)
 	return err
 }
 

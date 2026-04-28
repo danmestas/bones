@@ -14,12 +14,12 @@ func TestCLI_Status(t *testing.T) {
 	dir := newWorkspace(t)
 
 	// Seed a couple of tasks so backlog counts are non-trivial.
-	out, _, code := runCmd(t, bonesBin, dir, "tasks", "add", "status-task-one")
+	out, _, code := runCmd(t, bonesBin, dir, "tasks", "create", "status-task-one")
 	if code != 0 {
-		t.Fatalf("add failed code=%d", code)
+		t.Fatalf("create failed code=%d", code)
 	}
 	id1 := firstLine(out)
-	_, _, _ = runCmd(t, bonesBin, dir, "tasks", "add", "status-task-two")
+	_, _, _ = runCmd(t, bonesBin, dir, "tasks", "create", "status-task-two")
 
 	// Close one task to exercise closed count.
 	_, stderr, code := runCmd(t, bonesBin, dir, "tasks", "close", id1)

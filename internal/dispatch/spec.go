@@ -1,6 +1,6 @@
 package dispatch
 
-import "github.com/danmestas/bones/coord"
+import "github.com/danmestas/bones/internal/coord"
 
 type Spec struct {
 	TaskID        coord.TaskID

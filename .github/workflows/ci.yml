@@ -52,3 +52,19 @@ jobs:
       - name: make check
         working-directory: bones
         run: make check
+
+      # Phase 2 of the Hipp audit gates direct OTel use behind -tags=otel.
+      # Default builds must stay OTel-free (the seam in internal/telemetry
+      # collapses to a no-op); this lane proves the otel-tagged paths still
+      # compile and pass tests so the seam can't bit-rot.
+      - name: build (-tags=otel)
+        working-directory: bones
+        run: go build -tags=otel ./...
+
+      - name: test (-tags=otel)
+        working-directory: bones
+        # Match `make check`'s race target: -short skips integration tests
+        # that require a live leaf binary on PATH. The default 'make check'
+        # step above already covers them via 'go test -race -short ./...';
+        # this lane is only here to keep the otel-tagged paths from rotting.
+        run: go test -tags=otel -short ./...

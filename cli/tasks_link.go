@@ -8,7 +8,7 @@ import (
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
-	"github.com/danmestas/bones/coord"
+	"github.com/danmestas/bones/internal/coord"
 )
 
 // TasksLinkCmd links two tasks with a typed edge.

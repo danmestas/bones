@@ -16,7 +16,7 @@ Agents don't pick one or the other; they call into a single `coord.Coord` that f
 
 ## Workspace
 
-A workspace is the directory tree rooted at the `.agent-infra/` marker. `bones init` creates one (or rejoins from a descendant). It carries:
+A workspace is the directory tree rooted at the `.bones/` marker. `bones init` creates one (or rejoins from a descendant). Pre-rename `.agent-infra/` markers are silently migrated on first touch. It carries:
 
 - The leaf PID and log
 - The local Fossil repo (or a pointer to a sibling)

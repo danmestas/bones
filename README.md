@@ -14,6 +14,10 @@ git cleanup tax that multi-agent divergence imposes on branch-based VCS.
 
 ## Quickstart
 
+Prerequisites: only `git` and `bones` (built below) on `PATH`. The Fossil
+hub and NATS server are embedded in the `bones` binary and need no
+separate install.
+
 ```bash
 git clone https://github.com/danmestas/bones
 cd bones
@@ -24,7 +28,7 @@ make
 # One-command bootstrap: workspace + scaffold + bin/leaf + hub:
 bin/bones up
 # Add and inspect tasks:
-bin/bones tasks add "my first task" --files src/foo.go
+bin/bones tasks create "my first task" --files src/foo.go
 bin/bones tasks open
 bin/bones tasks status
 ```
@@ -34,7 +38,7 @@ Or use fine-grained control (`bones up` is equivalent to):
 ```bash
 bin/bones init
 bin/bones orchestrator
-bash .orchestrator/scripts/hub-bootstrap.sh
+bin/bones hub start --detach
 ```
 
 See `bin/bones --help` for the full subcommand list (`add`, `claim`,
@@ -246,7 +250,7 @@ NATS carries:
 
 ### Phase 4 — auto-init + CLI
 
-- `cmd/bones/` — walk up to find `.agent-infra/` marker or create one at
+- `cmd/bones/` — walk up to find `.bones/` marker or create one at
   the invocation directory; start (or join) a local leaf daemon; human-facing
   tasks subcommands (`list`, `claim`, `update`, `close`)
 - Decide: explicit `bones init` command vs silent walk-up
@@ -339,14 +343,15 @@ miswired.
 
 ### Getting started with `bones`
 
-`bones init` creates an `.agent-infra/` workspace and starts a local
+`bones init` creates a `.bones/` workspace and starts a local
 `leaf` daemon, or rejoins an existing workspace from any subdir.
+Pre-rename `.agent-infra/` workspaces auto-migrate on first touch.
 
 ```bash
 # Build the binary (leaves it at ./bin/bones):
 make bones
 
-# First time in a fresh directory — starts a leaf, writes .agent-infra/:
+# First time in a fresh directory — starts a leaf, writes .bones/:
 $ ./bin/bones init
 workspace=/path/to/dir
 agent_id=7c3d…
@@ -361,8 +366,8 @@ workspace=/path/to/dir
 
 The `leaf` binary must be on `PATH` (or `LEAF_BIN` set to its absolute
 path). Build it from EdgeSync with `cd ../EdgeSync && make leaf`. Leaf
-stdout/stderr lands in `.agent-infra/leaf.log`; the PID sits at
-`.agent-infra/leaf.pid`. Set `AGENT_INFRA_LOG=json` to switch
+stdout/stderr lands in `.bones/leaf.log`; the PID sits at
+`.bones/leaf.pid`. Set `AGENT_INFRA_LOG=json` to switch
 `bones`'s own logs to JSON.
 
 Release-time: each of the three repos (`bones`, `EdgeSync`,

@@ -20,7 +20,7 @@ func TestRepoGoFiles_Max100Columns(t *testing.T) {
 }
 
 func findGoLineLengthViolations(max int) ([]string, error) {
-	roots := []string{"cmd", "coord", "internal", "examples"}
+	roots := []string{"cmd", "internal", "examples"}
 	var out []string
 	for _, root := range roots {
 		err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {

@@ -20,7 +20,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/danmestas/bones/coord"
+	"github.com/danmestas/bones/internal/coord"
 	"github.com/danmestas/bones/internal/workspace"
 )
 

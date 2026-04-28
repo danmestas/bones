@@ -50,7 +50,7 @@ func ensureWorkspaceDir(cwd string) (string, error) {
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		return "", err
 	}
-	markerDir := filepath.Join(cwd, ".agent-infra")
+	markerDir := filepath.Join(cwd, ".bones")
 	if err := os.MkdirAll(markerDir, 0o755); err != nil {
 		return "", err
 	}
@@ -60,7 +60,7 @@ func ensureWorkspaceDir(cwd string) (string, error) {
 func findWorkspaceDir(dir string) string {
 	cur := dir
 	for {
-		if _, err := os.Stat(filepath.Join(cur, ".agent-infra")); err == nil {
+		if _, err := os.Stat(filepath.Join(cur, ".bones")); err == nil {
 			return cur
 		}
 		parent := filepath.Dir(cur)

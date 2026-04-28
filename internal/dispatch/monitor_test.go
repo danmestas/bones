@@ -9,7 +9,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/danmestas/bones/coord"
+	"github.com/danmestas/bones/internal/coord"
 	"github.com/danmestas/bones/internal/testutil/natstest"
 	"github.com/nats-io/nats.go"
 )

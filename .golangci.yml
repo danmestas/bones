@@ -17,6 +17,7 @@ linters:
   # Start from a clean slate: enable only what we explicitly list below.
   default: none
   enable:
+    - depguard      # substrate vs. domain layering (ADR 0025)
     - errcheck      # no unchecked errors
     - govet         # standard vet checks
     - staticcheck   # primary correctness linter (bundles gosimple, stylecheck, unused)
@@ -24,6 +25,27 @@ linters:
     - funlen        # function size cap
     - misspell      # common spelling mistakes
   settings:
+    depguard:
+      # ADR 0025: internal/coord is the substrate layer. It must not import
+      # the domain packages. The two exceptions below (internal/tasks and
+      # internal/holds) are pre-existing imports that ADR 0025 documents as
+      # follow-up work — redrawing the boundary is out of scope for the
+      # initial relocation. Adding new domain imports from substrate will
+      # break the build.
+      rules:
+        coord-substrate:
+          files:
+            - "**/internal/coord/**/*.go"
+          deny:
+            - pkg: github.com/danmestas/bones/internal/dispatch
+              desc: "substrate (internal/coord) must not import domain (internal/dispatch)"
+            - pkg: github.com/danmestas/bones/internal/autoclaim
+              desc: "substrate (internal/coord) must not import domain (internal/autoclaim)"
+            - pkg: github.com/danmestas/bones/internal/compactanthropic
+              desc: "substrate (internal/coord) must not import domain (internal/compactanthropic)"
+            # NOTE: internal/tasks and internal/holds are intentionally NOT
+            # listed here. ADR 0025 records them as a known violation pending
+            # follow-up; do not silently re-enable without a separate ADR.
     funlen:
       # TigerStyle: keep functions short. We cap by line count and deliberately
       # do not cap statements — a long expression shouldn't fail the build.

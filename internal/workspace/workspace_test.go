@@ -263,7 +263,7 @@ func TestInit_RollbackOnLeafFailure(t *testing.T) {
 	}
 	// Marker must be removed — no half-initialized state.
 	if _, err := os.Stat(filepath.Join(dir, markerDirName)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf(".agent-infra/ still exists after rollback: stat=%v", err)
+		t.Fatalf(".bones/ still exists after rollback: stat=%v", err)
 	}
 }
 

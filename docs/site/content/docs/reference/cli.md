@@ -37,26 +37,22 @@ The `bones` binary is a single Kong-driven entry point covering workspace setup,
 
 | Command | Purpose |
 |---|---|
-| `bones tasks add <title>` | Alias for `create` |
 | `bones tasks create <title>` | Create a new task |
-| `bones tasks list` | List tasks |
+| `bones tasks list` | List tasks (filters: `--ready`, `--stale=N`, `--orphans`, `--status=`, `--claimed-by=`, `--all`, `--json`) |
 | `bones tasks show <id>` | Show a task |
 | `bones tasks update <id>` | Update a task |
 | `bones tasks claim <id>` | Claim a task |
 | `bones tasks close <id>` | Close a task |
-| `bones tasks ready` | List tasks ready for claim |
 | `bones tasks watch` | Stream task lifecycle events |
 | `bones tasks status` | Snapshot of all tasks by status |
 | `bones tasks link <from> <to>` | Link two tasks with an edge type |
 | `bones tasks prime` | Print agent-tasks context (prime) |
-| `bones tasks stale` | List stale tasks |
-| `bones tasks orphans` | List orphaned (claimed by absent agent) tasks |
-| `bones tasks preflight` | Combined stale + orphans report |
 | `bones tasks compact` | Compact closed tasks |
 | `bones tasks autoclaim` | Run one autoclaim tick |
-| `bones tasks dispatch parent --task-id=ID` | Run dispatch parent |
-| `bones tasks dispatch worker --task-id=ID --task-thread=THREAD --worker-agent-id=ID` | Run dispatch worker |
 | `bones tasks aggregate` | Aggregate per-slot task summary |
+
+`bones tasks dispatch parent/worker` are hub-only verbs; they're hidden
+from `--help` and intended for invocation by the dispatch flow itself.
 
 ### Repository
 

@@ -4,17 +4,27 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
+	"time"
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
+	"github.com/danmestas/bones/internal/coord"
 	"github.com/danmestas/bones/internal/tasks"
+	"github.com/danmestas/bones/internal/workspace"
 )
 
-// TasksListCmd lists tasks.
+// TasksListCmd lists tasks. Filter flags compose: status → ready → stale →
+// orphans. --ready and --orphans require a coord session; --stale and the
+// others run from the in-memory task list only.
 type TasksListCmd struct {
 	All       bool   `name:"all" help:"include closed tasks"`
 	Status    string `name:"status" help:"open|claimed|closed"`
 	ClaimedBy string `name:"claimed-by" help:"agent id, or - for unclaimed"`
+	Ready     bool   `name:"ready" help:"only tasks ready to claim (open, unblocked, not deferred)"`
+	Stale     int    `name:"stale" help:"only tasks not updated in N days; 0 = off"`
+	Orphans   bool   `name:"orphans" help:"only claimed tasks whose claimer is offline"`
 	JSON      bool   `name:"json" help:"emit JSON"`
 }
 
@@ -46,19 +56,40 @@ func (c *TasksListCmd) Run(g *libfossilcli.Globals) error {
 		if err != nil {
 			return err
 		}
-		out := filterTasks(allTasks, c.All, filterStatus, c.ClaimedBy)
 
-		if c.JSON {
-			return emitJSON(os.Stdout, out)
+		// Open coord session lazily — only --ready and --orphans need it.
+		var co *coord.Coord
+		closeCoord := func() {}
+		if c.Ready || c.Orphans {
+			co, err = coord.Open(ctx, newCoordConfig(info))
+			if err != nil {
+				return fmt.Errorf("open coord: %w", err)
+			}
+			closeCoord = func() { _ = co.Close() }
 		}
-		for _, t := range out {
-			fmt.Println(formatListLine(t))
+		defer closeCoord()
+
+		out := filterTasks(allTasks, c.All, filterStatus, c.ClaimedBy)
+		if c.Ready {
+			out = selectReady(out, time.Now().UTC())
 		}
-		return nil
+		if c.Stale > 0 {
+			out = selectStale(out, c.Stale, time.Now().UTC())
+		}
+		if c.Orphans {
+			peers, err := co.Who(ctx)
+			if err != nil {
+				return err
+			}
+			out = filterOrphans(out, liveAgentSet(peers))
+		}
+
+		return emitTasks(out, c.JSON)
 	}))
 }
 
-// filterTasks applies the list filters in-memory.
+// filterTasks applies the always-on list filters (closed-vs-all, status,
+// claimed-by). Other selectors compose on top of its result.
 func filterTasks(in []tasks.Task, all bool, status tasks.Status, claimedBy string) []tasks.Task {
 	out := make([]tasks.Task, 0, len(in))
 	for _, t := range in {
@@ -80,4 +111,110 @@ func filterTasks(in []tasks.Task, all bool, status tasks.Status, claimedBy strin
 		out = append(out, t)
 	}
 	return out
+}
+
+// selectReady returns open, non-deferred tasks (claimable right now).
+// `now` is injected for testability.
+func selectReady(in []tasks.Task, now time.Time) []tasks.Task {
+	out := make([]tasks.Task, 0, len(in))
+	for _, t := range in {
+		if t.Status != tasks.StatusOpen {
+			continue
+		}
+		if t.DeferUntil != nil && t.DeferUntil.After(now) {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// selectStale returns non-closed tasks not updated in `days` days, oldest
+// first. `days == 0` is the off switch — returns nil.
+func selectStale(in []tasks.Task, days int, now time.Time) []tasks.Task {
+	if days <= 0 {
+		return nil
+	}
+	cutoff := now.Add(-time.Duration(days) * 24 * time.Hour)
+	out := make([]tasks.Task, 0, len(in))
+	for _, t := range in {
+		if t.Status == tasks.StatusClosed {
+			continue
+		}
+		if t.UpdatedAt.After(cutoff) {
+			continue
+		}
+		out = append(out, t)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].UpdatedAt.Before(out[j].UpdatedAt)
+	})
+	return out
+}
+
+// selectByStatus returns tasks with the given status. Empty status is a
+// no-op (returns the input unchanged).
+func selectByStatus(in []tasks.Task, status tasks.Status) []tasks.Task {
+	if status == "" {
+		return in
+	}
+	out := make([]tasks.Task, 0, len(in))
+	for _, t := range in {
+		if t.Status == status {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// filterOrphans returns claimed tasks whose claimer is not in liveAgents,
+// oldest first.
+func filterOrphans(in []tasks.Task, liveAgents map[string]struct{}) []tasks.Task {
+	out := make([]tasks.Task, 0, len(in))
+	for _, t := range in {
+		if t.Status != tasks.StatusClaimed || t.ClaimedBy == "" {
+			continue
+		}
+		if _, ok := liveAgents[t.ClaimedBy]; ok {
+			continue
+		}
+		out = append(out, t)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].UpdatedAt.Before(out[j].UpdatedAt)
+	})
+	return out
+}
+
+// emitTasks writes the filtered tasks either as JSON or one
+// formatListLine per task. The legacy plain-text format is preserved.
+func emitTasks(out []tasks.Task, asJSON bool) error {
+	if asJSON {
+		return emitJSON(os.Stdout, out)
+	}
+	for _, t := range out {
+		fmt.Println(formatListLine(t))
+	}
+	return nil
+}
+
+// liveAgentSet collapses a presence list to a set of online agent IDs.
+func liveAgentSet(peers []coord.Presence) map[string]struct{} {
+	out := make(map[string]struct{}, len(peers))
+	for _, p := range peers {
+		out[p.AgentID()] = struct{}{}
+	}
+	return out
+}
+
+// newCoordConfig builds a coord.Config from workspace defaults. Lifted
+// from tasks_ready.go into tasks_list.go when the ready verb folded into
+// 'tasks list --ready'.
+func newCoordConfig(info workspace.Info) coord.Config {
+	return coord.Config{
+		AgentID:            info.AgentID,
+		NATSURL:            info.NATSURL,
+		ChatFossilRepoPath: filepath.Join(info.WorkspaceDir, "chat.fossil"),
+		CheckoutRoot:       info.WorkspaceDir,
+	}
 }

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/danmestas/bones/coord"
+	"github.com/danmestas/bones/internal/coord"
 )
 
 type Action string

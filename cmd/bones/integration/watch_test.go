@@ -13,7 +13,7 @@ import (
 // subcommand. It:
 //  1. Bootstraps a workspace (starts a leaf NATS server).
 //  2. Starts "bones tasks watch" in the background with a short timeout.
-//  3. Creates a task via "bones tasks add" while watch is running.
+//  3. Creates a task via "bones tasks create" while watch is running.
 //  4. Verifies that watch printed a "created" line containing the task title.
 func TestCLI_Watch_Smoke(t *testing.T) {
 	if testing.Short() {
@@ -40,9 +40,9 @@ func TestCLI_Watch_Smoke(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Create a task — watch should emit a "created" line.
-	_, stderr, code := runCmd(t, bonesBin, dir, "tasks", "add", "watch-smoke-task")
+	_, stderr, code := runCmd(t, bonesBin, dir, "tasks", "create", "watch-smoke-task")
 	if code != 0 {
-		t.Fatalf("add failed code=%d stderr=%s", code, stderr)
+		t.Fatalf("create failed code=%d stderr=%s", code, stderr)
 	}
 
 	// Allow watch to receive and print the event.
