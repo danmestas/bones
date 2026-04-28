@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -73,6 +74,12 @@ func (c *TasksDispatchParentCmd) run(
 		return dispatch.Spec{}, dispatch.ResultMessage{}, nil, nil, false, err
 	}
 	c.appendWorkerArgs(cmd, spec)
+	// Capture worker output so a timeout can show what the worker did
+	// or said. Without this, a worker crash or panic just looks like a
+	// silent 5s timeout in the parent.
+	var workerOut bytes.Buffer
+	cmd.Stdout = &workerOut
+	cmd.Stderr = &workerOut
 	if err := cmd.Start(); err != nil {
 		_ = closeSub()
 		_ = co.Close()
@@ -83,7 +90,8 @@ func (c *TasksDispatchParentCmd) run(
 	if err != nil {
 		_ = closeSub()
 		_ = co.Close()
-		return dispatch.Spec{}, dispatch.ResultMessage{}, nil, nil, false, err
+		return dispatch.Spec{}, dispatch.ResultMessage{}, nil, nil, false,
+			fmt.Errorf("%w; worker output:\n%s", err, workerOut.String())
 	}
 	return spec, result, co, closeSub, c.WorkerClaimHandoff, nil
 }
@@ -110,7 +118,7 @@ type TasksDispatchWorkerCmd struct {
 	TaskThread       string        `name:"task-thread" required:"" help:"task chat thread"`
 	WorkerAgentID    string        `name:"worker-agent-id" required:"" help:"worker agent id"`
 	ClaimFromAgentID string        `name:"claim-from-agent-id" help:"expected previous claimer"`
-	HandoffTTL       time.Duration `name:"handoff-ttl" help:"handoff hold ttl"`
+	HandoffTTL       time.Duration `name:"handoff-ttl" default:"30s" help:"handoff hold ttl"`
 	Result           string        `name:"result" default:"success" help:"success|fork|fail"`
 	Summary          string        `name:"summary" default:"done" help:"final summary"`
 	Branch           string        `name:"branch" help:"fork branch"`
@@ -126,10 +134,17 @@ func (c *TasksDispatchWorkerCmd) Run(g *libfossilcli.Globals) error {
 
 	return taskCLIError(runOp(ctx, "dispatch-worker", func(ctx context.Context) error {
 		cfg := newCoordConfig(info)
+		// HandoffTTL has a Kong default (30s), so no fallback to
+		// cfg.Tuning is needed — and reading cfg.Tuning before
+		// coord.Open is wrong anyway: Open populates Tuning internally
+		// from defaultTuning, but the caller's cfg stays zero.
 		ttl := c.HandoffTTL
-		if ttl == 0 {
-			ttl = cfg.Tuning.HoldTTLDefault
-		}
+		// Pin ProjectPrefix to the workspace identity BEFORE replacing
+		// AgentID. The worker's compound id (parent + "/" + taskID)
+		// would otherwise produce a different project prefix than the
+		// parent and the chat thread the parent is subscribed to would
+		// land on a different NATS subject.
+		cfg.ProjectPrefix = coord.DeriveProjectPrefix(info.AgentID)
 		cfg.AgentID = c.WorkerAgentID
 		co, err := coord.Open(ctx, cfg)
 		if err != nil {
