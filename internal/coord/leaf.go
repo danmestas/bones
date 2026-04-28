@@ -425,10 +425,24 @@ func (l *Leaf) Commit(
 	if co.message != "" {
 		commitComment = co.message
 	}
+	// Resolve the current branch tip so the new commit lists it as
+	// its parent. Without this, libfossil writes an orphan checkin
+	// (no P-card on the manifest), every commit becomes its own
+	// root, and the hub timeline shows N disconnected leaves
+	// instead of a chain. BranchTip on a fresh slot leaf returns
+	// the seed commit's rid (cloned from hub at OpenLeaf time).
+	// On a brand-new empty repo with no trunk tip yet, BranchTip
+	// returns "no rows" / "branch not found"; that's the legitimate
+	// first-commit case where ParentID=0 is correct (orphan root).
+	parentID, btErr := repo.BranchTip("trunk")
+	if btErr != nil && !isBranchTipMissing(btErr) {
+		return "", fmt.Errorf("coord.Leaf.Commit: resolve trunk tip: %w", btErr)
+	}
 	_, uuid, err := repo.Commit(libfossil.CommitOpts{
-		Files:   toCommit,
-		Comment: commitComment,
-		User:    commitUser,
+		Files:    toCommit,
+		ParentID: parentID,
+		Comment:  commitComment,
+		User:     commitUser,
 	})
 	if err != nil {
 		return "", fmt.Errorf("coord.Leaf.Commit: %w", err)
@@ -461,6 +475,15 @@ func (l *Leaf) Close(ctx context.Context, claim *Claim) error {
 // the caller doesn't pass WithMessage.
 func commitMessage(c *Claim) string {
 	return "leaf commit for task " + string(c.TaskID())
+}
+
+// isBranchTipMissing reports whether err is libfossil's "this branch
+// has no commits yet" error. BranchTip wraps sql.ErrNoRows in that
+// case (queried table has zero matching rows). The first commit on
+// an empty repo is legitimate; ParentID=0 produces the correct
+// orphan-root manifest.
+func isBranchTipMissing(err error) bool {
+	return errors.Is(err, sql.ErrNoRows)
 }
 
 // CommitOption tunes Leaf.Commit. Construct with WithMessage / WithUser.

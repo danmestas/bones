@@ -162,8 +162,19 @@ func openLeavesOnTrunk(fossilBin, hubRepo string) ([]string, error) {
 	return leaves, nil
 }
 
+// fossilEnv ensures USER is set for fossil's "who am I" detection.
+// Inherited subprocess envs may lack USER (sandboxed test runners,
+// some daemons), in which case `fossil update` and `fossil merge`
+// abort with "Cannot figure out who you are!" before any user-mode
+// flag like --user can apply. The orchestrator is the only sensible
+// default for fan-in operations.
+func fossilEnv() []string {
+	return append(os.Environ(), "USER=orchestrator")
+}
+
 func runFossil(fossilBin string, args ...string) error {
 	cmd := exec.Command(fossilBin, args...)
+	cmd.Env = fossilEnv()
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -172,6 +183,7 @@ func runFossil(fossilBin string, args ...string) error {
 func runFossilIn(fossilBin, dir string, args ...string) error {
 	cmd := exec.Command(fossilBin, args...)
 	cmd.Dir = dir
+	cmd.Env = fossilEnv()
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
