@@ -36,6 +36,13 @@ func main() {
 		kong.Name("bones"),
 		kong.Description("bones unified CLI: workspace, orchestrator, tasks"),
 		kong.UsageOnError(),
+		kong.ExplicitGroups([]kong.Group{
+			{Key: "daily", Title: "Daily"},
+			{Key: "repo", Title: "Repository"},
+			{Key: "sync", Title: "Sync & messaging"},
+			{Key: "tooling", Title: "Tooling"},
+			{Key: "plumbing", Title: "Plumbing"},
+		}),
 		// Match the exit codes the deleted agent-init/agent-tasks CLIs used:
 		// argument errors exit 1, not Kong's default 80, so existing harness
 		// scripts and the integration suite stay portable.

@@ -12,25 +12,25 @@ import (
 type CLI struct {
 	libfossilcli.Globals
 
-	// Fossil repository operations (libfossil/cli).
-	Repo libfossilcli.RepoCmd `cmd:"" help:"Fossil repository operations"`
+	// Daily.
+	Up    bonescli.UpCmd    `cmd:"" group:"daily" help:"Bootstrap workspace, scaffold, leaf, hub"`
+	Tasks bonescli.TasksCmd `cmd:"" group:"daily" help:"Inspect and mutate runtime agent tasks"`
 
-	// EdgeSync command surface (EdgeSync/cli).
-	Sync   edgecli.SyncCmd   `cmd:"" help:"Leaf agent sync"`
-	Bridge edgecli.BridgeCmd `cmd:"" help:"NATS-to-Fossil bridge"`
-	Notify edgecli.NotifyCmd `cmd:"" help:"Bidirectional notification messaging"`
-	Doctor edgecli.DoctorCmd `cmd:"" help:"Check development environment health"`
+	// Repository.
+	Repo libfossilcli.RepoCmd `cmd:"" group:"repo" help:"Fossil repository operations"`
 
-	// bones workspace (bones/cli).
-	Init bonescli.InitCmd `cmd:"" help:"Create a workspace"`
-	Join bonescli.JoinCmd `cmd:"" help:"Locate an existing workspace"`
-	Up   bonescli.UpCmd   `cmd:"" help:"Full bootstrap: workspace + scaffold + leaf + hub"`
+	// Sync & messaging.
+	Sync   edgecli.SyncCmd   `cmd:"" group:"sync" help:"Leaf agent sync"`
+	Bridge edgecli.BridgeCmd `cmd:"" group:"sync" help:"NATS-to-Fossil bridge"`
+	Notify edgecli.NotifyCmd `cmd:"" group:"sync" help:"Bidirectional notification messaging"`
+	Doctor edgecli.DoctorCmd `cmd:"" group:"sync" help:"Check development environment health"`
 
-	// bones orchestrator (bones/cli).
-	Orchestrator bonescli.OrchestratorCmd `cmd:"" help:"Install orchestrator scaffolding"`
-	Hub          bonescli.HubCmd          `cmd:"" help:"Manage the embedded Fossil + NATS hub"`
-	ValidatePlan bonescli.ValidatePlanCmd `cmd:"" name:"validate-plan" help:"Validate plan"`
+	// Tooling — used by humans authoring plans/skills.
+	ValidatePlan bonescli.ValidatePlanCmd `cmd:"" group:"tooling" help:"Validate plan"`
+	Orchestrator bonescli.OrchestratorCmd `cmd:"" group:"tooling" help:"Install orchestrator"`
 
-	// Workspace task operations (bones/cli).
-	Tasks bonescli.TasksCmd `cmd:"" help:"Inspect and mutate runtime agent tasks"`
+	// Plumbing — rarely invoked directly.
+	Init bonescli.InitCmd `cmd:"" group:"plumbing" help:"Create a workspace"`
+	Join bonescli.JoinCmd `cmd:"" group:"plumbing" help:"Locate an existing workspace"`
+	Hub  bonescli.HubCmd  `cmd:"" group:"plumbing" help:"Manage the embedded Fossil + NATS hub"`
 }
