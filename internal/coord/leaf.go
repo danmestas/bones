@@ -329,11 +329,22 @@ func (l *Leaf) Claim(ctx context.Context, taskID TaskID) (*Claim, error) {
 // owned by leaf.Agent.
 //
 // On success, returns the manifest UUID of the new checkin.
-func (l *Leaf) Commit(ctx context.Context, claim *Claim, files []File) (string, error) {
+//
+// Variadic CommitOptions tune commit-time fields. WithMessage replaces
+// the default "leaf commit for task <id>" comment with a caller-supplied
+// string; WithUser overrides the slot-derived author.
+func (l *Leaf) Commit(
+	ctx context.Context, claim *Claim, files []File, opts ...CommitOption,
+) (string, error) {
 	assert.NotNil(l, "coord.Leaf.Commit: receiver is nil")
 	assert.NotNil(ctx, "coord.Leaf.Commit: ctx is nil")
 	assert.NotNil(claim, "coord.Leaf.Commit: claim is nil")
 	assert.Precondition(len(files) > 0, "coord.Leaf.Commit: files is empty")
+
+	co := commitConfig{}
+	for _, opt := range opts {
+		opt(&co)
+	}
 
 	// Hold-gate (Invariant 20) and epoch-gate (Invariant 24).
 	if err := l.coord.checkHolds(ctx, files); err != nil {
@@ -358,9 +369,16 @@ func (l *Leaf) Commit(ctx context.Context, claim *Claim, files []File) (string, 
 	if l.fossilUser != "" {
 		commitUser = l.fossilUser
 	}
+	if co.user != "" {
+		commitUser = co.user
+	}
+	commitComment := commitMessage(claim)
+	if co.message != "" {
+		commitComment = co.message
+	}
 	_, uuid, err := repo.Commit(libfossil.CommitOpts{
 		Files:   toCommit,
-		Comment: commitMessage(claim),
+		Comment: commitComment,
 		User:    commitUser,
 	})
 	if err != nil {
@@ -390,11 +408,31 @@ func (l *Leaf) Close(ctx context.Context, claim *Claim) error {
 	return claim.Release()
 }
 
-// commitMessage builds a default commit message for a Leaf.Commit. Kept
-// trivial in Phase 1; later phases will surface caller-supplied
-// messages once the orchestrator wires task descriptions through.
+// commitMessage builds the default commit message for Leaf.Commit when
+// the caller doesn't pass WithMessage.
 func commitMessage(c *Claim) string {
 	return "leaf commit for task " + string(c.TaskID())
+}
+
+// CommitOption tunes Leaf.Commit. Construct with WithMessage / WithUser.
+type CommitOption func(*commitConfig)
+
+// commitConfig holds the resolved options for a Leaf.Commit call.
+type commitConfig struct {
+	message string
+	user    string
+}
+
+// WithMessage replaces the default "leaf commit for task <id>" comment
+// with a caller-supplied string. Empty string is treated as "use default."
+func WithMessage(msg string) CommitOption {
+	return func(c *commitConfig) { c.message = msg }
+}
+
+// WithUser overrides the slot-derived commit author. Empty string is
+// treated as "use slot identity."
+func WithUser(user string) CommitOption {
+	return func(c *commitConfig) { c.user = user }
 }
 
 // normalizeLeadingSlash strips a single leading slash so absolute paths

@@ -235,7 +235,7 @@ func (c *SwarmCommitCmd) commitViaLeaf(
 		return "", fmt.Errorf("re-claim task %q: %w", taskID, err)
 	}
 	defer func() { _ = claim.Release() }()
-	uuid, err := leaf.Commit(ctx, claim, files)
+	uuid, err := leaf.Commit(ctx, claim, files, coord.WithMessage(c.Message))
 	if err != nil {
 		return "", fmt.Errorf("leaf commit: %w", err)
 	}
