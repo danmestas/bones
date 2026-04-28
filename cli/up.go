@@ -1,24 +1,29 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"github.com/danmestas/bones/internal/workspace"
 )
 
 // runUp performs a full single-command bootstrap from a fresh clone:
-//  1. workspace init (idempotent — skips if already initialized)
+//  1. workspace init (idempotent — joins if already initialized)
 //  2. orchestrator scaffold (scripts, skills, hooks)
 //  3. build bin/leaf if missing
 //  4. run hub-bootstrap.sh and verify the hub is up
 func runUp(cwd string) error {
-	wsDir, err := ensureWorkspaceDir(cwd)
+	info, err := initOrJoinWorkspace(context.Background(), cwd)
 	if err != nil {
 		return fmt.Errorf("workspace: %w", err)
 	}
+	wsDir := info.WorkspaceDir
 	fmt.Printf("up: workspace at %s\n", wsDir)
 
 	if err := scaffoldOrchestrator(wsDir); err != nil {
@@ -41,34 +46,17 @@ func runUp(cwd string) error {
 	return nil
 }
 
-// ensureWorkspaceDir initializes a workspace at cwd if none exists, or
-// walks up to find an existing one. Returns the workspace root.
-func ensureWorkspaceDir(cwd string) (string, error) {
-	if wsDir := findWorkspaceDir(cwd); wsDir != "" {
-		return wsDir, nil
+// initOrJoinWorkspace returns workspace.Info for cwd, creating the
+// workspace if needed. New workspace → Init. Existing workspace → Join.
+// This replaces an earlier ensureWorkspaceDir helper that only mkdir'd
+// the marker dir and left config.json unwritten, which made every fresh
+// `bones up` produce a workspace that workspace.Join couldn't load.
+func initOrJoinWorkspace(ctx context.Context, cwd string) (workspace.Info, error) {
+	info, err := workspace.Init(ctx, cwd)
+	if errors.Is(err, workspace.ErrAlreadyInitialized) {
+		return workspace.Join(ctx, cwd)
 	}
-	if err := os.MkdirAll(cwd, 0o755); err != nil {
-		return "", err
-	}
-	markerDir := filepath.Join(cwd, ".bones")
-	if err := os.MkdirAll(markerDir, 0o755); err != nil {
-		return "", err
-	}
-	return cwd, nil
-}
-
-func findWorkspaceDir(dir string) string {
-	cur := dir
-	for {
-		if _, err := os.Stat(filepath.Join(cur, ".bones")); err == nil {
-			return cur
-		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			return ""
-		}
-		cur = parent
-	}
+	return info, err
 }
 
 // ensureLeafBinary checks the standard leaf-binary locations used by

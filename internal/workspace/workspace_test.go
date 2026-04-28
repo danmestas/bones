@@ -209,6 +209,39 @@ func killLeafPID(t *testing.T, pidPath string) {
 	_ = proc.Signal(syscall.SIGKILL)
 }
 
+// TestInit_RecoversFromEmptyMarker verifies that an empty .bones/
+// directory (e.g. left by a prior, incomplete `bones up` that mkdir'd
+// the marker without writing config.json) is treated as a recoverable
+// state. Init should proceed and produce a valid config.json — not
+// short-circuit with ErrAlreadyInitialized.
+func TestInit_RecoversFromEmptyMarker(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: spawns leaf")
+	}
+	requireLeafBinary(t)
+
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, markerDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	info, err := Init(ctx, dir)
+	if err != nil {
+		t.Fatalf("Init on empty marker: %v", err)
+	}
+	t.Cleanup(func() { killLeafPID(t, filepath.Join(dir, markerDirName, "leaf.pid")) })
+
+	if _, statErr := os.Stat(filepath.Join(dir, markerDirName, "config.json")); statErr != nil {
+		t.Fatalf("expected config.json after recovery: %v", statErr)
+	}
+	if info.AgentID == "" {
+		t.Errorf("expected agent_id after recovery, got empty")
+	}
+}
+
 func TestInit_AlreadyInitialized(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skip in -short: spawns leaf")

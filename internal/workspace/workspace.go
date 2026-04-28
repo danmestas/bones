@@ -110,9 +110,12 @@ func instrumented(
 }
 
 // Init creates a fresh workspace rooted at cwd, starts a leaf daemon, and
-// returns its connection info. Returns ErrAlreadyInitialized if .bones/
-// already exists in cwd. A pre-rename .agent-infra/ marker is silently
-// migrated to .bones/ before the existence check.
+// returns its connection info. Returns ErrAlreadyInitialized only if a
+// fully-formed workspace (marker dir AND config.json) already exists.
+// An empty or partially-created marker dir is treated as a recoverable
+// state and Init proceeds — this fixes the case where 'bones up' had
+// previously mkdir'd .bones/ without writing config.json. A pre-rename
+// .agent-infra/ marker is silently migrated to .bones/ first.
 func Init(ctx context.Context, cwd string) (Info, error) {
 	return instrumented(ctx, "init", cwd, func(ctx context.Context) (Info, error) {
 		return initLogic(ctx, cwd)
@@ -124,10 +127,11 @@ func initLogic(ctx context.Context, cwd string) (Info, error) {
 		return Info{}, err
 	}
 	markerDir := filepath.Join(cwd, markerDirName)
-	if _, err := os.Stat(markerDir); err == nil {
+	configPath := filepath.Join(markerDir, "config.json")
+	if _, err := os.Stat(configPath); err == nil {
 		return Info{}, ErrAlreadyInitialized
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return Info{}, fmt.Errorf("stat marker: %w", err)
+		return Info{}, fmt.Errorf("stat config: %w", err)
 	}
 
 	if err := os.MkdirAll(markerDir, 0o755); err != nil {
