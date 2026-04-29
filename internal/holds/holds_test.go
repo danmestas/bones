@@ -12,6 +12,7 @@ import (
 
 	"github.com/danmestas/bones/internal/holds"
 	"github.com/danmestas/bones/internal/testutil/natstest"
+	"github.com/danmestas/bones/internal/wspath"
 )
 
 // openTestManager spins up a JetStream-enabled fixture and returns a
@@ -66,7 +67,7 @@ func TestAnnounceRelease_HappyPath(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	file := "/work/a.txt"
+	file := wspath.Must("/work/a.txt")
 
 	if err := m.Announce(ctx, file, newHold("A", time.Second)); err != nil {
 		t.Fatalf("Announce: %v", err)
@@ -95,7 +96,7 @@ func TestAnnounce_Idempotent_SameAgent(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	file := "/work/b.txt"
+	file := wspath.Must("/work/b.txt")
 
 	if err := m.Announce(ctx, file, newHold("A", time.Second)); err != nil {
 		t.Fatalf("first Announce: %v", err)
@@ -122,7 +123,7 @@ func TestAnnounce_HeldByAnother(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	file := "/work/c.txt"
+	file := wspath.Must("/work/c.txt")
 
 	if err := m.Announce(ctx, file, newHold("A", time.Second)); err != nil {
 		t.Fatalf("Announce A: %v", err)
@@ -141,7 +142,7 @@ func TestRelease_WrongAgent_NoOp(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	file := "/work/d.txt"
+	file := wspath.Must("/work/d.txt")
 
 	if err := m.Announce(ctx, file, newHold("A", time.Second)); err != nil {
 		t.Fatalf("Announce: %v", err)
@@ -159,7 +160,7 @@ func TestRelease_MissingFile_NoOp(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	if err := m.Release(ctx, "/work/never.txt", "A"); err != nil {
+	if err := m.Release(ctx, wspath.Must("/work/never.txt"), "A"); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 }
@@ -168,7 +169,7 @@ func TestWhoHas_NotClaimed_ReturnsFalse(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	got, ok, err := m.WhoHas(ctx, "/work/ghost.txt")
+	got, ok, err := m.WhoHas(ctx, wspath.Must("/work/ghost.txt"))
 	if err != nil {
 		t.Fatalf("WhoHas: %v", err)
 	}
@@ -181,7 +182,7 @@ func TestKeyEncoding_PreservesPathWithSpaces(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	file := "/work/with space/foo.txt"
+	file := wspath.Must("/work/with space/foo.txt")
 
 	if err := m.Announce(ctx, file, newHold("A", time.Second)); err != nil {
 		t.Fatalf("Announce: %v", err)
@@ -200,38 +201,30 @@ func TestInvariant_NilCtx(t *testing.T) {
 	defer cleanup()
 	var ctx context.Context
 	requirePanic(t, func() {
-		_ = m.Announce(ctx, "/work/a.txt", newHold("A", time.Second))
+		_ = m.Announce(ctx, wspath.Must("/work/a.txt"), newHold("A", time.Second))
 	}, "ctx is nil")
 	requirePanic(t, func() {
-		_ = m.Release(ctx, "/work/a.txt", "A")
+		_ = m.Release(ctx, wspath.Must("/work/a.txt"), "A")
 	}, "ctx is nil")
 	requirePanic(t, func() {
-		_, _, _ = m.WhoHas(ctx, "/work/a.txt")
+		_, _, _ = m.WhoHas(ctx, wspath.Must("/work/a.txt"))
 	}, "ctx is nil")
 }
 
-func TestInvariant_EmptyFile(t *testing.T) {
+func TestInvariant_ZeroFile(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
+	var p wspath.Path
 	requirePanic(t, func() {
-		_ = m.Announce(ctx, "", newHold("A", time.Second))
-	}, "file is empty")
+		_ = m.Announce(ctx, p, newHold("A", time.Second))
+	}, "is the zero Path")
 	requirePanic(t, func() {
-		_ = m.Release(ctx, "", "A")
-	}, "file is empty")
+		_ = m.Release(ctx, p, "A")
+	}, "is the zero Path")
 	requirePanic(t, func() {
-		_, _, _ = m.WhoHas(ctx, "")
-	}, "file is empty")
-}
-
-func TestInvariant_RelativeFile(t *testing.T) {
-	m, _, cleanup := openTestManager(t)
-	defer cleanup()
-	ctx := context.Background()
-	requirePanic(t, func() {
-		_ = m.Announce(ctx, "work/a.txt", newHold("A", time.Second))
-	}, "not absolute")
+		_, _, _ = m.WhoHas(ctx, p)
+	}, "is the zero Path")
 }
 
 func TestInvariant_EmptyAgentOnRelease(t *testing.T) {
@@ -239,7 +232,7 @@ func TestInvariant_EmptyAgentOnRelease(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 	requirePanic(t, func() {
-		_ = m.Release(ctx, "/work/a.txt", "")
+		_ = m.Release(ctx, wspath.Must("/work/a.txt"), "")
 	}, "agent is empty")
 }
 
@@ -248,7 +241,7 @@ func TestInvariant_EmptyAgentOnHold(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 	requirePanic(t, func() {
-		_ = m.Announce(ctx, "/work/a.txt", newHold("", time.Second))
+		_ = m.Announce(ctx, wspath.Must("/work/a.txt"), newHold("", time.Second))
 	}, "AgentID is empty")
 }
 
@@ -257,7 +250,7 @@ func TestInvariant_TTLZero(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 	requirePanic(t, func() {
-		_ = m.Announce(ctx, "/work/a.txt", newHold("A", 0))
+		_ = m.Announce(ctx, wspath.Must("/work/a.txt"), newHold("A", 0))
 	}, "TTL must be > 0")
 }
 
@@ -267,7 +260,7 @@ func TestInvariant_TTLExceedsMax(t *testing.T) {
 	ctx := context.Background()
 	requirePanic(t, func() {
 		_ = m.Announce(
-			ctx, "/work/a.txt", newHold("A", 10*time.Second),
+			ctx, wspath.Must("/work/a.txt"), newHold("A", 10*time.Second),
 		)
 	}, "exceeds HoldTTLMax")
 }
@@ -279,7 +272,7 @@ func TestInvariant_UseAfterClose(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	ctx := context.Background()
-	file := "/work/a.txt"
+	file := wspath.Must("/work/a.txt")
 	err := m.Announce(ctx, file, newHold("A", time.Second))
 	if !errors.Is(err, holds.ErrClosed) {
 		t.Fatalf("Announce after Close: got %v, want ErrClosed", err)

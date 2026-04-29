@@ -77,13 +77,15 @@ claim handoff and reclamation. Lives in `bones-holds` (NATS
 JetStream KV). See ADR 0007 (claim lifecycle).
 
 **Path.** A typed coordination key for a workspace file
-(`coord.Path`). A newtype around `string`, constructed via
-`Path.FromRelative(workspaceDir, rel)` or `Path.FromAbsolute(abs)`,
-validated at construction (must resolve inside the workspace's
-working tree; trailing slashes stripped). `Holds` and `coord`
-interfaces accept `Path` instead of `string`; `coord.File.Path` is a
-`Path`. The newtype owns absolute-vs-relative-vs-key conversion so
-no caller hand-rolls normalization. See ADR 0033.
+(`coord.Path`). A newtype carrying a single absolute, cleaned
+filesystem path. Constructed via `coord.NewPath(abs)` (re-exporting
+`wspath.New`) or `coord.NewPathRelative(workspaceDir, rel)`
+(re-exporting `wspath.NewRelative`); `wspath.Must` is the
+panic-on-error variant for tests. The implementation lives in
+`internal/wspath` so the substrate (`holds`) imports it without
+depending on `coord`. `holds.Announce`/`Release`/`WhoHas` and
+`coord.File.Path` are typed `wspath.Path`; no caller hand-rolls
+normalization. See ADR 0033.
 
 **Session record.** The per-slot row in
 `bones-swarm-sessions[slot]` (`swarm.Session` type) that ties a

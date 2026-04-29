@@ -17,7 +17,22 @@ import (
 	"github.com/danmestas/bones/internal/holds"
 	"github.com/danmestas/bones/internal/presence"
 	"github.com/danmestas/bones/internal/tasks"
+	"github.com/danmestas/bones/internal/wspath"
 )
+
+// pathFromTaskFile converts a Task record's stored file string into a
+// wspath.Path. Task records validate file paths as absolute at
+// OpenTask; a conversion failure here is substrate corruption, not a
+// runtime condition, so the helper asserts rather than returning an
+// error.
+func pathFromTaskFile(s string) wspath.Path {
+	p, err := wspath.New(s)
+	assert.Precondition(
+		err == nil,
+		"coord: invalid file path %q in task record: %v", s, err,
+	)
+	return p
+}
 
 // swarmSessionsTTL is the bucket TTL for bones-swarm-sessions.
 // Mirrors internal/swarm.DefaultTTL; duplicated here to avoid an
@@ -408,7 +423,7 @@ func (c *Coord) claimAll(
 		TTL:          ttl,
 	}
 	for _, f := range files {
-		if err := c.sub.holds.Announce(ctx, f, h); err != nil {
+		if err := c.sub.holds.Announce(ctx, pathFromTaskFile(f), h); err != nil {
 			return held, err
 		}
 		held = append(held, f)
@@ -421,7 +436,7 @@ func (c *Coord) claimAll(
 // path and a secondary failure must not mask the primary cause.
 func (c *Coord) rollback(ctx context.Context, held []string) {
 	for _, f := range held {
-		_ = c.sub.holds.Release(ctx, f, c.cfg.AgentID)
+		_ = c.sub.holds.Release(ctx, pathFromTaskFile(f), c.cfg.AgentID)
 	}
 }
 
@@ -543,7 +558,7 @@ func (c *Coord) releaseHolds(
 ) error {
 	var first error
 	for _, f := range held {
-		err := c.sub.holds.Release(ctx, f, c.cfg.AgentID)
+		err := c.sub.holds.Release(ctx, pathFromTaskFile(f), c.cfg.AgentID)
 		if err == nil || errors.Is(err, holds.ErrClosed) {
 			continue
 		}

@@ -47,19 +47,30 @@ coordination `Path`.
 The fresh-vs-resume entry-point distinction that ADR 0028 names
 remains. Their return types are now compile-time distinct.
 
-`internal/coord` exposes:
+The substrate exposes:
 
-- **`Path`** — newtype around `string`. Constructors:
-  `Path.FromRelative(workspaceDir, rel string) (Path, error)`,
-  `Path.FromAbsolute(abs string) (Path, error)`. Accessors:
-  `AsAbsolute() string`, `AsRelative(workspaceDir string) string`,
-  `AsKey() string`. `coord.File.Path` is typed `coord.Path`. `Holds`
-  and `coord` interfaces accept `Path` instead of `string`.
+- **`Path`** — a newtype carrying a single absolute, cleaned
+  filesystem path. The implementation lives in `internal/wspath` so
+  the substrate (`holds`) can depend on it without importing `coord`;
+  `coord.Path` is a type alias re-export. Constructors are
+  `wspath.New(abs string) (Path, error)` for already-absolute input
+  and `wspath.NewRelative(workspaceDir, rel string) (Path, error)`
+  for join-and-anchor. Both return `ErrInvalid`-wrapped errors rather
+  than producing values that fail downstream. `coord.NewPath` and
+  `coord.NewPathRelative` are thin re-exports. `wspath.Must` is the
+  panic-on-error variant intended for tests and statically-known
+  inputs. Accessors: `AsAbsolute()`, `AsKey()`, `String()`,
+  `IsZero()`. `coord.File.Path` is typed `coord.Path`;
+  `holds.Announce`, `holds.Release`, `holds.WhoHas`, and
+  `holds.KeyForTest` accept `wspath.Path`.
 
-`Path` constructors validate: input resolves to a path inside the
-workspace's working tree (escape via `..` or symlink rejected),
-trailing slashes stripped, case preserved as given. Constructors
-return an error rather than producing a value that fails downstream.
+`wspath.New` validates the input is non-empty and absolute, then
+canonicalizes via `filepath.Clean` (collapses `.`, `..`, repeated
+separators, trailing slashes). `wspath.NewRelative` additionally
+rejects inputs whose cleaned join with `workspaceDir` escapes the
+workspace root via `..`. Symlink resolution is not part of the
+contract: Path values can refer to logical workspace-anchored
+coordination keys that need not exist on disk.
 
 `Lease.Leaf()`, the deprecated-on-arrival accessor named in ADR 0028,
 is removed. Callers use `Lease.WT()` or other typed accessors.
@@ -97,17 +108,18 @@ same way it propagates other input-validation errors.
    test in `internal/swarm/lease_test.go` triggers concurrent
    `Close`s between `Resume` and `Commit` and asserts the conflict.
 
-3. *Path validity.* A `coord.Path` value is always a syntactically
-   and semantically valid absolute workspace path. Test:
-   `internal/coord/path_test.go` covers trailing slash, symlinks,
-   outside-workspace, case sensitivity, and the relative-from
-   constructor.
+3. *Path validity.* A `wspath.Path` value is always a syntactically
+   valid absolute path; the relative-input constructor additionally
+   enforces workspace-anchoring. Test:
+   `internal/wspath/wspath_test.go` covers trailing slashes, redundant
+   segments, `..`-resolution within root, escape rejection in the
+   relative constructor, and zero-value detection.
 
 4. *Hold-key stability.* `Path.AsKey()` is deterministic for a given
    absolute path. `Holds` and `checkHolds` agree by construction;
    renaming `Path`'s internals does not change the key. Test:
-   `internal/holds/holds_test.go` round-trips `Acquire`/`Release`
-   through `Path` and verifies cross-construction equality.
+   `internal/holds/holds_test.go` round-trips `Announce`/`Release`
+   through `wspath.Path`.
 
 The `Lease.Leaf()` removal is observable: any external caller of that
 method becomes a compile error after the refinement. There are no

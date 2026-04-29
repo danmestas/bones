@@ -5,7 +5,25 @@ import (
 
 	"github.com/danmestas/bones/internal/presence"
 	"github.com/danmestas/bones/internal/tasks"
+	"github.com/danmestas/bones/internal/wspath"
 )
+
+// Path is the typed coordination key for a workspace file. The
+// underlying type lives in internal/wspath so the substrate (holds)
+// can depend on it without importing coord. Callers using coord.Path
+// and callers using wspath.Path see the same value.
+type Path = wspath.Path
+
+// NewPath wraps an absolute filesystem path in a Path. Returns an
+// ErrInvalid-wrapped error on bad input. Thin re-export of
+// wspath.New so callers using coord.Path don't need a second import.
+func NewPath(abs string) (Path, error) { return wspath.New(abs) }
+
+// NewPathRelative joins workspaceDir and rel into a Path anchored
+// inside workspaceDir. Re-export of wspath.NewRelative.
+func NewPathRelative(workspaceDir, rel string) (Path, error) {
+	return wspath.NewRelative(workspaceDir, rel)
+}
 
 // TaskID uniquely identifies a task within the substrate. ADR 0005
 // pins the shape to `<proj>-<8char lowercase alnum>`; generation lives
@@ -134,21 +152,23 @@ type RevID string
 
 // File is a single file body paired with two address forms.
 //
-// Path is the holds-gate key — typically the absolute workspace path
-// the task record carries (holds.assertFile rejects non-absolute
-// values). It is NOT used to derive the libfossil file name when Name
-// is set.
+// Path is the holds-gate key — the absolute workspace path the task
+// record carries. The Path type guarantees the value is non-zero,
+// absolute, and cleaned at construction; downstream code does not
+// re-validate. Path is NOT used to derive the libfossil file name
+// when Name is set.
 //
 // Name is the repo-relative file name libfossil stores under (e.g.
 // "src/foo/bar.go"). When empty, Leaf.Commit falls back to stripping
-// a single leading slash off Path — sufficient for the simple case
-// where the holds key looks like "/relpath" but wrong when Path has
-// any deeper prefix (e.g. a workspace directory). Slot-style flows
-// where the worktree lives at <workspace>/.bones/swarm/<slot>/wt MUST
-// set Name to the wt-relative path; otherwise the file lands at
-// "<workspace-segments>/<rel>" inside the repo.
+// a single leading slash off Path's absolute form — sufficient for
+// the simple case where the holds key looks like "/relpath" but
+// wrong when Path has any deeper prefix (e.g. a workspace directory).
+// Slot-style flows where the worktree lives at
+// <workspace>/.bones/swarm/<slot>/wt MUST set Name to the wt-relative
+// path; otherwise the file lands at "<workspace-segments>/<rel>"
+// inside the repo.
 type File struct {
-	Path    string
+	Path    Path
 	Name    string
 	Content []byte
 }

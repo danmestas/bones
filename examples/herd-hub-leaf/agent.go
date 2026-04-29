@@ -126,7 +126,11 @@ func buildTaskFiles(slotIdx, taskIdx int, cfg Config, rng *rand.Rand) ([]coord.F
 		for j := range buf {
 			buf[j] = byte('a' + rng.Intn(26))
 		}
-		files[i] = coord.File{Path: p, Content: buf}
+		cp, err := coord.NewPath(p)
+		if err != nil {
+			panic(fmt.Errorf("buildTaskFiles: %w", err))
+		}
+		files[i] = coord.File{Path: cp, Content: buf}
 	}
 	return files, paths
 }

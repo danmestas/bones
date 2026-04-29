@@ -12,6 +12,7 @@ import (
 
 	"github.com/danmestas/bones/internal/coord"
 	"github.com/danmestas/bones/internal/workspace"
+	"github.com/danmestas/bones/internal/wspath"
 )
 
 // freePort returns a random unused TCP port for an in-process hub.
@@ -342,7 +343,7 @@ func TestCommit_SuccessUpdatesTrunkAndRenewsSession(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 	files := []coord.File{{
-		Path:    holdPath,
+		Path:    wspath.Must(holdPath),
 		Name:    "hello.txt",
 		Content: []byte("world"),
 	}}

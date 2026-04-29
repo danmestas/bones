@@ -1,6 +1,10 @@
 package holds
 
-import "github.com/nats-io/nats.go/jetstream"
+import (
+	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/danmestas/bones/internal/wspath"
+)
 
 // casRetryHook is called once per CAS retry in Announce. Production
 // code leaves it as a no-op; tests overwrite it via
@@ -45,6 +49,6 @@ func EncodeForTest(h Hold) ([]byte, error) {
 // KeyForTest exposes the package's file-to-KV-key transform so
 // sibling test packages can stage KV entries under the exact key
 // Announce uses. Not part of the supported public API.
-func KeyForTest(file string) string {
+func KeyForTest(file wspath.Path) string {
 	return keyOf(file)
 }

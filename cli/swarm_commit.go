@@ -154,7 +154,10 @@ func gatherCommitFiles(
 		if err != nil {
 			return nil, fmt.Errorf("swarm commit: read %s: %w", abs, err)
 		}
-		taskPath := filepath.Join(info.WorkspaceDir, clean)
+		taskPath, err := coord.NewPathRelative(info.WorkspaceDir, clean)
+		if err != nil {
+			return nil, fmt.Errorf("swarm commit: path %q: %w", clean, err)
+		}
 		out = append(out, coord.File{
 			Path:    taskPath,
 			Name:    clean,
@@ -211,7 +214,10 @@ func discoverDirtyFiles(info workspace.Info, wt string) ([]coord.File, error) {
 		if err != nil {
 			return fmt.Errorf("rel %s: %w", path, err)
 		}
-		taskPath := filepath.Join(info.WorkspaceDir, rel)
+		taskPath, err := coord.NewPathRelative(info.WorkspaceDir, rel)
+		if err != nil {
+			return fmt.Errorf("path %s: %w", path, err)
+		}
 		out = append(out, coord.File{
 			Path:    taskPath,
 			Name:    rel,

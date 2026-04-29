@@ -168,7 +168,7 @@ func (c *Coord) releaseOldHolds(
 	ctx context.Context, prevAgent string, files []string,
 ) {
 	for _, f := range files {
-		_ = c.sub.holds.Release(ctx, f, prevAgent)
+		_ = c.sub.holds.Release(ctx, pathFromTaskFile(f), prevAgent)
 	}
 }
 

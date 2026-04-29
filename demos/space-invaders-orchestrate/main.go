@@ -153,8 +153,13 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("%s Claim: %w", s.slotID, err)
 		}
+		cp, err := coord.NewPath(s.path)
+		if err != nil {
+			_ = claim.Release()
+			return fmt.Errorf("%s path: %w", s.slotID, err)
+		}
 		uuid, err := l.Commit(ctx, claim, []coord.File{
-			{Path: s.path, Content: content},
+			{Path: cp, Content: content},
 		})
 		if err != nil {
 			_ = claim.Release()

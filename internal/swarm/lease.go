@@ -626,7 +626,7 @@ func commitViaLeaf(
 	defer func() { _ = claim.Release() }()
 	paths := make([]string, 0, len(files))
 	for _, f := range files {
-		paths = append(paths, f.Path)
+		paths = append(paths, f.Path.AsAbsolute())
 	}
 	releaseHolds, err := leaf.AnnounceHolds(ctx, paths)
 	if err != nil {

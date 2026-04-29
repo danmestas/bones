@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/danmestas/bones/internal/assert"
 	"github.com/danmestas/bones/internal/jskv"
+	"github.com/danmestas/bones/internal/wspath"
 )
 
 // Config configures Open. Every field is required; there are no
@@ -125,10 +125,12 @@ func (m *Manager) Close() error {
 // state transition is revision-gated and losers re-evaluate against
 // the post-conflict state.
 func (m *Manager) Announce(
-	ctx context.Context, file string, h Hold,
+	ctx context.Context, file wspath.Path, h Hold,
 ) error {
 	assert.NotNil(ctx, "holds.Announce: ctx is nil")
-	assertFile(file, "holds.Announce")
+	assert.Precondition(
+		!file.IsZero(), "holds.Announce: file is the zero Path",
+	)
 	assert.NotEmpty(h.AgentID, "holds.Announce: h.AgentID is empty")
 	assert.Precondition(
 		h.TTL > 0, "holds.Announce: h.TTL must be > 0",
@@ -154,7 +156,7 @@ func (m *Manager) Announce(
 	}
 	return fmt.Errorf(
 		"holds.Announce: exhausted %d CAS retries for %q",
-		jskv.MaxRetries, file,
+		jskv.MaxRetries, file.AsAbsolute(),
 	)
 }
 
@@ -264,10 +266,12 @@ func stamped(h Hold) ([]byte, error) {
 // or held by a different agent — "releasing something you don't own"
 // is defined away rather than errored on.
 func (m *Manager) Release(
-	ctx context.Context, file string, agent string,
+	ctx context.Context, file wspath.Path, agent string,
 ) error {
 	assert.NotNil(ctx, "holds.Release: ctx is nil")
-	assertFile(file, "holds.Release")
+	assert.Precondition(
+		!file.IsZero(), "holds.Release: file is the zero Path",
+	)
 	assert.NotEmpty(agent, "holds.Release: agent is empty")
 	if m.done.Load() {
 		return ErrClosed
@@ -295,10 +299,12 @@ func (m *Manager) Release(
 // expired. Expiry is evaluated lazily: WhoHas does not delete expired
 // entries — NATS MaxAge purges them asynchronously.
 func (m *Manager) WhoHas(
-	ctx context.Context, file string,
+	ctx context.Context, file wspath.Path,
 ) (Hold, bool, error) {
 	assert.NotNil(ctx, "holds.WhoHas: ctx is nil")
-	assertFile(file, "holds.WhoHas")
+	assert.Precondition(
+		!file.IsZero(), "holds.WhoHas: file is the zero Path",
+	)
 	if m.done.Load() {
 		return Hold{}, false, ErrClosed
 	}
@@ -336,25 +342,16 @@ func (m *Manager) readHold(
 	return h, true, nil
 }
 
-// keyOf converts an absolute file path to a JetStream KV key. The KV
-// key grammar accepts [A-Za-z0-9/_=.-]+; path separators survive
-// verbatim so an entry's key still reflects the filesystem structure.
-// Other disallowed bytes (spaces, unicode, symbols) are percent-
-// encoded by url.PathEscape, then the leading percent is rewritten to
-// '=' so the encoded form remains in the KV alphabet.
-func keyOf(file string) string {
-	escaped := url.PathEscape(file)
+// keyOf converts a Path into the JetStream KV key. The KV key
+// grammar accepts [A-Za-z0-9/_=.-]+; path separators survive verbatim
+// so an entry's key still reflects the filesystem structure. Other
+// disallowed bytes (spaces, unicode, symbols) are percent-encoded by
+// url.PathEscape, then the leading percent is rewritten to '=' so the
+// encoded form remains in the KV alphabet.
+func keyOf(file wspath.Path) string {
+	escaped := url.PathEscape(file.AsKey())
 	// url.PathEscape leaves '/' intact; other bytes become %XX.
 	// Rewrite '%' -> '=' to satisfy the KV key regex, since '%' is
 	// not in the allowed set but '=' is.
 	return strings.ReplaceAll(escaped, "%", "=")
-}
-
-// assertFile panics when file is empty or not absolute. Extracted so
-// every public method applies the same invariant 4 check.
-func assertFile(file, method string) {
-	assert.NotEmpty(file, "%s: file is empty", method)
-	assert.Precondition(
-		filepath.IsAbs(file), "%s: file %q not absolute", method, file,
-	)
 }
