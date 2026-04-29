@@ -161,23 +161,25 @@ path directly without consulting KV.
 ## Verb contracts
 
 **`swarm join`** — flags `--slot`, `--task-id` (required), `--caps`
-(default `oih`), `--force` (recovery-only takeover). Calls
-`swarm.Acquire` (ensure slot user → verify no live session → open
-`coord.Leaf` at `.bones/swarm/<slot>/` as `slot-<name>` → claim task
-with 60s hold → CAS-write session record with 5-min TTL), emits
-`BONES_SLOT_WT=<path>`, then `FreshLease.Release` (stops the leaf,
-leaves the session record live in KV). On any failure between
-`Acquire` and emission the verb falls back to `FreshLease.Abort`
-to roll the record back.
+(default `oih`), `--force` (recovery-only takeover),
+`--no-autosync` (branch-per-slot mode; default omitted = autosync
+ON). Calls `swarm.Acquire` (ensure slot user → verify no live
+session → open `coord.Leaf` at `.bones/swarm/<slot>/` as
+`slot-<name>` → claim task with 60s hold → CAS-write session record
+with 5-min TTL), emits `BONES_SLOT_WT=<path>`, then
+`FreshLease.Release` (stops the leaf, leaves the session record
+live in KV). On any failure between `Acquire` and emission the verb
+falls back to `FreshLease.Abort` to roll the record back.
 
 **`swarm commit`** — flags `--slot` (defaults to single active
-slot), `-m` (required); positional file args optional. Calls
+slot), `-m` (required), `--no-autosync` (skip pre-commit hub pull
+for this commit only); positional file args optional. Calls
 `swarm.Resume` then `ResumedLease.Commit(message, files)` (claim →
-libfossil commit with slot-user identity → autosync to hub → bump
-`LastRenewed` via CAS, retrying on conflict). Prints new commit
-hash. The agent NEVER calls `fossil up`; concurrent slot work
-appears on the hub as forks (the way fossil itself models it),
-invisible to this slot's lineage.
+pull from hub if autosync ON → libfossil commit with slot-user
+identity → push to hub → bump `LastRenewed` via CAS, retrying on
+conflict). Prints new commit hash. The agent NEVER calls
+`fossil up`; concurrent slot work appears on the hub as forks (the
+way fossil itself models it), invisible to this slot's lineage.
 
 **`swarm close`** — flags `--slot`, `--result`
 (`success|fail|fork`), `--summary`, `--branch`/`--rev` (forks only).

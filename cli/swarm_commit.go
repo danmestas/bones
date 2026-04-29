@@ -27,10 +27,11 @@ import (
 // internal/swarm.ResumedLease. This verb is flag parsing + file
 // gathering + ResumedLease.Commit + result printing.
 type SwarmCommitCmd struct {
-	Slot    string   `name:"slot" help:"slot name (defaults to single active slot on this host)"`
-	Message string   `name:"message" short:"m" required:"" help:"commit message"`
-	Files   []string `arg:"" optional:"" help:"files to commit (default: all modified)"`
-	HubURL  string   `name:"hub-url" help:"override hub fossil HTTP URL"`
+	Slot       string   `name:"slot" help:"slot name (defaults to single active slot on this host)"`
+	Message    string   `name:"message" short:"m" required:"" help:"commit message"`
+	Files      []string `arg:"" optional:"" help:"files to commit (default: all modified)"`
+	HubURL     string   `name:"hub-url" help:"override hub fossil HTTP URL"`
+	NoAutosync bool     `name:"no-autosync" help:"branch-per-slot mode (skip pre-commit hub pull)"`
 }
 
 func (c *SwarmCommitCmd) Run(g *libfossilcli.Globals) error {
@@ -51,7 +52,10 @@ func (c *SwarmCommitCmd) run(ctx context.Context, info workspace.Info) error {
 	if hubURL == "" {
 		hubURL = swarm.DefaultHubFossilURL
 	}
-	lease, err := swarm.Resume(ctx, info, slot, swarm.AcquireOpts{HubURL: hubURL})
+	lease, err := swarm.Resume(ctx, info, slot, swarm.AcquireOpts{
+		HubURL:     hubURL,
+		NoAutosync: c.NoAutosync,
+	})
 	if err != nil {
 		if errors.Is(err, swarm.ErrSessionNotFound) {
 			return fmt.Errorf(

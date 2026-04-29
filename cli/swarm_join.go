@@ -31,6 +31,7 @@ type SwarmJoinCmd struct {
 	Caps          string `name:"caps" default:"oih" help:"fossil caps for the slot user"`
 	ForceTakeover bool   `name:"force" help:"clobber an existing slot session (recovery only)"`
 	HubURL        string `name:"hub-url" help:"override hub fossil HTTP URL"`
+	NoAutosync    bool   `name:"no-autosync" help:"branch-per-slot mode (skip pre-commit hub pull)"`
 }
 
 // Run drives the join flow per ADR 0028 §"swarm join", via
@@ -56,6 +57,7 @@ func (c *SwarmJoinCmd) run(ctx context.Context, info workspace.Info) error {
 		HubURL:        hubURL,
 		Caps:          c.Caps,
 		ForceTakeover: c.ForceTakeover,
+		NoAutosync:    c.NoAutosync,
 	})
 	if err != nil {
 		// Stamp the verb name into the error so operators see which
