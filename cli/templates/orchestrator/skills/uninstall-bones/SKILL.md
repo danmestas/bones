@@ -40,7 +40,7 @@ which to keep. Edit out only the bones-scaffolded entries — the ones whose
 
 ## Step 4: Remove the Fossil checkout at root
 
-Per ADR 0024, bones opens a Fossil checkout at the project root. Working-
+Per ADR 0023, bones opens a Fossil checkout at the project root. Working-
 tree files are not stored in these paths — only Fossil metadata — so
 removing them is safe:
 

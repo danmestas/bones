@@ -131,7 +131,6 @@ and the runtime invariants; this file keeps the design history.
 - Swarm-demo retro: `docs/code-review/2026-04-28-swarm-demo-retro.md`
 - ADR 0010: Fossil code artifacts (per-leaf checkouts)
 - ADR 0021: Dispatch and auto-claim
-- ADR 0023: Hub-and-leaf orchestrator
-- ADR 0024: Orchestrator Fossil checkout = git working tree
+- ADR 0023: Hub-leaf orchestrator
 - ADR 0025: Substrate vs. domain layering — `swarm` is domain, `coord` is substrate
 - PRs that unblocked the design: #41 (R1 init), #42 (R5 nested slots), #43 (R2 hub user add)

@@ -2,36 +2,27 @@
 
 ## Status
 
-Accepted 2026-04-21. First Phase 6 deliverable per the beads-capability-closure
-roadmap. Extends ADR 0005 (task schema) additively; does not supersede any
-prior ADR. ADR 0011 and 0012 numbers remain reserved for MCP integration
-(hf1, Phase 7) and ACL (ba6, Phase 8) respectively.
+Accepted 2026-04-21. Extends ADR 0005 (task schema) additively.
 
 ## Context
 
-Phase 5 closed the code-artifact substrate (ADR 0010) and the claim-reclamation
-gap (ADR 0013). Phase 6's charter is "beads capability closure" — walk
-`reference/CAPABILITIES.md` and either implement or explicitly non-goal each
-row. The largest unshipped beads capability is the typed dependency graph:
-`bd dep add`, `bd dep remove`, and the ready/blocked DAG that consumes it.
-
-Without typed edges, bones cannot express:
+The audit-target tracker exposes a typed dependency graph:
+`bd dep add`, `bd dep remove`, and the ready/blocked DAG that consumes
+it. Without typed edges, bones cannot express:
 
 - **Blocking** — "task B waits on task A" is encodable only as a free-text
   note. `coord.Ready` surfaces both A and B indiscriminately, forcing callers
   to hand-filter.
-- **Discovery provenance** — "while working on P, I discovered T" — the
-  `discovered-from` link beads uses for cross-session context recovery has no
-  analogue today.
+- **Discovery provenance** — "while working on P, I discovered T" — a
+  cross-session context-recovery link has no analogue today.
 - **Dedup / supersession** — two agents opening near-duplicate tasks can't
   mark one as the canonical and the other as superseded without chat
   convention; Ready surfaces both.
 
-The question is five-layered: **taxonomy** (which edge types from beads' 13
-are load-bearing for us?), **storage** (where on the record do edges live?),
-**Ready semantics** (which types filter ready work?), **API surface**
-(signature, CAS rules, idempotency), and **migration** (what to do about the
-existing scalar `Parent` field).
+The question is five-layered: **taxonomy** (which edge types are load-bearing?),
+**storage** (where on the record do edges live?), **Ready semantics** (which
+types filter ready work?), **API surface** (signature, CAS rules, idempotency),
+and **migration** (what to do about the existing scalar `Parent` field).
 
 ## Decision
 
@@ -51,17 +42,15 @@ Deferred / rejected:
 - `parent-child` — covered by the existing scalar `Parent` field on the task
   record (ADR 0005). Unifying into edges costs a migrator and a
   direction-convention debate (outgoing-only storage would force edges to
-  point child→parent, reversed from beads). Kept as a scalar.
-- `waits-for` — dropped from v1. With our `{type, target: TaskID}` shape
-  and no gate primitive (CAPABILITIES.md §6 marks gates non-goal), the edge
-  would target another task — which is just `blocks` in reverse. Without a
-  payload (URL, deadline, condition) or a gate-evaluator to consume it,
-  shipping the type now stores a shape we can't use. Re-add if/when a gate
-  system or payload model arrives; adding a new `EdgeType` constant later
-  is source-compatible.
+  point child→parent, reversed from the audit target). Kept as a scalar.
+- `waits-for` — dropped. With our `{type, target: TaskID}` shape and no gate
+  primitive, the edge would target another task — which is just `blocks` in
+  reverse. Without a payload (URL, deadline, condition) or a gate-evaluator
+  to consume it, shipping the type stores a shape we can't use. Re-add if/when
+  a gate system or payload model arrives; adding a new `EdgeType` constant
+  later is source-compatible.
 - `authored-by`, `assigned-to`, `approved-by`, `attests` — governance-flavored.
-  Require an ACL model that lands in Phase 8 (ADR 0012 reservation). Not useful
-  without one.
+  Require an ACL model. Not useful without one.
 - `replies-to` — already lives on `ChatMessage` (ADR 0008). Duplicating into
   task-edges would confuse the two substrates.
 - `conditional-blocks` — requires a condition-evaluator machinery we don't
@@ -101,8 +90,7 @@ a separate edges collection (new NATS KV bucket). Outgoing-only keeps the
 write path a single-record CAS, matching the existing Task substrate. Reverse
 lookups are not O(1) — they require a scan — but `Ready()` already scans every
 task today (`coord/ready.go`), so adding reverse-index construction to the
-same pass is free at the scale CAPABILITIES.md §2 committed us to
-(hundreds–thousands of tasks).
+same pass is free at the target scale (hundreds–thousands of tasks).
 
 ### Ready(): two-pass filter with reverse index
 
@@ -131,10 +119,10 @@ task, no incoming `supersedes` from a non-closed task, no incoming
 docstring accordingly.
 
 Parent-filter semantic: a parent P is hidden from `Ready()` while any task
-T has `T.Parent == P.ID` and `T.Status != closed`. Matches beads' "parent
-waits on all children closing" reading, which is the ergonomic story (the
-parent surfaces as an umbrella; children surface as the workable items;
-parent unblocks when all children close).
+T has `T.Parent == P.ID` and `T.Status != closed`. The ergonomic story is
+"parent waits on all children closing": the parent surfaces as an umbrella;
+children surface as the workable items; parent unblocks when all children
+close.
 
 ### API: Link(), no Unlink
 
@@ -153,7 +141,7 @@ Contract:
 2. Both `from` and `to` must exist in the tasks bucket, else
    `ErrTaskNotFound`. The `to` task may be in any status, including closed —
    `supersedes` and `duplicates` are legitimately used against closed targets.
-3. No `claimed_by` requirement. Any agent can Link. Matches Phase 6's no-ACL
+3. No `claimed_by` requirement. Any agent can Link. Matches the no-ACL
    posture; `discovered-from` specifically requires the linker *not* to own
    the parent (the discovering agent isn't the parent's claimer).
 4. Idempotent on `(from, to, type)` — a duplicate Link is a silent no-op, no
@@ -177,7 +165,7 @@ lands as an additive method on a later ticket.
 
 ### Chat-layer observability
 
-No chat notice is emitted on Link. Unlike `coord.Reclaim` (ADR 0013), which
+No chat notice is emitted on Link. Unlike `coord.Reclaim` (ADR 0007), which
 is a liveness-significant event that other agents may need to react to,
 Link is a pure metadata mutation on a single task record. Consumers who
 care about the edge graph can walk it via the normal task read path.
@@ -205,7 +193,7 @@ tasks with nil `Edges`.
 
 **No schema migration.** `Edges` is additive. Records written before this
 ADR decode with nil `Edges`; records written after may have an Edges
-slice. No version bump, no migrator. This is in contrast to ADR 0013's
+slice. No version bump, no migrator. This is in contrast to ADR 0007's
 `ClaimEpoch` field, which was also additive but carried an invariant
 (monotonic) that required thinking — `Edges` has no such cross-time
 constraint.
@@ -213,9 +201,8 @@ constraint.
 **Parent-filter behavior change.** Before this ADR, a parent task P could
 be returned by `Ready()` even while one of its children was open — no
 filter existed. After this ADR, P is hidden while any child is non-closed.
-This is a behavior change in an existing method, but the prior behavior
-was undocumented and the new behavior matches the beads-compatible reading
-that CAPABILITIES.md §1 row 5 long committed us to.
+The prior behavior was undocumented; the new behavior matches the audit
+target's parent-waits-for-children reading.
 
 **Ready() cost change.** One full pass over the task bucket becomes two
 passes over (largely) the same data. At N=1000 tasks with 2 edges each,
@@ -224,15 +211,15 @@ is the bottleneck regardless of edge count. We accept O(N) per `Ready`
 call. If scale becomes a real issue, a cached reverse index is a future
 optimization (ticket-worthy, not ADR-worthy).
 
-**Phase 6 follow-on: `coord.Blocked()`.** The reverse index built by Pass 1
-is exactly what `coord.Blocked` (ticket `0sr`) needs. That ticket will
-likely extract the reverse-index helper into a package-private function
-and reuse it, rather than recomputing. The shared helper's signature is
-not part of this ADR — it's an internal refactor once both methods ship.
+**`coord.Blocked()` follow-on.** The reverse index built by Pass 1 is
+exactly what `coord.Blocked` needs. That work will likely extract the
+reverse-index helper into a package-private function and reuse it,
+rather than recomputing. The shared helper's signature is not part of
+this ADR — it's an internal refactor once both methods ship.
 
-**Forward compatibility for new edge types.** Adding a sixth edge type in
-a future phase is source-compatible: existing records decode, existing
-Ready filtering ignores unknown types (invariant 26). The only breaking
+**Forward compatibility for new edge types.** Adding a new edge type
+later is source-compatible: existing records decode, existing Ready
+filtering ignores unknown types (invariant 26). The only breaking
 direction is *removing* a type, which we don't plan to do.
 
 ## Accepted trade-offs

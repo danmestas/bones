@@ -48,8 +48,8 @@ the NATS subject a message arrived on, or the fossil commit hash that
 carried a task update. This is an accepted cost. Diagnostics route
 through structured logs, not return types.
 
-Per the zero-deps posture (from the 2026-04-18 TigerStyle commitments),
-the allowed dependency set is stdlib + `nats.go` + `libfossil` +
-`EdgeSync`. Any addition requires a new ADR. This ADR is the reason that
-rule exists: every new dep is a new substrate we are promising to hide
-from consumers, and the cost of that promise should be deliberate.
+Per the zero-deps posture, the allowed dependency set is stdlib +
+`nats.go` + `libfossil` + `EdgeSync`. Any addition requires a new ADR.
+This ADR is the reason that rule exists: every new dep is a new substrate
+we are promising to hide from consumers, and the cost of that promise
+should be deliberate.

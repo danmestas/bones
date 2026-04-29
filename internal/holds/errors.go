@@ -1,7 +1,7 @@
 // Package holds is the substrate layer that stores file-level holds
 // in a NATS JetStream KV bucket. It exposes four primitives — Announce,
 // Release, WhoHas, Subscribe — consumed exclusively by the coord
-// package. See docs/adr/0002-scoped-holds.md for the composed
+// package. See docs/adr/0007-claim-semantics.md for the composed
 // closure/return-release model coord builds on top of these primitives.
 //
 // This package is internal and unexported: callers outside

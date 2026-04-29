@@ -122,7 +122,7 @@ type Task struct {
 	// Claim or Reclaim. Invariant 24 requires strict increase per Claim/
 	// Reclaim; Commit and CloseTask fence against it to refuse zombie
 	// writes after a Reclaim. Zero on records that never had a claim
-	// (legacy records decode to zero; first Claim bumps to 1). ADR 0013.
+	// (legacy records decode to zero; first Claim bumps to 1). ADR 0007.
 	ClaimEpoch uint64 `json:"claim_epoch,omitempty"`
 
 	// OriginalSize is the pre-compaction canonical source size for the

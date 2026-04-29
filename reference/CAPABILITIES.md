@@ -9,7 +9,7 @@
 > the remainder is captured in ADR 0017's remaining-work roadmap.
 
 *Last updated 2026-04-21 — revised after Phase 5 (fossil code artifacts)
-landed per ADR 0010 and ADR 0013 (claim reclamation). Phases 1–5 are
+landed per ADR 0010 and ADR 0007 (claim lifecycle). Phases 1–5 are
 shipped; Phase 6 (beads capability closure) is the next scope, with
 eight tickets filed: `dcd` (typed edges), `0sr` (Blocked), `8m9`
 (defer_until), `9bu` (this doc refresh), `rbu` (Prime + plugin),
@@ -210,8 +210,8 @@ smoke harness, alongside the Phase 3+4 coordination primitives covered by
   `coord/ask_admin.go`. Beads has no synchronous peer communication.
 - **Reactions on chat messages** — `coord.React` piggybacked on the
   chat substrate per ADR 0009. **Implemented** — see `coord/react.go`.
-- **File-level holds with TTL** — `bones-holds` KV bucket per
-  ADR 0002, acquired as part of `coord.Claim` per ADR 0007.
+- **File-level holds with TTL** — `bones-holds` KV bucket acquired
+  as part of `coord.Claim` per ADR 0007 (claim lifecycle).
   **Implemented** — see `internal/holds/`, `coord/coord.go` (`Claim`).
   Beads has no file-level concurrency protocol (it operates at issue
   granularity only).

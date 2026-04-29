@@ -11,8 +11,8 @@ for conditions the caller is expected to handle.
 Invariants 1-10 are the Phase 1 coord-API contract. Invariants 11-16 extend the
 set for Phase 2's task-state surface, entailed by ADR 0005 (tasks in NATS KV)
 and ADR 0007 (Claim task-CAS ordering). Invariant 17 extends it for Phase 3's
-chat surface, entailed by ADR 0008. Invariants 18-19 extend it for Phase 4's
-presence surface, entailed by ADR 0009.
+chat surface, entailed by ADR 0008. Invariants 18-19 extend it for the
+presence substrate.
 
 `Config.Validate` is the one exception to the panic-on-contract-violation rule. It runs
 at `Open(ctx, cfg)` against operator-supplied values and returns an error. Bad operator
@@ -80,7 +80,7 @@ acquisition is rolled back before the error return.
 
 **Rationale.** A half-held state is worse than no hold at all. The caller cannot reason
 about which files are theirs, and other agents see phantom contention on files the
-claimer has already released in spirit. See ADR 0002.
+claimer has already released in spirit. See ADR 0007.
 
 **Where asserted.** Enforced in the `Claim` implementation (rollback on partial
 failure); `assert.Postcondition` checks the invariant at the return path.
@@ -92,7 +92,7 @@ second and subsequent calls return nil and take no action.
 
 **Rationale.** `defer release()` is the idiomatic shape, and callers may also call
 `release()` explicitly to return the hold early. Neither path should error. Double-free
-is a programmer mistake everywhere except here, where it is expected. See ADR 0002.
+is a programmer mistake everywhere except here, where it is expected. See ADR 0007.
 
 **Where asserted.** Enforced inside the closure via a `sync.Once`-style guard; the
 guard is the invariant.
@@ -266,8 +266,8 @@ proceeds to the next substrate.
 racy write against a substrate that the caller believes is torn down. Leaving
 the KV entry to TTL expiry (rather than deleting it) would mean that every
 agent shutdown looks like a crash to its peers, which defeats the point of
-`EventDown` as a clean-exit signal. ADR 0009 is explicit that both the
-goroutine and the entry must be cleaned up synchronously.
+`EventDown` as a clean-exit signal. Both the goroutine and the entry must be
+cleaned up synchronously.
 
 **Enforcement site.** `internal/presence.Manager.Close`: an atomic `closed`
 CAS guards idempotency; `hbCancel()` cancels the heartbeat context; `<-hbDone`
@@ -325,7 +325,7 @@ The Task.ClaimEpoch field is monotonically non-decreasing across the
 task's lifetime and strictly increases on every successful Claim or
 Reclaim. Mutations under a stale epoch (Commit, CloseTask) are refused
 with ErrEpochStale. Legacy records without the field decode as epoch=0;
-the first Claim bumps to 1. ADR 0013.
+the first Claim bumps to 1. ADR 0007.
 
 ## Invariant 25: Task.Edges has no duplicate (Type, Target) pairs
 
@@ -347,15 +347,16 @@ are ignored by Ready's reverse-index pass. ADR 0014.
 
 ## Where the invariants live
 
-Invariants 6 and 7 are the load-bearing guarantees of ADR 0002 (scoped holds via
-closure/return-release). Invariant 10 is the no-error-swallowing corollary to ADR 0003
-(substrate hiding). Invariants 11-16 are entailed by ADRs 0005 (tasks in NATS KV)
-and 0007 (Claim task-CAS ordering); ADR 0004 §Scope amendments is the narrowing
-that made those invariants the task-conflict contract rather than fork-merge policy. Invariant 17
-is entailed by ADR 0008 (chat substrate). Invariants 18-19 are entailed by ADR 0009
-(presence substrate). Invariants 20-23 are entailed by ADR 0010 (code artifacts:
-hold-gated commits, fork-on-conflict, unique fork branch names, merge-to-single-commit).
-Invariant 24 is entailed by ADR 0013 (claim reclamation: claim_epoch monotonicity).
+Invariants 6, 7, 16, and 24 are the load-bearing guarantees of ADR 0007 (claim
+lifecycle: scoped holds via closure/return-release, task-CAS ordering, release
+undoes full acquisition, claim_epoch monotonicity). Invariant 10 is the
+no-error-swallowing corollary to ADR 0003 (substrate hiding). Invariants 11-15
+are entailed by ADR 0005 (tasks in NATS KV); ADR 0004 §Scope amendments is the
+narrowing that made those invariants the task-conflict contract rather than
+fork-merge policy. Invariant 17 is entailed by ADR 0008 (chat substrate).
+Invariants 18-19 are entailed by the presence substrate. Invariants 20-23
+are entailed by ADR 0010 (code artifacts: hold-gated commits, fork-on-conflict,
+unique fork branch names, merge-to-single-commit).
 Invariants 25-26 are entailed by ADR 0014 (typed edges on task records: dedup
 and type validity). This document is the canonical list; coord method godoc
 will cite these numbers rather than restating the reasoning.

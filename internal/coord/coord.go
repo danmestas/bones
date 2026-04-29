@@ -35,21 +35,20 @@ const holdsBucket = "bones-holds"
 const archiveBucket = "bones-task-archive"
 
 // presenceBucket is the JetStream KV bucket name coord uses to back
-// the presence substrate per ADR 0009. Entry TTL is 3x
-// Config.HeartbeatInterval and is set at bucket-creation time by
-// internal/presence.Open.
+// the presence substrate. Entry TTL is 3x Config.HeartbeatInterval
+// and is set at bucket-creation time by internal/presence.Open.
 const presenceBucket = "bones-presence"
 
 // swarmSessionsBucket is the JetStream KV bucket name internal/swarm
 // uses to track per-slot swarm sessions per ADR 0028. Listed here
 // for visibility alongside the other coord-managed buckets, but
 // internal/swarm.Open creates/attaches independently (the returned
-// *swarm.Sessions handle, narrowed in ADR 0034). coord.Coord callers
-// do NOT consume this bucket. Provisioning is best-effort here so
-// any coord.Open guarantees the bucket exists before the first
-// `bones swarm join`. Constant kept exported (in effect — swarm
-// package mirrors it as DefaultBucketName) so tests can assert the
-// same name in both layers.
+// *swarm.Sessions handle has a narrow public surface). coord.Coord
+// callers do NOT consume this bucket. Provisioning is best-effort
+// here so any coord.Open guarantees the bucket exists before the
+// first `bones swarm join`. Constant kept exported (in effect —
+// swarm package mirrors it as DefaultBucketName) so tests can assert
+// the same name in both layers.
 const swarmSessionsBucket = "bones-swarm-sessions"
 
 // Coord is the public entry point for bones. Construct one via
@@ -62,7 +61,7 @@ const swarmSessionsBucket = "bones-swarm-sessions"
 // race.
 //
 // Substrate-backed Managers live on an unexported substrate aggregate
-// (see substrate.go). ADR 0008 foreshadowed this refactor; ADR 0009's
+// (see substrate.go). ADR 0008 foreshadowed this refactor; the
 // presence work was the trigger. Accessors within the coord package
 // use c.sub.<mgr>; external callers see only method names per ADR 0001.
 type Coord struct {
@@ -85,7 +84,7 @@ type Coord struct {
 	// Commit and CloseTask look up this map to fence against zombie
 	// writes after a peer Reclaim bumped the record's epoch past ours.
 	// Per-Coord in-memory — process crash means no Commit is possible
-	// anyway, so durability is not a concern. ADR 0013.
+	// anyway, so durability is not a concern. ADR 0007.
 	activeEpochs sync.Map // key: TaskID, value: uint64
 }
 
@@ -362,7 +361,7 @@ func (c *Coord) acquireTaskCAS(
 // ErrTaskAlreadyClaimed rather than a malformed transition. On
 // success, claim_epoch is bumped by 1 (Invariant 24); the new value
 // is captured into *newEpoch so the caller can register it in
-// activeEpochs without a second Get. ADR 0013.
+// activeEpochs without a second Get. ADR 0007.
 func (c *Coord) claimMutator(newEpoch *uint64) func(tasks.Task) (tasks.Task, error) {
 	agent := c.cfg.AgentID
 	return func(cur tasks.Task) (tasks.Task, error) {

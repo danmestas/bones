@@ -2,28 +2,25 @@
 
 ## Status
 
-Accepted 2026-04-22. Phase 6 deliverable for ticket `agent-infra-znr`.
-Builds on ADR 0005's roadmap note that old closed tasks should eventually
-be compacted out of the hot KV scan path, and on ADR 0010's Fossil
-code-artifact substrate for durable append-only summary storage.
+Accepted 2026-04-22. Builds on ADR 0005 (closed tasks should eventually
+be compacted out of the hot KV scan path) and ADR 0010 (Fossil code-artifact
+substrate for durable append-only summary storage).
 
-**Partially superseded by ADR 0027 (2026-04-28):** the user-facing
-`bones tasks compact` CLI command was removed; `coord.Leaf.Compact` and
-the `Summarizer` interface remain. The substrate decisions in this ADR
-(eligibility, summary artifact path, archive-vs-prune, level scheme)
-still apply to any future re-binding. See ADR 0027 for the rationale.
+The user-facing `bones tasks compact` CLI command was later removed;
+`coord.Leaf.Compact` and the `Summarizer` interface remain. The substrate
+decisions in this ADR (eligibility, summary artifact path, archive-vs-prune,
+level scheme) still apply to any future re-binding.
 
 ## Context
 
-Agent-infra keeps closed tasks in NATS KV so they remain readable for audit and
-context recovery. ADR 0005 explicitly notes that this is acceptable only while
-the bucket is small, and points at future compaction into repo artifacts once
-closed-task volume grows enough to make `Ready()` scans expensive.
+Closed tasks live in NATS KV so they remain readable for audit and
+context recovery. ADR 0005 notes that this is acceptable only while
+the bucket is small, and points at future compaction into repo artifacts
+once closed-task volume grows enough to make `Ready()` scans expensive.
 
-Beads already ships semantic compaction: older closed issues are summarized at
-lower fidelity so agents can carry the important context without dragging the
-full historical body forever. Our README and `reference/CAPABILITIES.md`
-explicitly say we will likely port an equivalent.
+Semantic compaction (older closed issues summarized at lower fidelity so
+agents carry important context without dragging the full historical body)
+is the standard pattern.
 
 Three questions must be pinned before implementation:
 
@@ -51,7 +48,7 @@ func (c *Coord) Compact(ctx context.Context, opts CompactOptions) (CompactResult
 
 `Compact` is an **on-demand batch pass** over eligible closed tasks.
 
-Why this first:
+Why this shape:
 - simplest to test deterministically
 - no scheduler daemon or background goroutine inside `coord`
 - callers can wire cadence however they want (nightly job, session-start,
@@ -59,9 +56,9 @@ Why this first:
 - scales to a later scheduled wrapper without changing the core compaction
   semantics
 
-Streaming compaction immediately on `CloseTask` is rejected for v1 because it
-couples a latency-sensitive task lifecycle transition to model inference and
-artifact writes. The close boundary should stay cheap and reliable.
+Streaming compaction immediately on `CloseTask` is rejected because it
+couples a latency-sensitive task lifecycle transition to model inference
+and artifact writes. The close boundary should stay cheap and reliable.
 
 ### 2. Summary stored out-of-line in Fossil
 
@@ -76,18 +73,17 @@ The task record stores metadata only:
 - `compact_level uint8`
 - `compacted_at *time.Time`
 
-This matches ADR 0005's roadmap direction (“compacted into repo ADRs”) and
-avoids violating invariant 14's 8KB task-record bound by stuffing summaries
-inline into NATS KV.
+This avoids violating invariant 14's 8KB task-record bound by stuffing
+summaries inline into NATS KV.
 
-Original preservation is free in the Fossil sense: every compaction write is an
-append-only repo commit, so prior summaries and the pre-compaction task record
-history remain inspectable.
+Original preservation is free in the Fossil sense: every compaction write is
+an append-only repo commit, so prior summaries and the pre-compaction task
+record history remain inspectable.
 
 ### 3. Provider-pluggable summarizer
 
-`coord` does **not** import Anthropic or any other model SDK in this phase.
-Instead, callers pass a summarizer implementation through `CompactOptions`.
+`coord` does **not** import Anthropic or any other model SDK. Instead,
+callers pass a summarizer implementation through `CompactOptions`.
 
 ```go
 type Summarizer interface {
@@ -116,7 +112,7 @@ turning closed tasks back into mutable work items.
 
 ### 5. Eligibility and repeat behavior
 
-V1 compacts tasks that are:
+Compaction targets tasks that are:
 - `status == closed`
 - `closed_at != nil`
 - older than `CompactOptions.MinAge`

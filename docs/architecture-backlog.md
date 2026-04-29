@@ -70,11 +70,12 @@ repeated `fmt.Errorf("open manager: %w", err)` strings disappear.
 unexported: `put`, `update`, `delete`), `internal/swarm/lease.go` (calls the
 unexported mutators).
 
-**Problem.** ADR 0034 narrowed `swarm.Sessions`'s public surface, but `Lease`
-is in the same package and still pokes the unexported `put / update / delete`
-directly. The narrowing is performed through Go visibility — same package, no
-fence. The Interface between Lease and Sessions is whatever Lease feels like
-calling today; a refactor of one silently breaks the other.
+**Problem.** `swarm.Sessions`'s public surface was narrowed (Get/List public,
+mutators unexported), but `Lease` is in the same package and still pokes the
+unexported `put / update / delete` directly. The narrowing is performed
+through Go visibility — same package, no fence. The Interface between Lease
+and Sessions is whatever Lease feels like calling today; a refactor of one
+silently breaks the other.
 
 **Solution.** Either (a) define a real Adapter Interface that Lease consumes
 (`type sessionStore interface { Put/Update/Delete }`) so Lease can be tested
@@ -83,7 +84,7 @@ surface to be exported and contractual.
 
 **Benefits.** *Locality* — Sessions's mutation invariants live behind a real
 seam. *Tests* — Lease can be tested without spinning up real NATS for the
-session-record path. Makes ADR 0034's intent enforceable.
+session-record path. Makes the Sessions narrowing intent enforceable.
 
 ---
 
@@ -132,9 +133,10 @@ beside it) provides `Manager[T]` over a bucket with the CAS + subscribe
 patterns. Tasks and Holds become Adapters supplying codec + bucket name +
 event-mapping.
 
-**ADR conflict.** ADR 0032 said "keep `jskv` and `dispatch` as separate
-packages." That ADR was about not collapsing two unrelated packages — it does
-not preclude a higher-level KV primitive. Worth surfacing because two adapters
+**ADR conflict.** ADR 0032 (package-boundary criteria) keeps `jskv` and
+`dispatch` as separate packages because each passes a different criterion
+(deletion test for `jskv`, process-boundary for `dispatch`). It does not
+preclude a higher-level KV primitive. Worth surfacing because two adapters
 = real seam.
 
 **Benefits.** *Locality* — CAS retry policy and subscription bookkeeping in
@@ -174,10 +176,9 @@ changes break tests, not production.
 `examples/hub-leaf-e2e/main.go` (10ms-stagger workaround for the upstream
 race), `nats-server/v2` server/stream.go vs jetstream_api.go (upstream).
 
-**Source.** ADR 0018 §"Negative / known limitations" (moved here 2026-04-29).
-The EdgeSync refactor delivered ~50–500× throughput wins by wrapping
-`leaf.Agent` instead of libfossil directly; three known limitations rode
-along with it.
+**Source.** ADR 0023 (hub-leaf orchestrator). Wrapping `leaf.Agent`
+instead of libfossil directly delivered ~50–500× throughput wins;
+three known limitations rode along with it.
 
 **Problem.** Three coupled debt items:
 

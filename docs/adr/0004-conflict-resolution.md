@@ -1,22 +1,14 @@
 # ADR 0004: Fossil fork + chat notify for conflict resolution
 
 **Status:** Accepted (2026-04-18, scope narrowed 2026-04-19)
-**Subsumes:** ADR 0006 (scope-narrow conflict resolution)
 
-Closes README Open Question #4. Scope narrowed 2026-04-19 — see Scope
-amendments below.
+## Scope
 
-## Scope amendments
-
-**2026-04-19 (folded from ADR 0006):** Scope narrows to **code artifacts
-only**. When written, "state" meant tasks and code together. ADR 0005 then
-moved tasks onto NATS JetStream KV (CAS-shaped, not commit-shaped) and ADR
-0007 fixed the ordering so claim contention resolves in one round trip with
-`ErrTaskAlreadyClaimed` to the loser. Task conflicts therefore never produce
-sibling leaves and never trigger chat notify; that path is for code only.
-
-When fossil enters the project for code in Phase 5+, the fork-plus-chat-notify
-posture below applies there without modification.
+Scope is **code artifacts only**. Tasks live on NATS JetStream KV (CAS-shaped,
+not commit-shaped) per ADR 0005, and the claim-contention path in ADR 0007
+resolves in one round trip with `ErrTaskAlreadyClaimed` to the loser. Task
+conflicts therefore never produce sibling leaves and never trigger chat
+notify; that path is for code only.
 
 ## Decision
 

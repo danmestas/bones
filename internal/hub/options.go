@@ -1,6 +1,6 @@
 // Package hub starts and stops the embedded Fossil hub repo and the
 // embedded NATS JetStream server that together form the orchestrator
-// substrate documented in ADR 0023 and ADR 0024.
+// substrate documented in ADR 0023.
 //
 // The package replaces the previous bash hub-bootstrap.sh / hub-shutdown.sh
 // scripts. Callers no longer need `fossil` or `nats-server` on PATH; the

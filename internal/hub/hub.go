@@ -86,7 +86,7 @@ func Start(ctx context.Context, root string, options ...Option) error {
 // shells can detect liveness, and Stop in this same process is
 // equivalent to canceling ctx.
 func runForeground(ctx context.Context, p paths, o opts) error {
-	// Fresh-start detection (ADR 0024 §2): if no fossil PID is alive,
+	// Fresh-start detection (ADR 0023): if no fossil PID is alive,
 	// wipe stale checkout state so each session starts from a clean
 	// substrate. Working-tree files are untouched.
 	if !pidIsLive(p.fossilPid) {

@@ -1,92 +1,124 @@
-# ADR 0007: Claim takes task-only, task-CAS first, release un-claims
+# ADR 0007 — Claim lifecycle (hold scope + claim CAS + reclaim)
 
-## Status
-
-Accepted 2026-04-19. Amends ADR 0002 (signature superseded in part — see the
-note at the top of that Decision block). Entailed by ADR 0005's move of tasks
-onto NATS KV.
+**Status:** Accepted (2026-04-19, lifecycle merge 2026-04-29)
 
 ## Context
 
-ADR 0005 put tasks in a NATS JetStream KV bucket, and the task record itself
-declares the files the task touches (`files []string`, sorted, absolute,
-bounded by `MaxHoldsPerClaim`). That move is upstream of the `Claim` API in a
-way the existing docs do not capture. Three coupled design questions fall out
-of it.
+A claim is the unit of agent ownership over a task. It binds three
+things: a CAS-fenced mutation of the task record (ownership of the task),
+a set of file-level holds (ownership of the substrate the task mutates),
+and a liveness story (what happens when the holder dies). Treating any
+in isolation produces incoherence — a hold without a task fence leaks on
+crash; a task fence without takeover strands ownership at a dead agent;
+a release that undoes only one half leaves the other dangling.
 
-**(1) Whose file list is it?** The Phase 1 signature from ADR 0002 —
-`Claim(ctx, taskID, files, ttl)` — asks the caller to pass files. Now that
-the task record carries the files, the caller is repeating information the
-substrate already has. Worse, the two sources can drift: a caller that passes
-a file list different from the task record's either duplicates work or
-silently claims the wrong set. There is no reason to expose that seam.
-
-**(2) What order does acquisition take?** The Phase 1 `Claim` acquires holds
-and has no task-CAS step — tasks did not exist yet. Phase 2 adds one. The
-question is which goes first. If holds go first, the loser of a contention
-race sees `ErrHeldByAnother` (the winner already holds the files) before
-anyone ever checks the task record — the sentinel is a substrate side
-effect, not a semantic signal. If task-CAS goes first, the loser sees
-`ErrTaskAlreadyClaimed` directly, and we never waste hold-acquire work on a
-claim that was going to fail at the task layer anyway.
-
-**(3) What does release undo?** Tasks on KV do not carry TTL (ADR 0005:
-closed tasks stay readable; no `MaxAge`). If the release closure only
-releases holds and leaves `claimed_by` set on the task record, a crash
-between the caller's `release()` and their `CloseTask` call leaks the claim
-permanently — the task is stuck in `claimed` with no agent able to touch it
-and no substrate-level expiry to recover it. The holds layer's TTL backstop
-does not apply here.
-
-These three questions are entailed by one another. Answering (1) without (2)
-leaves the sentinel story incoherent. Answering (2) without (3) leaves a
-permanent-leak failure mode. One ADR covers them together.
+The task record is the source of truth for the file set: it declares
+the absolute, sorted, bounded `files []string` the task touches. Callers
+do not pass that list at claim time; reading it from the record removes
+a drift seam.
 
 ## Decision
 
-**Signature.** `Claim(ctx, taskID, ttl) (release func() error, err error)`.
-The caller no longer passes files; they are read from the task record at
-Claim time. Supersedes the three-argument shape from ADR 0002.
+**Signature.**
 
-**Order.** Read the task record, then CAS-claim the task record
-(`claimed_by = agentID`, `status = claimed`), then acquire holds on the
-files the record declares. If the task-CAS loses, return
-`ErrTaskAlreadyClaimed` immediately — no hold-acquire work is attempted. If
-a hold fails, CAS-undo the task claim before returning the underlying error.
+```go
+Claim(ctx, taskID, ttl) (release func() error, err error)
+Reclaim(ctx, taskID, ttl) (release func() error, err error)
+```
 
-**Release.** The closure CAS-un-claims the task record (`status = open`,
-`claimed_by = ""`) *and* releases every hold, in the reverse order of
-acquisition. Idempotent per invariant 7; the idempotency guard is a
-`sync.Once` as before. A new invariant (16) articulates the release-undoes-
-full-acquisition requirement and pairs with this ADR.
+Both return a closure the caller defers. The closure is the entire
+release path — there is no separate `Release` verb. Idempotent.
 
-## Consequences
+**Acquisition order.**
 
-The two sentinels `ErrTaskAlreadyClaimed` and `ErrHeldByAnother` are now
-semantically distinct. `ErrTaskAlreadyClaimed` means the task record itself
-is already claimed — the race-loser signal. `ErrHeldByAnother` is narrower:
-the task's declared files are held by an agent that did not go through
-`Claim` (for example, a direct `holds.Announce` outside the task flow).
-That path is rare in the normal agent lifecycle but reachable from tests
-and from future non-task hold users; the sentinel remains.
+1. Read the task record (source of truth for `files`).
+2. CAS-claim the record: set `claimed_by = agentID`, `status = claimed`,
+   bump `claim_epoch`. CAS loss returns `ErrTaskAlreadyClaimed` without
+   touching holds.
+3. Acquire holds on every file in sorted order. On failure, CAS-undo
+   the task claim and return the underlying error (`ErrHeldByAnother`).
 
-A crash between `release()` and `CloseTask` no longer leaks a permanent
-claim. Un-claiming is part of release's own work, so the last thing a
-well-defer'd caller does is return the task to `open`. If the caller
-forgets to defer the closure entirely, the claim still leaks — that is
-user error and the same shape we accept for holds (ADR 0002, "leaks are
-possible only if the caller drops the closure").
+Task fence runs first so contention surfaces as a semantic signal at
+the task layer, not as a hold-substrate side effect.
 
-Callers who want to pre-commit to a file set before claiming do so through
-`OpenTask`, which writes the file list onto the task record. The Claim
-path is downstream of that commit.
+**Release.** The deferred closure CAS-un-claims the task record
+(`status = open`, `claimed_by = ""`) and releases every hold in reverse
+acquisition order. Both halves run; partial release is not observable.
+`sync.Once` enforces idempotency.
 
-The Phase 1 `Claim` signature is broken by this change. That is
-deliberate — Phase 2 was explicitly scoped to extend the coord API, and
-ADR 0005 already supersedes the README's tasks-as-files plan. There are
-no external consumers today, so the break is free.
+**Reclaim.** Takeover for an abandoned claim. Preconditions: task is
+`claimed` (else `ErrTaskNotClaimed`); current `claimed_by` is absent
+from `coord.Who` (else `ErrClaimerLive`); caller is not the current
+claimer (else `ErrAlreadyClaimer`). On success: CAS-un-claim then
+CAS-re-claim under the caller's ID, epoch bumped. Holds are acquired
+under the new ID; if a file is held by a live agent (not the zombie's
+expired pre-crash hold), Reclaim fails and CAS-undoes.
 
-The rollback/idempotent invariants articulated by ADR 0002 still hold:
-partial acquisition is rolled back atomically (invariant 6); release is
-idempotent (invariant 7). ADR 0002's body is not rewritten; only its
-signature is amended.
+**Liveness.** A claimer is "dead" when their entry has aged out of
+`coord.Who` (`3 × HeartbeatInterval`, ~15s with example configs). No
+per-claim heartbeat. No background sweeper.
+
+**Fencing.** `tasks.Task.ClaimEpoch uint64`. Every successful Claim or
+Reclaim bumps it under CAS. Mutating verbs (`Commit`, `CloseTask`)
+CAS-check the current epoch; a stale view sees `ErrEpochStale`. The
+bump happens inside the same CAS as the `claimed_by` swap. If hold
+acquisition then fails and the task claim is rolled back, the epoch is
+left bumped — monotonicity is the safer direction (a zombie sees
+`ErrEpochStale` either way). Zero is reserved for "no claim ever";
+first Claim writes 1; records without the field decode as 0 (additive
+schema migration).
+
+**Reclaim observability.** Reclaim posts one chat line to the task's
+thread (`"reclaim: agent=<new> prev=<dead> task=<id> epoch=<N>"`).
+Best-effort; a failed post does not fail the Reclaim.
+
+## Tradeoffs
+
+**Closure-as-release vs explicit `Release(taskID)` verb.** The closure
+ties release to scope via `defer`; an explicit verb relies on the
+caller remembering to call it. Cost: leaks are still possible if the
+caller drops the closure on the floor. We accept it because Go's
+`defer` idiom makes the right shape the easy shape, and the hold TTL
+plus Reclaim bound the damage.
+
+**Task-CAS first vs holds first.** Task-CAS first means the race-loser
+sees `ErrTaskAlreadyClaimed` directly; holds-first would surface
+contention as `ErrHeldByAnother`, leaking substrate detail and wasting
+hold-acquire work on a claim that was going to lose. Cost:
+`ErrHeldByAnother` becomes narrow — fires only when a non-task hold
+user collides with a task's files.
+
+**Presence staleness vs per-claim heartbeat.** Presence already supplies
+cross-process, TTL-backed liveness with the right semantics. A second
+heartbeat on the task record would duplicate machinery for one purpose.
+Cost: takeover convergence is bounded by the presence window (~15s),
+not tunable per claim.
+
+**Explicit `Reclaim` verb vs auto-takeover inside `Claim`.** Auto-
+takeover hides the recovery decision; the caller is asserting "the
+prior claimer is dead and I accept their work-in-progress." That
+assertion belongs at the call site, visible in code review. The
+wrong-decision failure mode of an invisible takeover is silent
+corruption, harder to diagnose than a loud "you used the wrong verb."
+Cost: a `Claim` against a claimed-but-dead task returns
+`ErrTaskAlreadyClaimed` and the caller switches verbs.
+
+**Epoch token vs hold-CAS reuse vs wall-clock fencing.** Epoch gives a
+clean task-layer signal (`ErrEpochStale`) separable from `ErrNotHeld`;
+hold-CAS reuse would couple the task and hold substrates that ADR 0005
+deliberately separated. Wall-clock fencing requires clock sync we do
+not assume across hosts.
+
+## Invariants
+
+- **6 (atomic claim).** Partial hold acquisition is rolled back;
+  callers never see a half-held state.
+- **7 (idempotent release).** The closure is safe to call any number
+  of times.
+- **16 (release undoes full acquisition).** Release un-claims the task
+  record AND releases every hold; a crash between un-claim and
+  `CloseTask` cannot leak a permanent claim.
+- **24 (epoch monotonicity).** `claim_epoch` is monotonic
+  non-decreasing across a task's lifetime and strictly increases on
+  each successful Claim or Reclaim. Mutations under a stale epoch
+  return `ErrEpochStale`.

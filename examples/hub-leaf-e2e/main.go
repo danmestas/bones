@@ -1,5 +1,5 @@
 // Package hubleafe2e is an E2E sanity harness for the hub-leaf
-// architecture (ADR 0018). It brings up one coord.Hub and three
+// architecture (ADR 0023). It brings up one coord.Hub and three
 // coord.Leaf instances, runs three disjoint-file tasks (one per leaf),
 // and asserts the spec invariants:
 //

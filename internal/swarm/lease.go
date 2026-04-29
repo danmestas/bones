@@ -128,11 +128,11 @@ type AcquireOpts struct {
 //
 // Lease is the only legal mutator of the session record. The narrow
 // public surface on swarm.Sessions (Get/List public, put/update/delete
-// unexported) enforces this at compile time; see ADR 0034.
+// unexported) enforces this at compile time.
 //
-// See ADR 0031 for the design and the rationale for the
-// AcquireFresh / Resume split. See ADR 0030 for why tests against
-// Lease use real NATS + real Fossil rather than mocks.
+// See ADR 0028 for the design and the rationale for the
+// AcquireFresh / Resume split. Tests against Lease use real NATS +
+// real Fossil rather than mocks.
 type Lease struct {
 	info       workspace.Info
 	slot       string

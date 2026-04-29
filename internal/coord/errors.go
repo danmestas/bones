@@ -85,7 +85,7 @@ var ErrNotHeld = errors.New("coord: file(s) not held by caller")
 // attempted with a stale claim_epoch view — typically a zombie writer
 // (killed agent, partition-returning slow agent) after a peer has
 // Reclaimed the task. Commit and CloseTask fence against this. Per
-// ADR 0013 and Invariant 24, claim_epoch is monotonic and bumped on
+// ADR 0007 and Invariant 24, claim_epoch is monotonic and bumped on
 // every Claim/Reclaim; a CAS check against the current record's epoch
 // refuses the write. Callers should discard in-flight work; no
 // rollback at the coord layer.
@@ -94,12 +94,12 @@ var ErrEpochStale = errors.New("coord: claim epoch is stale")
 // ErrClaimerLive reports that Reclaim saw the current claimed_by
 // agent as still present in coord.Who — presence staleness has not
 // yet converged (3 × HeartbeatInterval per Invariant 19). The caller
-// must retry after the window closes. ADR 0013.
+// must retry after the window closes. ADR 0007.
 var ErrClaimerLive = errors.New("coord: current claimer is still live")
 
 // ErrTaskNotClaimed reports that Reclaim was called on a task whose
 // status is not 'claimed' — an 'open' task wants Claim; a 'closed'
-// task is terminal per invariant 13. ADR 0013.
+// task is terminal per invariant 13. ADR 0007.
 var ErrTaskNotClaimed = errors.New("coord: task is not claimed")
 
 // ErrInvalidEdgeType is returned from Link when the supplied EdgeType
@@ -108,7 +108,7 @@ var ErrInvalidEdgeType = errors.New("coord: invalid edge type")
 
 // ErrAlreadyClaimer reports that Reclaim was called by an agent that
 // is already the current claimed_by — self-reclaim is nonsensical.
-// ADR 0013.
+// ADR 0007.
 var ErrAlreadyClaimer = errors.New("coord: caller is already the claimer")
 
 // ErrConflict is a defense-in-depth assertion: post-SyncNow, Leaf.Commit
