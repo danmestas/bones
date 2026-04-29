@@ -15,6 +15,8 @@ import (
 
 	"github.com/alecthomas/kong"
 	_ "github.com/danmestas/libfossil/db/driver/modernc"
+
+	"github.com/danmestas/bones/internal/updatecheck"
 )
 
 // Build-time variables, populated via -ldflags by GoReleaser.
@@ -25,6 +27,12 @@ var (
 )
 
 func main() {
+	// Once-per-day update check. Best-effort; runs the network refresh
+	// in a goroutine and prints a one-line stderr notice based on
+	// cached state. Suppressed by BONES_UPDATE_CHECK=0 and skipped on
+	// "dev" builds (i.e. anything not built by GoReleaser).
+	updatecheck.Check(version)
+
 	// Handle --version / -V at the top level. Done before Kong.Parse so
 	// it doesn't collide with sub-flags like `bones repo extract --version`.
 	if len(os.Args) == 2 && (os.Args[1] == "--version" || os.Args[1] == "-V") {
