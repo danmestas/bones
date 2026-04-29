@@ -6,8 +6,6 @@
 [License](./LICENSE)  
 [Go](https://go.dev)
 
-## bones
-
 Containerized isolation for your source tree, with trunk-based development built in for parallel AI agents. Drop ten Claude subagents on a repo and bones gives each one its own checkout, syncs commits through a single hub before parenting (so the trunk advances linearly under any concurrency), and lands changes in your filesystem only when _you_ sign off. Two embedded dependencies — SQLite and NATS — in a single static binary. No Postgres, no Redis, no Docker required. Doesn't replace git. Doesn't have opinions about your memory tool.
 
 If you've been running 3+ sessions in parallel and watching them stomp on each other through a shared working tree, this is what fixes it.
@@ -38,7 +36,7 @@ That's it — scaffolds `.bones/`, `.orchestrator/`, and `.claude/skills/` into 
 
 Then in Claude Code, write a plan with `[slot: name]` annotations on tasks and ask it to "run this plan in parallel." The orchestrator skill validates slot disjointness, dispatches one subagent per slot, and each leaf commits through the hub. Or use `bones tasks create / list / claim / close` for a personal backlog you work serially.
 
-Full docs: [(https://bones.danmestas.com](https://bones.daniel-mestas.workers.dev/).
+Full docs: [bones.daniel-mestas.workers.dev](https://bones.daniel-mestas.workers.dev/).
 
 ## Why bones
 
