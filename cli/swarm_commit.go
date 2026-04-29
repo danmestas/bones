@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,37 +33,17 @@ type SwarmCommitCmd struct {
 }
 
 func (c *SwarmCommitCmd) Run(g *libfossilcli.Globals) error {
-	ctx, stop, info, err := joinWorkspace()
+	ctx, info, lease, stop, err := bootstrapResume(
+		"swarm commit", c.Slot, c.HubURL,
+		swarm.AcquireOpts{NoAutosync: c.NoAutosync},
+	)
 	if err != nil {
 		return err
 	}
 	defer stop()
-	return c.run(ctx, info)
-}
-
-func (c *SwarmCommitCmd) run(ctx context.Context, info workspace.Info) error {
-	slot, err := c.resolveTargetSlot(ctx, info)
-	if err != nil {
-		return err
-	}
-	hubURL := c.HubURL
-	if hubURL == "" {
-		hubURL = swarm.DefaultHubFossilURL
-	}
-	lease, err := swarm.Resume(ctx, info, slot, swarm.AcquireOpts{
-		HubURL:     hubURL,
-		NoAutosync: c.NoAutosync,
-	})
-	if err != nil {
-		if errors.Is(err, swarm.ErrSessionNotFound) {
-			return fmt.Errorf(
-				"swarm commit: no active session for slot %q (run `bones swarm join` first)", slot)
-		}
-		return fmt.Errorf("swarm commit: %w", err)
-	}
 	defer func() { _ = lease.Release(ctx) }()
 
-	files, err := gatherCommitFiles(info, slot, c.Files, lease.WT())
+	files, err := gatherCommitFiles(info, c.Files, lease.WT())
 	if err != nil {
 		return err
 	}
@@ -73,29 +51,12 @@ func (c *SwarmCommitCmd) run(ctx context.Context, info workspace.Info) error {
 	if err != nil {
 		return fmt.Errorf("swarm commit: %w", err)
 	}
-	c.emitCommitReport(slot, lease.TaskID(), files, res, hubURL)
+	hubURL := c.HubURL
+	if hubURL == "" {
+		hubURL = swarm.DefaultHubFossilURL
+	}
+	c.emitCommitReport(lease.Slot(), lease.TaskID(), files, res, hubURL)
 	return nil
-}
-
-// resolveTargetSlot picks the slot to operate on. Honors --slot
-// when set; otherwise infers the unique active slot on this host
-// via swarm.Sessions.List. The Sessions handle is opened-and-closed
-// inline because Resume opens its own to read the session record;
-// the double-dial cost is negligible for a single CLI invocation.
-func (c *SwarmCommitCmd) resolveTargetSlot(
-	ctx context.Context, info workspace.Info,
-) (string, error) {
-	sess, closeSess, err := openSwarmSessions(ctx, info)
-	if err != nil {
-		return "", err
-	}
-	defer closeSess()
-	host, _ := os.Hostname()
-	slot, err := resolveSlot(ctx, sess, c.Slot, host)
-	if err != nil {
-		return "", err
-	}
-	return slot, nil
 }
 
 // emitCommitReport prints the UUID on stdout (machine-readable for
@@ -127,7 +88,7 @@ func (c *SwarmCommitCmd) emitCommitReport(
 	)
 }
 
-// gatherCommitFiles materializes the file set passed to Lease.Commit.
+// gatherCommitFiles materializes the file set passed to ResumedLease.Commit.
 // When the caller listed files explicitly, read them from the slot's
 // worktree. Otherwise, walk wt/ for regular files and commit them
 // all (auto-discovery — ADR 0028 §"swarm commit").
@@ -139,7 +100,7 @@ func (c *SwarmCommitCmd) emitCommitReport(
 // relative-to-repo Name, so the same Path field works as both the
 // hold key and the commit target.
 func gatherCommitFiles(
-	info workspace.Info, slot string, explicitFiles []string, wt string,
+	info workspace.Info, explicitFiles []string, wt string,
 ) ([]coord.File, error) {
 	if len(explicitFiles) == 0 {
 		return discoverDirtyFiles(info, wt)

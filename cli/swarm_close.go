@@ -32,35 +32,23 @@ type SwarmCloseCmd struct {
 }
 
 func (c *SwarmCloseCmd) Run(g *libfossilcli.Globals) error {
-	ctx, stop, info, err := joinWorkspace()
-	if err != nil {
-		return err
-	}
-	defer stop()
-	return c.run(ctx, info)
-}
-
-func (c *SwarmCloseCmd) run(ctx context.Context, info workspace.Info) error {
 	if err := c.validateResult(); err != nil {
 		return err
 	}
-	slot, err := c.resolveTargetSlot(ctx, info)
-	if err != nil {
-		return err
-	}
-	hubURL := c.HubURL
-	if hubURL == "" {
-		hubURL = swarm.DefaultHubFossilURL
-	}
-	lease, err := swarm.Resume(ctx, info, slot, swarm.AcquireOpts{HubURL: hubURL})
+	ctx, info, lease, stop, err := bootstrapResume(
+		"swarm close", c.Slot, c.HubURL, swarm.AcquireOpts{},
+	)
 	if err != nil {
 		if errors.Is(err, swarm.ErrSessionNotFound) {
 			fmt.Fprintf(os.Stderr,
-				"swarm close: no session for slot %q (already closed?)\n", slot)
+				"swarm close: no session for slot %q (already closed?)\n",
+				c.Slot,
+			)
 			return nil
 		}
-		return fmt.Errorf("swarm close: %w", err)
+		return err
 	}
+	defer stop()
 
 	// Post the dispatch ResultMessage on the task thread BEFORE we
 	// transition the lease to closed — once Lease.Close runs, the
@@ -68,7 +56,8 @@ func (c *SwarmCloseCmd) run(ctx context.Context, info workspace.Info) error {
 	// so the result post must happen first. Soft-fail per ADR 0028
 	// retro: a failed post is logged but not a hard error.
 	if err := c.postResult(ctx, info, lease.FossilUser(), lease.TaskID()); err != nil {
-		fmt.Fprintf(os.Stderr, "swarm close: warning: post result failed: %v\n", err)
+		fmt.Fprintf(os.Stderr,
+			"swarm close: warning: post result failed: %v\n", err)
 	}
 
 	closeOpts := swarm.CloseOpts{
@@ -79,7 +68,7 @@ func (c *SwarmCloseCmd) run(ctx context.Context, info workspace.Info) error {
 	}
 	fmt.Fprintf(os.Stderr,
 		"swarm close: slot=%s task=%s result=%s\n",
-		slot, lease.TaskID(), c.Result,
+		lease.Slot(), lease.TaskID(), c.Result,
 	)
 	return nil
 }
@@ -90,26 +79,6 @@ func (c *SwarmCloseCmd) validateResult() error {
 		return nil
 	}
 	return fmt.Errorf("--result must be success|fail|fork (got %q)", c.Result)
-}
-
-// resolveTargetSlot mirrors the helper in swarm_commit.go: honors
-// --slot when set, otherwise infers the unique active slot via
-// Sessions.List. The Sessions handle is opened-and-closed inline;
-// Resume opens its own to read the session record.
-func (c *SwarmCloseCmd) resolveTargetSlot(
-	ctx context.Context, info workspace.Info,
-) (string, error) {
-	sess, closeSess, err := openSwarmSessions(ctx, info)
-	if err != nil {
-		return "", err
-	}
-	defer closeSess()
-	host, _ := os.Hostname()
-	slot, err := resolveSlot(ctx, sess, c.Slot, host)
-	if err != nil {
-		return "", err
-	}
-	return slot, nil
 }
 
 // postResult publishes a dispatch.ResultMessage onto the task

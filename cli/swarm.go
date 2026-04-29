@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 
 	"github.com/nats-io/nats.go"
 
@@ -52,6 +54,54 @@ func openSwarmSessions(
 		_ = s.Close()
 		nc.Close()
 	}, nil
+}
+
+// bootstrapResume opens the workspace, resolves the target slot
+// (using preferredSlot or falling back to single-active-on-this-host
+// inference), and resumes the lease. Returns ctx, info, the resumed
+// lease, and a stop function for the workspace context. Caller is
+// responsible for closing the lease (Release for commit-style verbs,
+// Close for close-style verbs) and calling stop().
+//
+// Errors are wrapped with verbName so the user sees the verb that
+// failed; ErrSessionNotFound passes through unwrapped so callers can
+// errors.Is-test it for verb-specific handling (swarm close converges
+// idempotently when the session is already gone).
+func bootstrapResume(
+	verbName, preferredSlot, hubURL string,
+	opts swarm.AcquireOpts,
+) (context.Context, workspace.Info, *swarm.ResumedLease, func(), error) {
+	ctx, stop, info, err := joinWorkspace()
+	if err != nil {
+		return nil, workspace.Info{}, nil, nil, err
+	}
+
+	sess, closeSess, err := openSwarmSessions(ctx, info)
+	if err != nil {
+		stop()
+		return nil, workspace.Info{}, nil, nil, err
+	}
+	host, _ := os.Hostname()
+	slot, err := resolveSlot(ctx, sess, preferredSlot, host)
+	closeSess()
+	if err != nil {
+		stop()
+		return nil, workspace.Info{}, nil, nil, err
+	}
+
+	if hubURL == "" {
+		hubURL = swarm.DefaultHubFossilURL
+	}
+	opts.HubURL = hubURL
+	lease, err := swarm.Resume(ctx, info, slot, opts)
+	if err != nil {
+		stop()
+		if errors.Is(err, swarm.ErrSessionNotFound) {
+			return nil, workspace.Info{}, nil, nil, err
+		}
+		return nil, workspace.Info{}, nil, nil, fmt.Errorf("%s: %w", verbName, err)
+	}
+	return ctx, info, lease, stop, nil
 }
 
 // resolveSlot picks the slot to operate on for verbs that allow
