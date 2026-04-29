@@ -43,4 +43,4 @@ The whole scenario runs under a 30-second wall-clock cap (`context.WithTimeout`)
 plus a SIGINT/SIGTERM trap that cancels the context. Children are reaped
 on every exit path; orphan processes would be a test failure.
 
-See `docs/adr/0019-cli-binaries.md` for the full design.
+See `docs/adr/superseded/0019-cli-binaries.md` for the original three-binary design (superseded by the unified `bones` CLI).

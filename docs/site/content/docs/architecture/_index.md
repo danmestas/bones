@@ -14,14 +14,13 @@ Read them in repo for the latest text.
 - [ADR 0001 — Public surface](https://github.com/danmestas/bones/blob/main/docs/adr/0001-public-surface.md): why `coord/` is the sole public package.
 - [ADR 0003 — Substrate hiding](https://github.com/danmestas/bones/blob/main/docs/adr/0003-substrate-hiding.md): how the substrate is hidden behind `coord`.
 - [ADR 0017 — Beads removal](https://github.com/danmestas/bones/blob/main/docs/adr/0017-beads-removal.md): replacing the original tracker.
-- [ADR 0019 — CLI binaries](https://github.com/danmestas/bones/blob/main/docs/adr/0019-cli-binaries.md): the unified `bones` binary.
+- [ADR 0019 — CLI binaries (superseded)](https://github.com/danmestas/bones/blob/main/docs/adr/superseded/0019-cli-binaries.md): the unified `bones` binary; original three-binary split documented as historical context.
 
 ## Coordination
 
 - [ADR 0002 — Scoped holds](https://github.com/danmestas/bones/blob/main/docs/adr/0002-scoped-holds.md)
 - [ADR 0004 — Conflict resolution](https://github.com/danmestas/bones/blob/main/docs/adr/0004-conflict-resolution.md): fossil fork + chat.
 - [ADR 0005 — Tasks in NATS KV](https://github.com/danmestas/bones/blob/main/docs/adr/0005-tasks-in-nats-kv.md)
-- [ADR 0006 — Scope-narrow conflict resolution](https://github.com/danmestas/bones/blob/main/docs/adr/0006-scope-narrow-conflict-resolution.md)
 - [ADR 0007 — Claim semantics](https://github.com/danmestas/bones/blob/main/docs/adr/0007-claim-semantics.md)
 - [ADR 0008 — Chat substrate](https://github.com/danmestas/bones/blob/main/docs/adr/0008-chat-substrate.md)
 - [ADR 0013 — Claim reclamation](https://github.com/danmestas/bones/blob/main/docs/adr/0013-claim-reclamation.md)

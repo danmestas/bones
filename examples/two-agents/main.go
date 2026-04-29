@@ -1,7 +1,7 @@
 // Command two-agents is a smoke harness that spawns two child processes,
 // each opening its own coord.Coord against a shared leaf, and asserts
 // six Phase 3+4 coord primitives work across real process boundaries.
-// See docs/adr/0019-cli-binaries.md.
+// See docs/adr/superseded/0019-cli-binaries.md (superseded by the bones consolidation).
 package main
 
 import (
