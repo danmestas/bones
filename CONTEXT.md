@@ -30,9 +30,23 @@ runs a long-lived **workspace leaf** (the `leaf` daemon started by
 leaf** for the duration of a CLI verb. See ADR 0023.
 
 **Trunk.** The hub's `trunk` branch. Every commit autosynced from
-every leaf advances trunk linearly. PR #54's autosync feature is
-what turns parallel leaf commits into a single linear chain. See
-ADR 0023, the 2026-04-28 autosync demo.
+every leaf advances trunk linearly — see *Autosync* below for the
+mechanism. The trunk is the single source of truth across all
+slots; fan-in is unnecessary because there are no parallel
+branches to merge. See ADR 0023.
+
+**Autosync.** The leaf-side behavior that keeps trunk linear:
+before each `Leaf.Commit` resolves the parent commit, the leaf
+HTTP-pulls from the hub so the commit's parent is the
+hub's-latest-tip rather than whatever this leaf saw at clone
+time. Ten parallel leaves committing concurrently produce one
+linear chain instead of ten parallel forks. The trade-off is one
+hub round-trip per commit; the alternative (no autosync) is a
+fan-in step that has to merge N parallel leaves later.
+`LeafConfig.Autosync` opts in. The 2026-04-28 demo (PR #54)
+verified the property under real concurrency: 15 commits across
+5 parallel slots, multiple in the same wall-clock second, zero
+forks.
 
 ## Coordination primitives
 
@@ -65,6 +79,28 @@ timestamp. Persists across CLI verbs; TTL-evicted if not renewed.
 Written by `swarm join` (a fresh `Lease.AcquireFresh`), bumped by
 `swarm commit` (`Lease.Commit`), deleted by `swarm close`
 (`Lease.Close`). See ADR 0028.
+
+## Work shape
+
+**Plan.** A markdown file describing the work to do, with task
+items annotated by slot: lines like `- [slot: rendering]
+implement X in src/rendering/...`. The orchestrator validates
+slot disjointness (no two slots touching the same file path)
+*before* dispatching subagents — runtime forks become impossible
+by construction, not by lock contention. `bones validate-plan`
+checks the file. See ADR 0023 §"planner contract".
+
+**Task.** A unit of work in the `bones-tasks` JetStream KV bucket
+(`tasks.Manager`). Has an ID, a title, an associated file list,
+and a state machine: `open → claimed → closed`. Optional flags:
+`blocked` (waiting on another task), `defer-until` (scheduled
+RFC3339 time), `parent` (subtask edge), and a `context` map for
+arbitrary K/V state. Tasks live in the hub and are visible to
+every leaf via JetStream. Slot annotations on plan items become
+task records when the orchestrator creates them; `bones tasks
+create / list / claim / close` operate on this bucket directly.
+See ADRs 0005 (KV store), 0007 (claim semantics), 0014 (typed
+edges), 0020 (defer-until-ready), 0027 (compaction).
 
 ## Layering
 
