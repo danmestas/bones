@@ -48,7 +48,7 @@ var ErrWorkspaceNotBootstrapped = errors.New(
 
 // ErrSessionNotFound is returned by Resume when no session record
 // exists for the slot. Distinct from swarm.ErrNotFound so callers
-// can disambiguate "no record yet" from "Manager closed".
+// can disambiguate "no record yet" from "Sessions handle closed".
 var ErrSessionNotFound = errors.New(
 	"swarm: session record not found — run `bones swarm join` first",
 )
@@ -126,6 +126,10 @@ type AcquireOpts struct {
 // state across verbs is the session record in
 // bones-swarm-sessions[slot], not the lease itself.
 //
+// Lease is the only legal mutator of the session record. The narrow
+// public surface on swarm.Sessions (Get/List public, put/update/delete
+// unexported) enforces this at compile time; see ADR 0034.
+//
 // See ADR 0031 for the design and the rationale for the
 // AcquireFresh / Resume split. See ADR 0030 for why tests against
 // Lease use real NATS + real Fossil rather than mocks.
@@ -140,7 +144,7 @@ type Lease struct {
 	leaf  *coord.Leaf
 	claim *coord.Claim
 
-	mgr          *Manager
+	sessions     *Sessions
 	natsConn     *nats.Conn
 	ownsNATSConn bool
 	rev          uint64
@@ -156,7 +160,7 @@ type Lease struct {
 //     return ErrWorkspaceNotBootstrapped — the role-leak guard from
 //     PR #54.
 //  2. Create the slot's fossil user on the hub repo if missing.
-//  3. Open the swarm.Manager (dial NATS or reuse opts.NATSConn).
+//  3. Open the swarm.Sessions handle (dial NATS or reuse opts.NATSConn).
 //  4. Read any existing session record. Active on this host without
 //     --force → ErrSessionAlreadyLive. Different host →
 //     ErrSessionForeignHost. Stale or --force → CAS-delete and
@@ -190,18 +194,18 @@ func AcquireFresh(
 		return nil, err
 	}
 
-	mgr, nc, ownsConn, err := openLeaseManager(ctx, info, opts.NATSConn)
+	sessions, nc, ownsConn, err := openLeaseSessions(ctx, info, opts.NATSConn)
 	if err != nil {
 		return nil, err
 	}
 	cleanupConn := func() {
-		_ = mgr.Close()
+		_ = sessions.Close()
 		if ownsConn && nc != nil {
 			nc.Close()
 		}
 	}
 
-	if err := clearExistingRecord(ctx, mgr, slot, opts.ForceTakeover, now); err != nil {
+	if err := clearExistingRecord(ctx, sessions, slot, opts.ForceTakeover, now); err != nil {
 		cleanupConn()
 		return nil, err
 	}
@@ -212,7 +216,7 @@ func AcquireFresh(
 		return nil, err
 	}
 	rev, err := writeSessionAndPid(
-		ctx, mgr, info.WorkspaceDir, slot, taskID, fossilUser, hubURL, now,
+		ctx, sessions, info.WorkspaceDir, slot, taskID, fossilUser, hubURL, now,
 	)
 	if err != nil {
 		_ = claim.Release()
@@ -230,7 +234,7 @@ func AcquireFresh(
 		now:          now,
 		leaf:         leaf,
 		claim:        claim,
-		mgr:          mgr,
+		sessions:     sessions,
 		natsConn:     nc,
 		ownsNATSConn: ownsConn,
 		rev:          rev,
@@ -281,12 +285,12 @@ func openLeafAndClaim(
 }
 
 // writeSessionAndPid CAS-creates the session record and writes the
-// host-local pid file. Returns the post-Put KV revision so the
+// host-local pid file. Returns the post-put KV revision so the
 // Lease can CAS against it during Close. On pid-file failure the
 // session record is best-effort deleted before return so the slot
 // stays clean for the next AcquireFresh.
 func writeSessionAndPid(
-	ctx context.Context, mgr *Manager,
+	ctx context.Context, sessions *Sessions,
 	workspaceDir, slot, taskID, fossilUser, hubURL string,
 	now func() time.Time,
 ) (uint64, error) {
@@ -302,14 +306,14 @@ func writeSessionAndPid(
 		StartedAt:   t,
 		LastRenewed: t,
 	}
-	if err := mgr.Put(ctx, sess); err != nil {
+	if err := sessions.put(ctx, sess); err != nil {
 		return 0, fmt.Errorf("swarm.AcquireFresh: write session record: %w", err)
 	}
 	if err := writePidFile(workspaceDir, slot); err != nil {
-		_ = mgr.Delete(ctx, slot, 0)
+		_ = sessions.delete(ctx, slot, 0)
 		return 0, fmt.Errorf("swarm.AcquireFresh: %w", err)
 	}
-	_, rev, err := mgr.Get(ctx, slot)
+	_, rev, err := sessions.Get(ctx, slot)
 	if err != nil {
 		return 0, fmt.Errorf("swarm.AcquireFresh: re-read session: %w", err)
 	}
@@ -342,18 +346,18 @@ func Resume(
 
 	now, _, _ := defaultAcquireOpts(opts)
 
-	mgr, nc, ownsConn, err := openLeaseManager(ctx, info, opts.NATSConn)
+	sessions, nc, ownsConn, err := openLeaseSessions(ctx, info, opts.NATSConn)
 	if err != nil {
 		return nil, err
 	}
 	cleanup := func() {
-		_ = mgr.Close()
+		_ = sessions.Close()
 		if ownsConn && nc != nil {
 			nc.Close()
 		}
 	}
 
-	sess, rev, err := mgr.Get(ctx, slot)
+	sess, rev, err := sessions.Get(ctx, slot)
 	if err != nil {
 		cleanup()
 		if errors.Is(err, ErrNotFound) {
@@ -388,7 +392,7 @@ func Resume(
 		now:          now,
 		leaf:         leaf,
 		claim:        nil, // Resume does not take a claim
-		mgr:          mgr,
+		sessions:     sessions,
 		natsConn:     nc,
 		ownsNATSConn: ownsConn,
 		rev:          rev,
@@ -397,8 +401,8 @@ func Resume(
 
 // Release closes the lease without deleting the session record.
 // Stops the leaf, releases any held claim, closes the swarm
-// Manager, and (if the lease owns the NATS connection) closes that
-// too. Idempotent.
+// Sessions handle, and (if the lease owns the NATS connection)
+// closes that too. Idempotent.
 //
 // `bones swarm join` calls Release after writing the session
 // record so subsequent verbs can Resume against it. `bones swarm
@@ -415,8 +419,8 @@ func (l *Lease) Release(ctx context.Context) error {
 	if l.leaf != nil {
 		_ = l.leaf.Stop()
 	}
-	if l.mgr != nil {
-		_ = l.mgr.Close()
+	if l.sessions != nil {
+		_ = l.sessions.Close()
 	}
 	if l.ownsNATSConn && l.natsConn != nil {
 		l.natsConn.Close()
@@ -454,7 +458,7 @@ type CloseOpts struct {
 //  3. Stop the leaf.
 //  4. Remove the host-local pid file.
 //  5. CAS-delete the session record.
-//  6. Tear down the swarm.Manager + NATS connection.
+//  6. Tear down the swarm.Sessions handle + NATS connection.
 //
 // `bones swarm close` calls this. The CAS gate on step 5 ensures
 // we don't delete a record some other process renewed; if it raced
@@ -479,8 +483,8 @@ func (l *Lease) Close(ctx context.Context, opts CloseOpts) error {
 		_ = l.releaseUnderlying()
 		return fmt.Errorf("swarm.Lease.Close: remove pid file: %w", err)
 	}
-	if l.mgr != nil && l.rev != 0 {
-		if err := l.mgr.Delete(ctx, l.slot, l.rev); err != nil &&
+	if l.sessions != nil && l.rev != 0 {
+		if err := l.sessions.delete(ctx, l.slot, l.rev); err != nil &&
 			!errors.Is(err, ErrNotFound) && !errors.Is(err, ErrCASConflict) {
 			_ = l.releaseUnderlying()
 			return fmt.Errorf("swarm.Lease.Close: delete record: %w", err)
@@ -589,15 +593,15 @@ func (l *Lease) Commit(
 // is treated as success — a sibling commit raced ours and the
 // other writer's update already extended the TTL.
 func (l *Lease) renewSessionAfterCommit(ctx context.Context) error {
-	if l.mgr == nil || l.rev == 0 {
+	if l.sessions == nil || l.rev == 0 {
 		return nil
 	}
-	sess, rev, err := l.mgr.Get(ctx, l.slot)
+	sess, rev, err := l.sessions.Get(ctx, l.slot)
 	if err != nil {
 		return fmt.Errorf("swarm.Lease.Commit: re-read session for renew: %w", err)
 	}
 	sess.LastRenewed = l.now()
-	if err := l.mgr.Update(ctx, sess, rev); err != nil {
+	if err := l.sessions.update(ctx, sess, rev); err != nil {
 		if errors.Is(err, ErrCASConflict) {
 			return nil
 		}
@@ -672,9 +676,9 @@ func pushLeafFossil(
 	return res, nil
 }
 
-// releaseUnderlying tears down the leaf + claim + manager + NATS
-// connection. Shared by Release and Close so the cleanup ordering
-// stays in one place.
+// releaseUnderlying tears down the leaf + claim + Sessions handle +
+// NATS connection. Shared by Release and Close so the cleanup
+// ordering stays in one place.
 func (l *Lease) releaseUnderlying() error {
 	l.released = true
 	if l.claim != nil {
@@ -683,8 +687,8 @@ func (l *Lease) releaseUnderlying() error {
 	if l.leaf != nil {
 		_ = l.leaf.Stop()
 	}
-	if l.mgr != nil {
-		_ = l.mgr.Close()
+	if l.sessions != nil {
+		_ = l.sessions.Close()
 	}
 	if l.ownsNATSConn && l.natsConn != nil {
 		l.natsConn.Close()
@@ -719,7 +723,7 @@ func (l *Lease) WT() string {
 // SessionRevision returns the JetStream KV revision the lease
 // captured at acquisition. Test-only utility — callers that want
 // to inspect the underlying record can pair this with a separate
-// swarm.Manager.Get; production verbs go through Commit / Close.
+// swarm.Sessions.Get; production verbs go through Commit / Close.
 func (l *Lease) SessionRevision() uint64 { return l.rev }
 
 // ensureSlotUser creates the slot's fossil user on the hub repo
@@ -754,12 +758,13 @@ func ensureSlotUser(workspaceDir, login, caps string) error {
 	return nil
 }
 
-// openLeaseManager dials NATS (or reuses preNC) and opens a swarm.Manager.
-// Returns the manager, the NATS connection, and a flag indicating
-// whether the manager owns the connection's close.
-func openLeaseManager(
+// openLeaseSessions dials NATS (or reuses preNC) and opens a
+// swarm.Sessions handle. Returns the handle, the NATS connection,
+// and a flag indicating whether the handle owns the connection's
+// close.
+func openLeaseSessions(
 	ctx context.Context, info workspace.Info, preNC *nats.Conn,
-) (*Manager, *nats.Conn, bool, error) {
+) (*Sessions, *nats.Conn, bool, error) {
 	var (
 		nc       *nats.Conn
 		ownsConn bool
@@ -775,14 +780,14 @@ func openLeaseManager(
 		}
 		ownsConn = true
 	}
-	m, err := Open(ctx, Config{NATSConn: nc})
+	s, err := Open(ctx, Config{NATSConn: nc})
 	if err != nil {
 		if ownsConn {
 			nc.Close()
 		}
-		return nil, nil, false, fmt.Errorf("swarm: open manager: %w", err)
+		return nil, nil, false, fmt.Errorf("swarm: open sessions: %w", err)
 	}
-	return m, nc, ownsConn, nil
+	return s, nc, ownsConn, nil
 }
 
 // clearExistingRecord enforces the "one live session per slot" rule
@@ -792,9 +797,9 @@ func openLeaseManager(
 // host and force is false; ErrSessionForeignHost if it lives on a
 // different host (cross-host takeover refused unconditionally).
 func clearExistingRecord(
-	ctx context.Context, mgr *Manager, slot string, force bool, now func() time.Time,
+	ctx context.Context, sessions *Sessions, slot string, force bool, now func() time.Time,
 ) error {
-	existing, rev, err := mgr.Get(ctx, slot)
+	existing, rev, err := sessions.Get(ctx, slot)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil
@@ -813,7 +818,7 @@ func clearExistingRecord(
 				ErrSessionForeignHost, slot, existing.Host)
 		}
 	}
-	if err := mgr.Delete(ctx, slot, rev); err != nil && !errors.Is(err, ErrNotFound) {
+	if err := sessions.delete(ctx, slot, rev); err != nil && !errors.Is(err, ErrNotFound) {
 		return fmt.Errorf("swarm: clear stale record: %w", err)
 	}
 	return nil

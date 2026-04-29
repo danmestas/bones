@@ -19,9 +19,9 @@ func uniqueBucket(t *testing.T) string {
 	return "bones-swarm-test-" + strings.ReplaceAll(t.Name(), "/", "-")
 }
 
-func openManager(t *testing.T, nc *nats.Conn) *Manager {
+func openSessions(t *testing.T, nc *nats.Conn) *Sessions {
 	t.Helper()
-	m, err := Open(context.Background(), Config{
+	s, err := Open(context.Background(), Config{
 		NATSConn:   nc,
 		BucketName: uniqueBucket(t),
 		TTL:        time.Minute,
@@ -29,8 +29,8 @@ func openManager(t *testing.T, nc *nats.Conn) *Manager {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	t.Cleanup(func() { _ = m.Close() })
-	return m
+	t.Cleanup(func() { _ = s.Close() })
+	return s
 }
 
 func sampleSession(slot, taskID string) Session {
@@ -54,14 +54,14 @@ func TestConfigValidate(t *testing.T) {
 
 func TestPutGet(t *testing.T) {
 	nc, _ := natstest.NewJetStreamServer(t)
-	m := openManager(t, nc)
+	s := openSessions(t, nc)
 
 	sess := sampleSession("rendering", "task-rendering-1")
-	if err := m.Put(context.Background(), sess); err != nil {
-		t.Fatalf("Put: %v", err)
+	if err := s.put(context.Background(), sess); err != nil {
+		t.Fatalf("put: %v", err)
 	}
 
-	got, rev, err := m.Get(context.Background(), "rendering")
+	got, rev, err := s.Get(context.Background(), "rendering")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -75,9 +75,9 @@ func TestPutGet(t *testing.T) {
 
 func TestGet_NotFound(t *testing.T) {
 	nc, _ := natstest.NewJetStreamServer(t)
-	m := openManager(t, nc)
+	s := openSessions(t, nc)
 
-	_, _, err := m.Get(context.Background(), "missing")
+	_, _, err := s.Get(context.Background(), "missing")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get: want ErrNotFound, got %v", err)
 	}
@@ -85,71 +85,71 @@ func TestGet_NotFound(t *testing.T) {
 
 func TestPut_DuplicateConflict(t *testing.T) {
 	nc, _ := natstest.NewJetStreamServer(t)
-	m := openManager(t, nc)
+	s := openSessions(t, nc)
 
 	sess := sampleSession("audio", "task-audio-1")
-	if err := m.Put(context.Background(), sess); err != nil {
-		t.Fatalf("first Put: %v", err)
+	if err := s.put(context.Background(), sess); err != nil {
+		t.Fatalf("first put: %v", err)
 	}
-	if err := m.Put(context.Background(), sess); !errors.Is(err, ErrCASConflict) {
-		t.Fatalf("second Put: want ErrCASConflict, got %v", err)
+	if err := s.put(context.Background(), sess); !errors.Is(err, ErrCASConflict) {
+		t.Fatalf("second put: want ErrCASConflict, got %v", err)
 	}
 }
 
 func TestUpdate_CAS(t *testing.T) {
 	nc, _ := natstest.NewJetStreamServer(t)
-	m := openManager(t, nc)
+	s := openSessions(t, nc)
 
 	sess := sampleSession("physics", "task-physics-1")
-	if err := m.Put(context.Background(), sess); err != nil {
-		t.Fatalf("Put: %v", err)
+	if err := s.put(context.Background(), sess); err != nil {
+		t.Fatalf("put: %v", err)
 	}
-	got, rev, err := m.Get(context.Background(), "physics")
+	got, rev, err := s.Get(context.Background(), "physics")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	got.LastRenewed = time.Now().UTC().Add(time.Minute).Truncate(time.Second)
-	if err := m.Update(context.Background(), got, rev); err != nil {
-		t.Fatalf("Update: %v", err)
+	if err := s.update(context.Background(), got, rev); err != nil {
+		t.Fatalf("update: %v", err)
 	}
 
-	// Second Update with the now-stale revision must conflict.
-	if err := m.Update(context.Background(), got, rev); !errors.Is(err, ErrCASConflict) {
-		t.Fatalf("stale Update: want ErrCASConflict, got %v", err)
+	// Second update with the now-stale revision must conflict.
+	if err := s.update(context.Background(), got, rev); !errors.Is(err, ErrCASConflict) {
+		t.Fatalf("stale update: want ErrCASConflict, got %v", err)
 	}
 }
 
 func TestDelete_CAS(t *testing.T) {
 	nc, _ := natstest.NewJetStreamServer(t)
-	m := openManager(t, nc)
+	s := openSessions(t, nc)
 
 	sess := sampleSession("ui", "task-ui-1")
-	if err := m.Put(context.Background(), sess); err != nil {
-		t.Fatalf("Put: %v", err)
+	if err := s.put(context.Background(), sess); err != nil {
+		t.Fatalf("put: %v", err)
 	}
-	_, rev, err := m.Get(context.Background(), "ui")
+	_, rev, err := s.Get(context.Background(), "ui")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if err := m.Delete(context.Background(), "ui", rev); err != nil {
-		t.Fatalf("Delete: %v", err)
+	if err := s.delete(context.Background(), "ui", rev); err != nil {
+		t.Fatalf("delete: %v", err)
 	}
 
-	if _, _, err := m.Get(context.Background(), "ui"); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.Get(context.Background(), "ui"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("post-delete Get: want ErrNotFound, got %v", err)
 	}
 }
 
 func TestList(t *testing.T) {
 	nc, _ := natstest.NewJetStreamServer(t)
-	m := openManager(t, nc)
+	s := openSessions(t, nc)
 
 	for _, slot := range []string{"a", "b", "c"} {
-		if err := m.Put(context.Background(), sampleSession(slot, "task-"+slot)); err != nil {
-			t.Fatalf("Put %s: %v", slot, err)
+		if err := s.put(context.Background(), sampleSession(slot, "task-"+slot)); err != nil {
+			t.Fatalf("put %s: %v", slot, err)
 		}
 	}
-	got, err := m.List(context.Background())
+	got, err := s.List(context.Background())
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -175,12 +175,12 @@ func TestSlotDirHelpers(t *testing.T) {
 
 func TestClose_ReturnsErrClosedAfter(t *testing.T) {
 	nc, _ := natstest.NewJetStreamServer(t)
-	m := openManager(t, nc)
+	s := openSessions(t, nc)
 
-	if err := m.Close(); err != nil {
+	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if _, _, err := m.Get(context.Background(), "x"); !errors.Is(err, ErrClosed) {
+	if _, _, err := s.Get(context.Background(), "x"); !errors.Is(err, ErrClosed) {
 		t.Fatalf("Get after Close: want ErrClosed, got %v", err)
 	}
 }

@@ -27,26 +27,29 @@ type SwarmCmd struct {
 	FanIn  SwarmFanInCmd  `cmd:"" name:"fan-in" help:"Merge open hub leaves into trunk"`
 }
 
-// openSwarmManager dials NATS for the workspace and opens a swarm
-// Manager bound to the bones-swarm-sessions bucket. Caller closes
-// the Manager and the returned closer to release the NATS conn.
+// openSwarmSessions dials NATS for the workspace and opens a swarm
+// Sessions handle bound to the bones-swarm-sessions bucket. Caller
+// invokes the returned closer to release the handle and the NATS
+// conn together.
 //
-// Pulled into a helper because every swarm verb opens the Manager
-// the same way and the verbs are otherwise small.
-func openSwarmManager(
+// Pulled into a helper because every read-only swarm verb opens the
+// Sessions handle the same way and the verbs are otherwise small.
+// Mutating verbs go through swarm.Lease (ADR 0031, narrowed in
+// ADR 0034).
+func openSwarmSessions(
 	ctx context.Context, info workspace.Info,
-) (*swarm.Manager, func(), error) {
+) (*swarm.Sessions, func(), error) {
 	nc, err := nats.Connect(info.NATSURL)
 	if err != nil {
 		return nil, nil, fmt.Errorf("nats connect: %w", err)
 	}
-	m, err := swarm.Open(ctx, swarm.Config{NATSConn: nc})
+	s, err := swarm.Open(ctx, swarm.Config{NATSConn: nc})
 	if err != nil {
 		nc.Close()
 		return nil, nil, fmt.Errorf("swarm.Open: %w", err)
 	}
-	return m, func() {
-		_ = m.Close()
+	return s, func() {
+		_ = s.Close()
 		nc.Close()
 	}, nil
 }
@@ -56,18 +59,18 @@ func openSwarmManager(
 // returns it. Otherwise, lists active sessions on this host and
 // returns the unique active slot. Errors if zero or more than one
 // session matches.
-func resolveSlot(ctx context.Context, m *swarm.Manager, flag, host string) (string, error) {
+func resolveSlot(ctx context.Context, s *swarm.Sessions, flag, host string) (string, error) {
 	if flag != "" {
 		return flag, nil
 	}
-	sessions, err := m.List(ctx)
+	sessions, err := s.List(ctx)
 	if err != nil {
 		return "", fmt.Errorf("list sessions: %w", err)
 	}
 	var matches []string
-	for _, s := range sessions {
-		if s.Host == host {
-			matches = append(matches, s.Slot)
+	for _, sess := range sessions {
+		if sess.Host == host {
+			matches = append(matches, sess.Slot)
 		}
 	}
 	if len(matches) == 0 {

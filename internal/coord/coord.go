@@ -43,12 +43,13 @@ const presenceBucket = "bones-presence"
 // swarmSessionsBucket is the JetStream KV bucket name internal/swarm
 // uses to track per-slot swarm sessions per ADR 0028. Listed here
 // for visibility alongside the other coord-managed buckets, but
-// internal/swarm.Manager.Open creates/attaches independently —
-// coord.Coord callers do NOT consume this bucket. Provisioning is
-// best-effort here so any coord.Open guarantees the bucket exists
-// before the first `bones swarm join`. Constant kept exported (in
-// effect — swarm package mirrors it as DefaultBucketName) so tests
-// can assert the same name in both layers.
+// internal/swarm.Open creates/attaches independently (the returned
+// *swarm.Sessions handle, narrowed in ADR 0034). coord.Coord callers
+// do NOT consume this bucket. Provisioning is best-effort here so
+// any coord.Open guarantees the bucket exists before the first
+// `bones swarm join`. Constant kept exported (in effect — swarm
+// package mirrors it as DefaultBucketName) so tests can assert the
+// same name in both layers.
 const swarmSessionsBucket = "bones-swarm-sessions"
 
 // Coord is the public entry point for bones. Construct one via

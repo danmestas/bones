@@ -27,9 +27,9 @@ const DefaultBucketName = "bones-swarm-sessions"
 // Five minutes mirrors ADR 0028's "stale after 5min no renewal" rule.
 const DefaultTTL = 5 * time.Minute
 
-// ErrClosed reports that a public method was called on a Manager whose
+// ErrClosed reports that a public method was called on a Sessions whose
 // Close has returned. Parallel to internal/presence.ErrClosed.
-var ErrClosed = errors.New("swarm: manager is closed")
+var ErrClosed = errors.New("swarm: sessions handle is closed")
 
 // ErrNotFound reports that the requested slot has no live session
 // record in the bucket. Distinct from a substrate error so callers
@@ -37,16 +37,17 @@ var ErrClosed = errors.New("swarm: manager is closed")
 // "NATS unreachable."
 var ErrNotFound = errors.New("swarm: session not found")
 
-// ErrCASConflict reports that a CAS-gated Update or Delete saw a
+// ErrCASConflict reports that a CAS-gated update or delete saw a
 // revision mismatch — another writer raced ours. Mirrors
 // internal/tasks.ErrCASConflict so callers can react identically.
 var ErrCASConflict = errors.New("swarm: CAS conflict")
 
-// Config configures a Manager. Only NATSConn is required; bucket name
-// and TTL fall back to the package defaults if zero. Defaults match
-// production; tests sometimes pass shorter TTLs to exercise expiry.
+// Config configures a Sessions handle. Only NATSConn is required;
+// bucket name and TTL fall back to the package defaults if zero.
+// Defaults match production; tests sometimes pass shorter TTLs to
+// exercise expiry.
 type Config struct {
-	// NATSConn is the live NATS connection. Manager does not dial; the
+	// NATSConn is the live NATS connection. Sessions does not dial; the
 	// caller owns connect/disconnect lifecycle. Required.
 	NATSConn *nats.Conn
 
@@ -61,7 +62,7 @@ type Config struct {
 }
 
 // Validate returns an error describing the first invalid field, or nil
-// if the config is acceptable. Manager.Open calls Validate before any
+// if the config is acceptable. Open calls Validate before any
 // substrate work so callers see config issues with no NATS round-trip.
 func (c Config) Validate() error {
 	if c.NATSConn == nil {
@@ -70,11 +71,22 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// Manager owns the JetStream KV bucket holding swarm session records.
+// Sessions owns the JetStream KV bucket holding swarm session records.
+// Reads (Get, List) are public — `bones swarm status`, `bones doctor`,
+// and slot-resolution helpers in the CLI consume them directly.
+// Mutations (put, update, delete) are unexported; the only legal
+// mutator is `swarm.Lease`, which lives in the same package.
+//
+// The narrow public surface enforces the seam called out in ADR 0034:
+// the lifecycle of a session record is owned end-to-end by Lease, so
+// outside callers cannot bypass Lease's invariants (host match, CAS
+// revision tracking, claim-bound writes).
+//
 // Every public method is safe to call concurrently. Close is
-// idempotent. Unlike presence.Manager, there is no heartbeat goroutine
-// — callers (the bones swarm verbs) drive renewal via Update.
-type Manager struct {
+// idempotent. Unlike presence.Manager there is no heartbeat goroutine
+// — callers (the bones swarm verbs, via Lease) drive renewal via
+// CAS update.
+type Sessions struct {
 	cfg    Config
 	js     jetstream.JetStream
 	kv     jetstream.KeyValue
@@ -82,10 +94,10 @@ type Manager struct {
 }
 
 // Open creates (or reattaches to) the swarm sessions KV bucket and
-// returns a Manager. Caller must Close at shutdown. Open does not
-// dial NATS: the connection comes pre-wired so reconnect policy stays
-// a single-source concern (same shape as presence.Open).
-func Open(ctx context.Context, cfg Config) (*Manager, error) {
+// returns a Sessions handle. Caller must Close at shutdown. Open does
+// not dial NATS: the connection comes pre-wired so reconnect policy
+// stays a single-source concern (same shape as presence.Open).
+func Open(ctx context.Context, cfg Config) (*Sessions, error) {
 	assert.NotNil(ctx, "swarm.Open: ctx is nil")
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -111,128 +123,132 @@ func Open(ctx context.Context, cfg Config) (*Manager, error) {
 	}
 	cfg.BucketName = bucket
 	cfg.TTL = ttl
-	return &Manager{cfg: cfg, js: js, kv: kv}, nil
+	return &Sessions{cfg: cfg, js: js, kv: kv}, nil
 }
 
-// Close marks the Manager closed so subsequent public calls return
-// ErrClosed. Safe to call more than once. Does not delete bucket
-// contents; sessions outlive the process that wrote them (TTL
+// Close marks the Sessions handle closed so subsequent public calls
+// return ErrClosed. Safe to call more than once. Does not delete
+// bucket contents; sessions outlive the process that wrote them (TTL
 // eventually evicts).
-func (m *Manager) Close() error {
-	assert.NotNil(m, "swarm.Close: receiver is nil")
-	m.closed.Store(true)
+func (s *Sessions) Close() error {
+	assert.NotNil(s, "swarm.Sessions.Close: receiver is nil")
+	s.closed.Store(true)
 	return nil
 }
 
 // BucketName returns the bucket name in use. Useful for diagnostics
 // and for `bones doctor` to mention the right bucket in its messages.
-func (m *Manager) BucketName() string {
-	assert.NotNil(m, "swarm.BucketName: receiver is nil")
-	return m.cfg.BucketName
+func (s *Sessions) BucketName() string {
+	assert.NotNil(s, "swarm.Sessions.BucketName: receiver is nil")
+	return s.cfg.BucketName
 }
 
 // Get reads the session record for slot. Returns ErrNotFound if no
 // record exists. The returned revision is the JetStream KV sequence
-// number suitable for a follow-up CAS Update or Delete.
-func (m *Manager) Get(
+// number suitable for a follow-up CAS update or delete (callable only
+// from inside the swarm package — see ADR 0034).
+func (s *Sessions) Get(
 	ctx context.Context, slot string,
 ) (Session, uint64, error) {
-	assert.NotNil(ctx, "swarm.Get: ctx is nil")
-	assert.NotEmpty(slot, "swarm.Get: slot is empty")
-	if m.closed.Load() {
+	assert.NotNil(ctx, "swarm.Sessions.Get: ctx is nil")
+	assert.NotEmpty(slot, "swarm.Sessions.Get: slot is empty")
+	if s.closed.Load() {
 		return Session{}, 0, ErrClosed
 	}
-	kve, err := m.kv.Get(ctx, slot)
+	kve, err := s.kv.Get(ctx, slot)
 	if err != nil {
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			return Session{}, 0, ErrNotFound
 		}
-		return Session{}, 0, fmt.Errorf("swarm.Get: %w", err)
+		return Session{}, 0, fmt.Errorf("swarm.Sessions.Get: %w", err)
 	}
 	if kve.Operation() != jetstream.KeyValuePut {
 		return Session{}, 0, ErrNotFound
 	}
-	s, err := decode(kve.Value())
+	sess, err := decode(kve.Value())
 	if err != nil {
-		return Session{}, 0, fmt.Errorf("swarm.Get: %w", err)
+		return Session{}, 0, fmt.Errorf("swarm.Sessions.Get: %w", err)
 	}
-	return s, kve.Revision(), nil
+	return sess, kve.Revision(), nil
 }
 
-// Put writes the session record for sess.Slot as a fresh entry. Fails
+// put writes the session record for sess.Slot as a fresh entry. Fails
 // (with ErrCASConflict) if a record already exists at that slot —
-// callers must Delete first to take over an abandoned slot. Mirrors
-// the create-or-update split in internal/tasks.
-func (m *Manager) Put(ctx context.Context, sess Session) error {
-	assert.NotNil(ctx, "swarm.Put: ctx is nil")
-	assert.NotEmpty(sess.Slot, "swarm.Put: sess.Slot is empty")
-	if m.closed.Load() {
+// callers must delete first to take over an abandoned slot. Mirrors
+// the create-or-update split in internal/tasks. Unexported: only
+// `swarm.Lease` is permitted to mutate session state.
+func (s *Sessions) put(ctx context.Context, sess Session) error {
+	assert.NotNil(ctx, "swarm.Sessions.put: ctx is nil")
+	assert.NotEmpty(sess.Slot, "swarm.Sessions.put: sess.Slot is empty")
+	if s.closed.Load() {
 		return ErrClosed
 	}
 	payload, err := encode(sess)
 	if err != nil {
 		return err
 	}
-	if _, err := m.kv.Create(ctx, sess.Slot, payload); err != nil {
+	if _, err := s.kv.Create(ctx, sess.Slot, payload); err != nil {
 		if jskv.IsConflict(err) {
 			return ErrCASConflict
 		}
-		return fmt.Errorf("swarm.Put: %w", err)
+		return fmt.Errorf("swarm.Sessions.put: %w", err)
 	}
 	return nil
 }
 
-// Update overwrites the session record for sess.Slot using a CAS gate
+// update overwrites the session record for sess.Slot using a CAS gate
 // against expectedRev. Returns ErrCASConflict if the bucket's current
 // revision differs from expectedRev — another writer raced ours and
 // the caller should re-Get and decide whether to retry.
 //
-// Update is the heartbeat path: `bones swarm commit` reads the
-// current session, updates LastRenewed, and CAS-writes back.
-func (m *Manager) Update(
+// update is the heartbeat path: `bones swarm commit` (via Lease) reads
+// the current session, updates LastRenewed, and CAS-writes back.
+// Unexported: only `swarm.Lease` is permitted to mutate.
+func (s *Sessions) update(
 	ctx context.Context, sess Session, expectedRev uint64,
 ) error {
-	assert.NotNil(ctx, "swarm.Update: ctx is nil")
-	assert.NotEmpty(sess.Slot, "swarm.Update: sess.Slot is empty")
-	if m.closed.Load() {
+	assert.NotNil(ctx, "swarm.Sessions.update: ctx is nil")
+	assert.NotEmpty(sess.Slot, "swarm.Sessions.update: sess.Slot is empty")
+	if s.closed.Load() {
 		return ErrClosed
 	}
 	payload, err := encode(sess)
 	if err != nil {
 		return err
 	}
-	if _, err := m.kv.Update(ctx, sess.Slot, payload, expectedRev); err != nil {
+	if _, err := s.kv.Update(ctx, sess.Slot, payload, expectedRev); err != nil {
 		if jskv.IsConflict(err) {
 			return ErrCASConflict
 		}
-		return fmt.Errorf("swarm.Update: %w", err)
+		return fmt.Errorf("swarm.Sessions.update: %w", err)
 	}
 	return nil
 }
 
-// Delete removes the session record at slot via a CAS gate against
+// delete removes the session record at slot via a CAS gate against
 // expectedRev. ErrCASConflict on revision mismatch — callers should
 // re-Get and retry only if they still want to delete the (newer)
 // record. ErrNotFound if the key was already missing.
 //
-// Delete is the close path: `bones swarm close` removes the session
-// after posting the dispatch result and stopping the leaf.
-func (m *Manager) Delete(
+// delete is the close path: `bones swarm close` (via Lease) removes
+// the session after posting the dispatch result and stopping the
+// leaf. Unexported: only `swarm.Lease` is permitted to mutate.
+func (s *Sessions) delete(
 	ctx context.Context, slot string, expectedRev uint64,
 ) error {
-	assert.NotNil(ctx, "swarm.Delete: ctx is nil")
-	assert.NotEmpty(slot, "swarm.Delete: slot is empty")
-	if m.closed.Load() {
+	assert.NotNil(ctx, "swarm.Sessions.delete: ctx is nil")
+	assert.NotEmpty(slot, "swarm.Sessions.delete: slot is empty")
+	if s.closed.Load() {
 		return ErrClosed
 	}
-	if err := m.kv.Delete(ctx, slot, jetstream.LastRevision(expectedRev)); err != nil {
+	if err := s.kv.Delete(ctx, slot, jetstream.LastRevision(expectedRev)); err != nil {
 		if jskv.IsConflict(err) {
 			return ErrCASConflict
 		}
 		if errors.Is(err, jetstream.ErrKeyNotFound) {
 			return ErrNotFound
 		}
-		return fmt.Errorf("swarm.Delete: %w", err)
+		return fmt.Errorf("swarm.Sessions.delete: %w", err)
 	}
 	return nil
 }
@@ -246,14 +262,19 @@ const maxSessionEntries = 1024
 // List returns every live session in the bucket. Order matches the
 // underlying JetStream KV list order (key-name lexicographic in
 // practice; callers that need a specific order should sort).
-func (m *Manager) List(ctx context.Context) ([]Session, error) {
-	assert.NotNil(ctx, "swarm.List: ctx is nil")
-	if m.closed.Load() {
+//
+// List is the canonical read-across-slots seam — `bones swarm status`,
+// `bones doctor`, and CLI slot-resolution helpers all consume it.
+// Per ADR 0034, this is one of the read methods that justify keeping
+// Sessions as a public type at all (versus folding into Lease).
+func (s *Sessions) List(ctx context.Context) ([]Session, error) {
+	assert.NotNil(ctx, "swarm.Sessions.List: ctx is nil")
+	if s.closed.Load() {
 		return nil, ErrClosed
 	}
-	lister, err := m.kv.ListKeys(ctx)
+	lister, err := s.kv.ListKeys(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("swarm.List: list keys: %w", err)
+		return nil, fmt.Errorf("swarm.Sessions.List: list keys: %w", err)
 	}
 	defer func() { _ = lister.Stop() }()
 	var out []Session
@@ -261,24 +282,24 @@ func (m *Manager) List(ctx context.Context) ([]Session, error) {
 	for key := range lister.Keys() {
 		assert.Precondition(
 			count < maxSessionEntries,
-			"swarm.List: scanned more than %d entries", maxSessionEntries,
+			"swarm.Sessions.List: scanned more than %d entries", maxSessionEntries,
 		)
 		count++
-		kve, err := m.kv.Get(ctx, key)
+		kve, err := s.kv.Get(ctx, key)
 		if err != nil {
 			if errors.Is(err, jetstream.ErrKeyNotFound) {
 				continue
 			}
-			return nil, fmt.Errorf("swarm.List: get %q: %w", key, err)
+			return nil, fmt.Errorf("swarm.Sessions.List: get %q: %w", key, err)
 		}
 		if kve.Operation() != jetstream.KeyValuePut {
 			continue
 		}
-		s, err := decode(kve.Value())
+		sess, err := decode(kve.Value())
 		if err != nil {
-			return nil, fmt.Errorf("swarm.List: decode %q: %w", key, err)
+			return nil, fmt.Errorf("swarm.Sessions.List: decode %q: %w", key, err)
 		}
-		out = append(out, s)
+		out = append(out, sess)
 	}
 	return out, nil
 }
@@ -292,8 +313,8 @@ func (m *Manager) List(ctx context.Context) ([]Session, error) {
 //	└── wt/                  worktree (Leaf.WT() result)
 //
 // Pure path derivation; no KV lookup. Callers can compute this
-// without opening a Manager — `bones swarm cwd` exploits exactly
-// that to avoid a NATS round-trip for a path query.
+// without opening a Sessions handle — `bones swarm cwd` exploits
+// exactly that to avoid a NATS round-trip for a path query.
 func SlotDir(workspaceDir, slot string) string {
 	assert.NotEmpty(workspaceDir, "swarm.SlotDir: workspaceDir is empty")
 	assert.NotEmpty(slot, "swarm.SlotDir: slot is empty")
