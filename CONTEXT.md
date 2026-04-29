@@ -117,7 +117,7 @@ artifacts — commits, chat history). Lives under `internal/coord/`.
 See ADR 0025.
 
 **Domain.** The higher-level packages built on top of the substrate
-— `internal/{tasks, holds, swarm, dispatch, autoclaim, presence,
+— `internal/{tasks, holds, swarm, dispatch, presence,
 chat}`. Domain may import substrate; substrate may not import
 domain (enforced by `depguard` in `.golangci.yml`). See ADR 0025
 for the layering rule and its known exceptions.

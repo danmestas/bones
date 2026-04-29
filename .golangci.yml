@@ -39,8 +39,6 @@ linters:
           deny:
             - pkg: github.com/danmestas/bones/internal/dispatch
               desc: "substrate (internal/coord) must not import domain (internal/dispatch)"
-            - pkg: github.com/danmestas/bones/internal/autoclaim
-              desc: "substrate (internal/coord) must not import domain (internal/autoclaim)"
             - pkg: github.com/danmestas/bones/internal/compactanthropic
               desc: "substrate (internal/coord) must not import domain (internal/compactanthropic)"
             # NOTE: internal/tasks and internal/holds are intentionally NOT
