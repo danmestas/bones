@@ -58,7 +58,7 @@ func main() {
 	// to Debug so non-`-v` invocations stay quiet. `-v` (libfossilcli
 	// Globals.Verbose) reinstalls a Debug-level handler so the same
 	// sites are visible when troubleshooting.
-	if c.Globals.Verbose {
+	if c.Verbose {
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr,
 			&slog.HandlerOptions{Level: slog.LevelDebug})))
 	}
