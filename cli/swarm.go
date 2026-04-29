@@ -34,7 +34,8 @@ type SwarmCmd struct {
 //
 // Pulled into a helper because every read-only swarm verb opens the
 // Sessions handle the same way and the verbs are otherwise small.
-// Mutating verbs go through swarm.Lease (ADR 0028).
+// Mutating verbs go through swarm.FreshLease / swarm.ResumedLease
+// (ADRs 0028, 0033).
 func openSwarmSessions(
 	ctx context.Context, info workspace.Info,
 ) (*swarm.Sessions, func(), error) {

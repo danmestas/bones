@@ -24,8 +24,8 @@ import (
 //
 // All the assembled scaffold (Resume the lease, claim, announce
 // holds, commit via leaf, push to hub, renew session) lives in
-// internal/swarm.Lease. This verb is flag parsing + file gathering
-// + Lease.Commit + result printing.
+// internal/swarm.ResumedLease. This verb is flag parsing + file
+// gathering + ResumedLease.Commit + result printing.
 type SwarmCommitCmd struct {
 	Slot    string   `name:"slot" help:"slot name (defaults to single active slot on this host)"`
 	Message string   `name:"message" short:"m" required:"" help:"commit message"`

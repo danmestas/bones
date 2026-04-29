@@ -46,54 +46,78 @@ A subagent prompt collapses to ~5 swarm verbs from the ~12 raw
 Every verb touches the same scaffold: locate workspace, ensure slot
 user exists, open the swarm-sessions KV bucket, read or write the
 per-slot session record under CAS, open a `coord.Leaf`, do the
-verb's work, stop the leaf, update KV. **`internal/swarm.Lease`** is
-that assembled view — workspace + fossil-user precondition +
-session-record + open `coord.Leaf` in one place.
+verb's work, stop the leaf, update KV. The lease abstraction in
+`internal/swarm` is that assembled view — workspace + fossil-user
+precondition + session-record + open `coord.Leaf` in one place.
+Following ADR 0033 it is split into two compile-time-distinct
+types so the lifecycle is encoded in the type system rather than
+runtime preconditions.
 
 ### Lifetime
 
-Lease and its underlying `coord.Leaf` share a lifetime: the lease
+A lease and its underlying `coord.Leaf` share a lifetime: the lease
 opens the leaf at acquire time and stops it at close time. There is
 no long-running per-slot leaf process to coordinate across CLI
 invocations. The persistent state across verbs is the **session
 record** in `bones-swarm-sessions[slot]` (`swarm.Session`), not the
 leaf itself. `swarm join` writes the record; `swarm commit` and
-`swarm close` re-acquire the lease against that existing record.
+`swarm close` re-acquire a fresh lease against that existing record.
 
-### Two acquisition modes
+### Two-type lifecycle
 
-- **`AcquireFresh(ctx, info, slot, taskID, opts) (*Lease, error)`** —
-  for `swarm join`. Creates the session record via CAS-PutIfAbsent
+The lease lifecycle is encoded in two distinct types so that the
+verb-to-state-machine mapping is enforced by the compiler:
+
+- **`FreshLease`**, returned by
+  `swarm.Acquire(ctx, info, slot, taskID, opts) (*FreshLease, error)`
+  — for `swarm join`. Creates the session record via CAS-PutIfAbsent
   (or `--force`-overwrites a stale one), opens the leaf, claims the
-  task. The "refusing to bootstrap from a leaf context" role-guard is
-  a precondition inside `AcquireFresh`, not a free-standing CLI
-  check.
+  task. The "refusing to bootstrap from a leaf context" role-guard
+  is a precondition inside `Acquire`, not a free-standing CLI check.
 
-- **`Resume(ctx, info, slot, opts) (*Lease, error)`** — for every
-  other verb. Reads the existing session record, reconstructs the
-  leaf using the recorded hub URL and slot user, fails with
-  `ErrSessionNotFound` if no record exists.
+- **`ResumedLease`**, returned by
+  `swarm.Resume(ctx, info, slot, opts) (*ResumedLease, error)` —
+  for every other verb. Reads the existing session record,
+  reconstructs the leaf using the recorded hub URL and slot user,
+  fails with `ErrSessionNotFound` if no record exists.
 
-### Methods (closed verb set)
+### Methods (closed verb set per type)
 
-`Lease` exposes methods mirroring the verbs that operate on an open
-lease:
+**`FreshLease`** — graceful-exit and rollback only:
 
-- `Commit(ctx, files ...File) (uuid, error)` — claim →
-  `coord.Leaf.Commit` → bump `LastRenewed` via CAS, atomic from the
-  caller's view.
-- `Close(ctx, result, summary string) error` — delete the session
-  record via CAS, stop the leaf.
-- `Release(ctx) error` — release the claim hold and stop the leaf
-  *without* deleting the session record. The path `swarm join`
-  takes after writing the record; the lease stays "live" in KV
-  until a later verb closes it.
-- `Slot()`, `TaskID()`, `WT()` — accessors. `Leaf() *coord.Leaf` is
-  a deprecated-on-arrival escape hatch, scheduled for removal once
-  no caller uses it.
+- `Release(ctx) error` — release the claim, stop the leaf, close
+  the session handle. Session record persists in KV for later
+  `Resume`. The path `swarm join` takes after writing the record.
+- `Abort(ctx) error` — release the claim, stop the leaf, CAS-delete
+  the session record, remove the pid file. The rollback path used
+  when the join verb's downstream work fails after `Acquire`
+  succeeded.
+- `Slot()`, `TaskID()`, `WT()`, `HubURL()`, `FossilUser()`,
+  `SessionRevision()` — accessors.
 
-`Renew` is deliberately not a method — `Commit` already bumps
+**`ResumedLease`** — work-doing and graceful-exit:
+
+- `Commit(ctx, message, files) (CommitResult, error)` — re-claim
+  → `coord.Leaf.Commit` → push to hub → CAS-bump `LastRenewed`,
+  atomic from the caller's view. The session-record CAS retries on
+  conflict up to `jskv.MaxRetries` and surfaces `ErrSessionGone`
+  if the record was deleted between `Resume` and the bump.
+- `Close(ctx, opts CloseOpts) error` — re-claim and either close
+  the task (success) or release the claim (fail/fork), then stop
+  the leaf, remove the pid file, and CAS-delete the session record
+  (retrying on rev advance from concurrent commits).
+- `Release(ctx) error` — close handles without deleting the
+  record, used by `swarm commit` after the commit completes.
+- `Slot()`, `TaskID()`, `WT()`, `HubURL()`, `FossilUser()`,
+  `SessionRevision()` — accessors.
+
+A `Renew` method is deliberately absent — `Commit` already bumps
 `LastRenewed` and is the only path that needs heartbeating today.
+
+The type split makes the obvious misuses compile errors:
+`FreshLease` has no `Commit` (no current rev to CAS against),
+`ResumedLease` has no `Abort` (it didn't write the record), and
+neither has the other's `Close`/`Abort` distinction.
 
 ## Lifecycle and state
 
@@ -138,27 +162,31 @@ path directly without consulting KV.
 
 **`swarm join`** — flags `--slot`, `--task-id` (required), `--caps`
 (default `oih`), `--force` (recovery-only takeover). Calls
-`Lease.AcquireFresh` (ensure slot user → verify no live session →
-open `coord.Leaf` at `.bones/swarm/<slot>/` as `slot-<name>` → claim
-task with 60s hold → CAS-write session record with 5-min TTL), emits
-`BONES_SLOT_WT=<path>`, then `Release` (stops the leaf, leaves the
-session record live in KV).
+`swarm.Acquire` (ensure slot user → verify no live session → open
+`coord.Leaf` at `.bones/swarm/<slot>/` as `slot-<name>` → claim task
+with 60s hold → CAS-write session record with 5-min TTL), emits
+`BONES_SLOT_WT=<path>`, then `FreshLease.Release` (stops the leaf,
+leaves the session record live in KV). On any failure between
+`Acquire` and emission the verb falls back to `FreshLease.Abort`
+to roll the record back.
 
 **`swarm commit`** — flags `--slot` (defaults to single active
 slot), `-m` (required); positional file args optional. Calls
-`Lease.Resume` then `Lease.Commit(files...)` (claim → libfossil
-commit with slot-user identity → autosync to hub → bump
-`LastRenewed` via CAS). Prints new commit hash. The agent NEVER calls
-`fossil up`; concurrent slot work appears on the hub as forks (the
-way fossil itself models it), invisible to this slot's lineage.
+`swarm.Resume` then `ResumedLease.Commit(message, files)` (claim →
+libfossil commit with slot-user identity → autosync to hub → bump
+`LastRenewed` via CAS, retrying on conflict). Prints new commit
+hash. The agent NEVER calls `fossil up`; concurrent slot work
+appears on the hub as forks (the way fossil itself models it),
+invisible to this slot's lineage.
 
 **`swarm close`** — flags `--slot`, `--result`
 (`success|fail|fork`), `--summary`, `--branch`/`--rev` (forks only).
-Calls `Lease.Resume`, posts a `dispatch.ResultMessage` to
+Calls `swarm.Resume`, posts a `dispatch.ResultMessage` to
 `<proj>.tasks.<taskID>.result` so the dispatch parent (ADR 0021)
-picks it up. On success, `Lease.Close` (releases the claim, closes
-the task in NATS KV, deletes the session record via CAS, stops the
-leaf); on fail/fork, release claim only — task stays open for human
+picks it up. On success, `ResumedLease.Close` with
+`CloseTaskOnSuccess=true` (releases the claim, closes the task in
+NATS KV, deletes the session record via CAS, stops the leaf); on
+fail/fork, releases the claim only — task stays open for human
 inspection. `wt/` and `leaf.fossil` stay for forensics until
 explicit `bones swarm prune <slot>`.
 
@@ -206,15 +234,19 @@ list.
   via `bones doctor`, and future multi-machine swarms for free.
   Cost: one more substrate-side bucket to provision at `coord.Open`,
   consistent with existing buckets.
-- **`AcquireFresh` / `Resume` split vs. a single `Lease`
-  constructor.** Caller intent (start vs. continue) is explicit in
-  the type signature, role-guard preconditions are scoped to fresh
-  acquisition, error handling is unambiguous. Cost: two
-  constructors, slightly more API surface.
-- **Lease accessors vs. `Leaf()` escape hatch.** Methods pin the
-  lifetime invariant in the type and constrain callers to the closed
-  verb set. The deprecated-on-arrival `Leaf()` accessor exists only
-  to allow incremental verb migration; its removal is the end-state.
+- **`Acquire` / `Resume` returning compile-time-distinct types vs.
+  a single `Lease` constructor.** Caller intent (start vs.
+  continue) is encoded in the return type, role-guard preconditions
+  are scoped to fresh acquisition, and the methods that only make
+  sense on a fresh record (`Abort`) or a resumed one (`Commit`,
+  `Close`) are not callable on the wrong type. Cost: two types
+  share an embedded `leaseBase` for accessors and teardown.
+- **CAS retries inside `Commit` and `Close` vs. caller-visible
+  conflicts.** The lease implementation absorbs the rev-advance
+  retry loop and surfaces only `ErrSessionGone` (record deleted
+  concurrently) as a typed signal. CLI verbs do not see transient
+  CAS failures. Cost: a stuck CAS loop is bounded by
+  `jskv.MaxRetries` rather than retried indefinitely.
 
 ## Migration
 
