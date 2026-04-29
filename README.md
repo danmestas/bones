@@ -82,19 +82,13 @@ Add `-v` to any command for DEBUG-level slog output. Default is silent.
 
 ## Uninstall
 
-From inside Claude Code: ask it to "uninstall bones" — the bundled `uninstall-bones` skill stops the hub, removes the workspace + orchestrator dirs, and pulls the SessionStart/Stop hooks out of `.claude/settings.json` while leaving unrelated hooks intact.
-
-Manually:
-
 ```bash
-bones hub stop                          # stop fossil + nats
-rm -rf .bones .orchestrator             # remove workspace + hub state
-rm -rf .claude/skills/orchestrator \
-       .claude/skills/subagent \
-       .claude/skills/uninstall-bones   # remove scaffolded skills
-# then edit .claude/settings.json by hand to remove the
-# hub-bootstrap.sh and hub-shutdown.sh hook entries
+bones down            # confirms before removing anything
 ```
+
+`bones down` reverses `bones up`: stops the hub, removes `.bones/` and `.orchestrator/`, removes the scaffolded skills under `.claude/skills/`, and prunes only the bones-installed hooks from `.claude/settings.json` (leaving unrelated hooks intact). Flags: `--yes` skips the prompt, `--dry-run` prints the plan, `--keep-hub` / `--keep-skills` / `--keep-hooks` for partial uninstalls.
+
+From inside Claude Code: ask it to "uninstall bones" — the bundled `uninstall-bones` skill walks through the same steps interactively.
 
 Remove the binary: `brew uninstall bones` (or delete `$(go env GOPATH)/bin/bones` if you `go install`ed).
 
