@@ -1,4 +1,4 @@
-package autoclaim
+package cli
 
 import (
 	"context"
@@ -10,13 +10,17 @@ import (
 	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
-func newTestCoord(t *testing.T, agentID string) *coord.Coord {
+// newAutoclaimCoord opens a real coord.Coord against the per-test
+// embedded NATS server. Per ADR 0030 the autoclaim path is covered
+// by real-substrate tests; mocks would hide JetStream CAS races
+// (TestRunAutoclaim_ClaimRace_ReturnsRaceLost, below).
+func newAutoclaimCoord(t *testing.T, agentID string) *coord.Coord {
 	t.Helper()
 	nc, _ := natstest.NewJetStreamServer(t)
-	return newCoordOnURL(t, nc.ConnectedUrl(), agentID)
+	return newAutoclaimCoordOnURL(t, nc.ConnectedUrl(), agentID)
 }
 
-func newCoordOnURL(t *testing.T, url, agentID string) *coord.Coord {
+func newAutoclaimCoordOnURL(t *testing.T, url, agentID string) *coord.Coord {
 	t.Helper()
 	cfg := coord.Config{
 		AgentID:            agentID,
@@ -32,34 +36,36 @@ func newCoordOnURL(t *testing.T, url, agentID string) *coord.Coord {
 	return c
 }
 
-func TestTick_Disabled_NoOp(t *testing.T) {
-	c := newTestCoord(t, "agent-autoclaim")
+func TestRunAutoclaim_Disabled_NoOp(t *testing.T) {
+	c := newAutoclaimCoord(t, "agent-autoclaim")
 	ctx := context.Background()
 
-	res, err := Tick(ctx, c, Options{Enabled: false, Idle: true, ClaimTTL: time.Minute})
+	opts := autoclaimOpts{Enabled: false, Idle: true, ClaimTTL: time.Minute}
+	res, err := runAutoclaimTick(ctx, c, opts)
 	if err != nil {
-		t.Fatalf("Tick: %v", err)
+		t.Fatalf("runAutoclaimTick: %v", err)
 	}
-	if res.Action != ActionDisabled {
-		t.Fatalf("Action=%q, want %q", res.Action, ActionDisabled)
+	if res.Action != autoclaimDisabled {
+		t.Fatalf("Action=%q, want %q", res.Action, autoclaimDisabled)
 	}
 }
 
-func TestTick_Busy_NoOp(t *testing.T) {
-	c := newTestCoord(t, "agent-autoclaim")
+func TestRunAutoclaim_Busy_NoOp(t *testing.T) {
+	c := newAutoclaimCoord(t, "agent-autoclaim")
 	ctx := context.Background()
 
-	res, err := Tick(ctx, c, Options{Enabled: true, Idle: false, ClaimTTL: time.Minute})
+	opts := autoclaimOpts{Enabled: true, Idle: false, ClaimTTL: time.Minute}
+	res, err := runAutoclaimTick(ctx, c, opts)
 	if err != nil {
-		t.Fatalf("Tick: %v", err)
+		t.Fatalf("runAutoclaimTick: %v", err)
 	}
-	if res.Action != ActionBusy {
-		t.Fatalf("Action=%q, want %q", res.Action, ActionBusy)
+	if res.Action != autoclaimBusy {
+		t.Fatalf("Action=%q, want %q", res.Action, autoclaimBusy)
 	}
 }
 
-func TestTick_ClaimedTaskOwnedByAgent_NoOp(t *testing.T) {
-	c := newTestCoord(t, "agent-autoclaim")
+func TestRunAutoclaim_ClaimedTaskOwnedByAgent_NoOp(t *testing.T) {
+	c := newAutoclaimCoord(t, "agent-autoclaim")
 	ctx := context.Background()
 	id, err := c.OpenTask(ctx, "owned", []string{"/work/owned.go"})
 	if err != nil {
@@ -71,30 +77,32 @@ func TestTick_ClaimedTaskOwnedByAgent_NoOp(t *testing.T) {
 	}
 	defer func() { _ = rel() }()
 
-	res, err := Tick(ctx, c, Options{Enabled: true, Idle: true, ClaimTTL: time.Minute})
+	opts := autoclaimOpts{Enabled: true, Idle: true, ClaimTTL: time.Minute}
+	res, err := runAutoclaimTick(ctx, c, opts)
 	if err != nil {
-		t.Fatalf("Tick: %v", err)
+		t.Fatalf("runAutoclaimTick: %v", err)
 	}
-	if res.Action != ActionAlreadyClaimed {
-		t.Fatalf("Action=%q, want %q", res.Action, ActionAlreadyClaimed)
+	if res.Action != autoclaimAlreadyClaimed {
+		t.Fatalf("Action=%q, want %q", res.Action, autoclaimAlreadyClaimed)
 	}
 }
 
-func TestTick_NoReady_NoOp(t *testing.T) {
-	c := newTestCoord(t, "agent-autoclaim")
+func TestRunAutoclaim_NoReady_NoOp(t *testing.T) {
+	c := newAutoclaimCoord(t, "agent-autoclaim")
 	ctx := context.Background()
 
-	res, err := Tick(ctx, c, Options{Enabled: true, Idle: true, ClaimTTL: time.Minute})
+	opts := autoclaimOpts{Enabled: true, Idle: true, ClaimTTL: time.Minute}
+	res, err := runAutoclaimTick(ctx, c, opts)
 	if err != nil {
-		t.Fatalf("Tick: %v", err)
+		t.Fatalf("runAutoclaimTick: %v", err)
 	}
-	if res.Action != ActionNoReady {
-		t.Fatalf("Action=%q, want %q", res.Action, ActionNoReady)
+	if res.Action != autoclaimNoReady {
+		t.Fatalf("Action=%q, want %q", res.Action, autoclaimNoReady)
 	}
 }
 
-func TestTick_ClaimsOldestReadyTask(t *testing.T) {
-	c := newTestCoord(t, "agent-autoclaim")
+func TestRunAutoclaim_ClaimsOldestReadyTask(t *testing.T) {
+	c := newAutoclaimCoord(t, "agent-autoclaim")
 	ctx := context.Background()
 
 	first, err := c.OpenTask(ctx, "first", []string{"/work/first.go"})
@@ -107,12 +115,13 @@ func TestTick_ClaimsOldestReadyTask(t *testing.T) {
 		t.Fatalf("OpenTask(second): %v", err)
 	}
 
-	res, err := Tick(ctx, c, Options{Enabled: true, Idle: true, ClaimTTL: time.Minute})
+	opts := autoclaimOpts{Enabled: true, Idle: true, ClaimTTL: time.Minute}
+	res, err := runAutoclaimTick(ctx, c, opts)
 	if err != nil {
-		t.Fatalf("Tick: %v", err)
+		t.Fatalf("runAutoclaimTick: %v", err)
 	}
-	if res.Action != ActionClaimed {
-		t.Fatalf("Action=%q, want %q", res.Action, ActionClaimed)
+	if res.Action != autoclaimClaimed {
+		t.Fatalf("Action=%q, want %q", res.Action, autoclaimClaimed)
 	}
 	if res.TaskID != first {
 		t.Fatalf("TaskID=%q, want %q", res.TaskID, first)
@@ -130,10 +139,10 @@ func TestTick_ClaimsOldestReadyTask(t *testing.T) {
 	}
 }
 
-func TestTick_ClaimRace_ReturnsRaceLost(t *testing.T) {
+func TestRunAutoclaim_ClaimRace_ReturnsRaceLost(t *testing.T) {
 	nc, _ := natstest.NewJetStreamServer(t)
-	cA := newCoordOnURL(t, nc.ConnectedUrl(), "agent-A")
-	cB := newCoordOnURL(t, nc.ConnectedUrl(), "agent-B")
+	cA := newAutoclaimCoordOnURL(t, nc.ConnectedUrl(), "agent-A")
+	cB := newAutoclaimCoordOnURL(t, nc.ConnectedUrl(), "agent-B")
 	ctx := context.Background()
 
 	id, err := cA.OpenTask(ctx, "shared", []string{"/work/shared.go"})
@@ -142,37 +151,38 @@ func TestTick_ClaimRace_ReturnsRaceLost(t *testing.T) {
 	}
 
 	type tickResult struct {
-		res Result
+		res autoclaimResult
 		err error
 	}
+	opts := autoclaimOpts{Enabled: true, Idle: true, ClaimTTL: time.Minute}
 	results := make(chan tickResult, 2)
 	go func() {
-		res, err := Tick(ctx, cA, Options{Enabled: true, Idle: true, ClaimTTL: time.Minute})
+		res, err := runAutoclaimTick(ctx, cA, opts)
 		results <- tickResult{res: res, err: err}
 	}()
 	go func() {
-		res, err := Tick(ctx, cB, Options{Enabled: true, Idle: true, ClaimTTL: time.Minute})
+		res, err := runAutoclaimTick(ctx, cB, opts)
 		results <- tickResult{res: res, err: err}
 	}()
 
 	first := <-results
 	second := <-results
 	if first.err != nil {
-		t.Fatalf("first Tick: %v", first.err)
+		t.Fatalf("first runAutoclaimTick: %v", first.err)
 	}
 	if second.err != nil {
-		t.Fatalf("second Tick: %v", second.err)
+		t.Fatalf("second runAutoclaimTick: %v", second.err)
 	}
 
 	var sawClaimed, sawRaceLost bool
-	for _, got := range []Result{first.res, second.res} {
+	for _, got := range []autoclaimResult{first.res, second.res} {
 		switch got.Action {
-		case ActionClaimed:
+		case autoclaimClaimed:
 			sawClaimed = true
 			if got.TaskID != id {
 				t.Fatalf("claimed TaskID=%q, want %q", got.TaskID, id)
 			}
-		case ActionRaceLost:
+		case autoclaimRaceLost:
 			sawRaceLost = true
 			if got.TaskID != id {
 				t.Fatalf("race-lost TaskID=%q, want %q", got.TaskID, id)
@@ -186,8 +196,8 @@ func TestTick_ClaimRace_ReturnsRaceLost(t *testing.T) {
 	}
 }
 
-func TestTick_ClaimSuccess_PostsNoticeToTaskThread(t *testing.T) {
-	c := newTestCoord(t, "agent-autoclaim")
+func TestRunAutoclaim_ClaimSuccess_PostsNoticeToTaskThread(t *testing.T) {
+	c := newAutoclaimCoord(t, "agent-autoclaim")
 	ctx := context.Background()
 	id, err := c.OpenTask(ctx, "notice", []string{"/work/notice.go"})
 	if err != nil {
@@ -199,17 +209,17 @@ func TestTick_ClaimSuccess_PostsNoticeToTaskThread(t *testing.T) {
 	}
 	defer func() { _ = closeSub() }()
 
-	res, err := Tick(ctx, c, Options{
+	res, err := runAutoclaimTick(ctx, c, autoclaimOpts{
 		Enabled:  true,
 		Idle:     true,
 		ClaimTTL: time.Minute,
 		AgentID:  "agent-autoclaim",
 	})
 	if err != nil {
-		t.Fatalf("Tick: %v", err)
+		t.Fatalf("runAutoclaimTick: %v", err)
 	}
-	if res.Action != ActionClaimed {
-		t.Fatalf("Action=%q, want %q", res.Action, ActionClaimed)
+	if res.Action != autoclaimClaimed {
+		t.Fatalf("Action=%q, want %q", res.Action, autoclaimClaimed)
 	}
 
 	select {
