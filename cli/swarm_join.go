@@ -23,8 +23,8 @@ import (
 //
 // All the assembly (workspace check, fossil-user creation, KV
 // session record CAS, leaf open/claim) lives in
-// internal/swarm.Lease (ADR 0028). This verb is a thin adapter
-// from CLI flags to AcquireFresh + Release.
+// internal/swarm (ADR 0028). This verb is a thin adapter from CLI
+// flags to swarm.Acquire + FreshLease.Release.
 type SwarmJoinCmd struct {
 	Slot          string `name:"slot" required:"" help:"slot name (matches plan [slot: X])"`
 	TaskID        string `name:"task-id" required:"" help:"open task id to claim"`
@@ -34,10 +34,10 @@ type SwarmJoinCmd struct {
 }
 
 // Run drives the join flow per ADR 0028 §"swarm join", via
-// swarm.Lease: open workspace, AcquireFresh (which does
-// the role-guard check, ensures the slot user, CAS-writes the
-// session record, opens the leaf, claims the task, writes the pid
-// file), emit the report, Release.
+// swarm.Acquire: open workspace, Acquire (which does the role-guard
+// check, ensures the slot user, CAS-writes the session record, opens
+// the leaf, claims the task, writes the pid file), emit the report,
+// FreshLease.Release.
 func (c *SwarmJoinCmd) Run(g *libfossilcli.Globals) error {
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
@@ -52,7 +52,7 @@ func (c *SwarmJoinCmd) run(ctx context.Context, info workspace.Info) error {
 	if hubURL == "" {
 		hubURL = swarm.DefaultHubFossilURL
 	}
-	lease, err := swarm.AcquireFresh(ctx, info, c.Slot, c.TaskID, swarm.AcquireOpts{
+	lease, err := swarm.Acquire(ctx, info, c.Slot, c.TaskID, swarm.AcquireOpts{
 		HubURL:        hubURL,
 		Caps:          c.Caps,
 		ForceTakeover: c.ForceTakeover,
@@ -71,7 +71,7 @@ func (c *SwarmJoinCmd) run(ctx context.Context, info workspace.Info) error {
 // emitJoinReport prints the BONES_SLOT_WT line on stdout (consumed
 // by `eval $(bones swarm join ...)` patterns in shells) and a
 // human-readable summary on stderr.
-func (c *SwarmJoinCmd) emitJoinReport(lease *swarm.Lease) {
+func (c *SwarmJoinCmd) emitJoinReport(lease *swarm.FreshLease) {
 	wt := lease.WT()
 	fmt.Printf("BONES_SLOT_WT=%s\n", wt)
 	fmt.Fprintf(

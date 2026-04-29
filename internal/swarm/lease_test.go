@@ -30,7 +30,7 @@ func freePort(t *testing.T) string {
 
 // leaseFixture brings up a workspace dir + an in-process hub
 // (writing hub.fossil under .orchestrator) and returns the
-// workspace.Info shape AcquireFresh / Resume consume. Per ADR
+// workspace.Info shape Acquire / Resume consume. Per ADR
 // 0030 this uses real NATS + real Fossil — no mocks.
 type leaseFixture struct {
 	dir  string
@@ -62,12 +62,12 @@ func newLeaseFixture(t *testing.T) *leaseFixture {
 	}
 }
 
-// createTask inserts an open task on the hub so AcquireFresh has
+// createTask inserts an open task on the hub so Acquire has
 // something to claim. Uses a temporary fixture leaf to call
 // coord.Leaf.OpenTask — same path the bones tasks-create CLI verb
 // takes — so the substrate sees a fully-formed task record. The
 // fixture leaf is closed before returning; the lease under test
-// opens its own leaf inside AcquireFresh.
+// opens its own leaf inside Acquire.
 func (f *leaseFixture) createTask(t *testing.T, title, holdPath string) coord.TaskID {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -88,19 +88,19 @@ func (f *leaseFixture) createTask(t *testing.T, title, holdPath string) coord.Ta
 	return taskID
 }
 
-// TestAcquireFresh_RefusesWithoutHubFossil pins the role-leak
+// TestAcquire_RefusesWithoutHubFossil pins the role-leak
 // guard from PR #54. A workspace dir with no
-// `.orchestrator/hub.fossil` MUST cause AcquireFresh to return
+// `.orchestrator/hub.fossil` MUST cause Acquire to return
 // ErrWorkspaceNotBootstrapped without attempting any other work.
 // The error string MUST NOT contain "run `bones up`" — that
 // guidance is for orchestrators, not leaves.
-func TestAcquireFresh_RefusesWithoutHubFossil(t *testing.T) {
+func TestAcquire_RefusesWithoutHubFossil(t *testing.T) {
 	dir := t.TempDir() // no .orchestrator/hub.fossil
 	info := workspace.Info{WorkspaceDir: dir, NATSURL: "nats://127.0.0.1:1"}
 
-	_, err := AcquireFresh(context.Background(), info, "demo", "task-x", AcquireOpts{})
+	_, err := Acquire(context.Background(), info, "demo", "task-x", AcquireOpts{})
 	if !errors.Is(err, ErrWorkspaceNotBootstrapped) {
-		t.Fatalf("AcquireFresh: want ErrWorkspaceNotBootstrapped, got %v", err)
+		t.Fatalf("Acquire: want ErrWorkspaceNotBootstrapped, got %v", err)
 	}
 	msg := err.Error()
 	if !strings.Contains(msg, "refusing to bootstrap from a leaf context") {
@@ -111,10 +111,10 @@ func TestAcquireFresh_RefusesWithoutHubFossil(t *testing.T) {
 	}
 }
 
-// TestAcquireFresh_SuccessAndRelease covers the happy path: fresh
+// TestAcquire_SuccessAndRelease covers the happy path: fresh
 // acquire writes the session record + opens the leaf + claims the
 // task; Release tears down the leaf without deleting the record.
-func TestAcquireFresh_SuccessAndRelease(t *testing.T) {
+func TestAcquire_SuccessAndRelease(t *testing.T) {
 	f := newLeaseFixture(t)
 	holdPath := filepath.Join(f.dir, "rendering", "hello.txt")
 	taskID := string(f.createTask(t, "rendering-task-1", holdPath))
@@ -122,11 +122,11 @@ func TestAcquireFresh_SuccessAndRelease(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	lease, err := AcquireFresh(ctx, f.info, "rendering", taskID, AcquireOpts{
+	lease, err := Acquire(ctx, f.info, "rendering", taskID, AcquireOpts{
 		Hub: f.hub,
 	})
 	if err != nil {
-		t.Fatalf("AcquireFresh: %v", err)
+		t.Fatalf("Acquire: %v", err)
 	}
 	if lease.Slot() != "rendering" {
 		t.Errorf("Slot: got %q want %q", lease.Slot(), "rendering")
@@ -142,7 +142,7 @@ func TestAcquireFresh_SuccessAndRelease(t *testing.T) {
 	}
 
 	// Session record must be visible on a Sessions handle separate
-	// from the one Lease owns internally.
+	// from the one FreshLease owns internally.
 	verifySess := openVerifySessions(t, f)
 	got, _, err := verifySess.Get(ctx, "rendering")
 	if err != nil {
@@ -190,10 +190,10 @@ func openVerifySessions(t *testing.T, f *leaseFixture) *Sessions {
 	return sess
 }
 
-// TestAcquireFresh_RefusesActiveLiveSession pins the
+// TestAcquire_RefusesActiveLiveSession pins the
 // ErrSessionAlreadyLive path: a live session on the same host
 // without --force must be rejected.
-func TestAcquireFresh_RefusesActiveLiveSession(t *testing.T) {
+func TestAcquire_RefusesActiveLiveSession(t *testing.T) {
 	f := newLeaseFixture(t)
 	holdPath := filepath.Join(f.dir, "physics", "hello.txt")
 	taskID := string(f.createTask(t, "physics-task-1", holdPath))
@@ -201,16 +201,16 @@ func TestAcquireFresh_RefusesActiveLiveSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	first, err := AcquireFresh(ctx, f.info, "physics", taskID, AcquireOpts{Hub: f.hub})
+	first, err := Acquire(ctx, f.info, "physics", taskID, AcquireOpts{Hub: f.hub})
 	if err != nil {
-		t.Fatalf("first AcquireFresh: %v", err)
+		t.Fatalf("first Acquire: %v", err)
 	}
 	t.Cleanup(func() { _ = first.Release(ctx) })
 
 	// Without --force, second acquire must refuse.
-	_, err = AcquireFresh(ctx, f.info, "physics", taskID, AcquireOpts{Hub: f.hub})
+	_, err = Acquire(ctx, f.info, "physics", taskID, AcquireOpts{Hub: f.hub})
 	if !errors.Is(err, ErrSessionAlreadyLive) {
-		t.Fatalf("second AcquireFresh: want ErrSessionAlreadyLive, got %v", err)
+		t.Fatalf("second Acquire: want ErrSessionAlreadyLive, got %v", err)
 	}
 }
 
@@ -229,9 +229,9 @@ func TestResume_FailsWithoutSession(t *testing.T) {
 	}
 }
 
-// TestResume_AfterAcquireFresh confirms Resume reconstructs a
-// usable lease from the session record AcquireFresh wrote.
-func TestResume_AfterAcquireFresh(t *testing.T) {
+// TestResume_AfterAcquire confirms Resume reconstructs a
+// usable lease from the session record Acquire wrote.
+func TestResume_AfterAcquire(t *testing.T) {
 	f := newLeaseFixture(t)
 	holdPath := filepath.Join(f.dir, "ui", "hello.txt")
 	taskID := string(f.createTask(t, "ui-task-1", holdPath))
@@ -239,9 +239,9 @@ func TestResume_AfterAcquireFresh(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	first, err := AcquireFresh(ctx, f.info, "ui", taskID, AcquireOpts{Hub: f.hub})
+	first, err := Acquire(ctx, f.info, "ui", taskID, AcquireOpts{Hub: f.hub})
 	if err != nil {
-		t.Fatalf("AcquireFresh: %v", err)
+		t.Fatalf("Acquire: %v", err)
 	}
 	if err := first.Release(ctx); err != nil {
 		t.Fatalf("Release: %v", err)
@@ -267,8 +267,13 @@ func TestResume_AfterAcquireFresh(t *testing.T) {
 
 // TestClose_DeletesRecordAndPidFile pins the Close contract:
 // removes the session record (CAS-gated), removes the host-local
-// pid file, and stops the leaf. After Close, AcquireFresh on the
+// pid file, and stops the leaf. After Close, Acquire on the
 // same slot must succeed without --force.
+//
+// Under the FreshLease/ResumedLease split, Close is a ResumedLease
+// method, so the flow is Acquire → Release (record persists) →
+// Resume → Close, mirroring the new CLI invocation shape (acquire
+// in one call, close in a separate call).
 func TestClose_DeletesRecordAndPidFile(t *testing.T) {
 	f := newLeaseFixture(t)
 	holdPath := filepath.Join(f.dir, "audio", "hello.txt")
@@ -277,15 +282,23 @@ func TestClose_DeletesRecordAndPidFile(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	first, err := AcquireFresh(ctx, f.info, "audio", taskID, AcquireOpts{Hub: f.hub})
+	first, err := Acquire(ctx, f.info, "audio", taskID, AcquireOpts{Hub: f.hub})
 	if err != nil {
-		t.Fatalf("first AcquireFresh: %v", err)
+		t.Fatalf("first Acquire: %v", err)
 	}
 	pidPath := SlotPidFile(f.dir, "audio")
 	if _, err := os.Stat(pidPath); err != nil {
 		t.Fatalf("pre-Close pid file missing: %v", err)
 	}
-	if err := first.Close(ctx, CloseOpts{CloseTaskOnSuccess: true}); err != nil {
+	if err := first.Release(ctx); err != nil {
+		t.Fatalf("Release after Acquire: %v", err)
+	}
+
+	resumed, err := Resume(ctx, f.info, "audio", AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if err := resumed.Close(ctx, CloseOpts{CloseTaskOnSuccess: true}); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if _, err := os.Stat(pidPath); !os.IsNotExist(err) {
@@ -295,9 +308,9 @@ func TestClose_DeletesRecordAndPidFile(t *testing.T) {
 	// Second acquire on same slot without --force should now succeed.
 	holdPath2 := filepath.Join(f.dir, "audio", "v2.txt")
 	taskID2 := string(f.createTask(t, "audio-task-2", holdPath2))
-	second, err := AcquireFresh(ctx, f.info, "audio", taskID2, AcquireOpts{Hub: f.hub})
+	second, err := Acquire(ctx, f.info, "audio", taskID2, AcquireOpts{Hub: f.hub})
 	if err != nil {
-		t.Fatalf("post-Close AcquireFresh: %v", err)
+		t.Fatalf("post-Close Acquire: %v", err)
 	}
 	t.Cleanup(func() { _ = second.Release(ctx) })
 }
@@ -315,12 +328,12 @@ func TestCommit_SuccessUpdatesTrunkAndRenewsSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	lease, err := AcquireFresh(ctx, f.info, "render", taskID, AcquireOpts{Hub: f.hub})
+	lease, err := Acquire(ctx, f.info, "render", taskID, AcquireOpts{Hub: f.hub})
 	if err != nil {
-		t.Fatalf("AcquireFresh: %v", err)
+		t.Fatalf("Acquire: %v", err)
 	}
 	if err := lease.Release(ctx); err != nil {
-		t.Fatalf("Release after AcquireFresh: %v", err)
+		t.Fatalf("Release after Acquire: %v", err)
 	}
 
 	// Capture the pre-commit LastRenewed so we can compare.
@@ -390,12 +403,12 @@ func TestResume_RefusesCrossHost(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// AcquireFresh writes the session record stamped with the local
+	// Acquire writes the session record stamped with the local
 	// host. Manually rewrite Host to a foreign hostname to simulate
 	// the cross-host case without standing up a second machine.
-	first, err := AcquireFresh(ctx, f.info, "ghosthost", taskID, AcquireOpts{Hub: f.hub})
+	first, err := Acquire(ctx, f.info, "ghosthost", taskID, AcquireOpts{Hub: f.hub})
 	if err != nil {
-		t.Fatalf("AcquireFresh: %v", err)
+		t.Fatalf("Acquire: %v", err)
 	}
 	if err := first.Release(ctx); err != nil {
 		t.Fatalf("Release: %v", err)
