@@ -1,0 +1,295 @@
+package swarm
+
+import (
+	"context"
+	"errors"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/danmestas/bones/internal/coord"
+	"github.com/danmestas/bones/internal/workspace"
+)
+
+// freePort returns a random unused TCP port for an in-process hub.
+// Mirrors internal/coord/hub_test.go's helper.
+func freePort(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	return addr
+}
+
+// leaseFixture brings up a workspace dir + an in-process hub
+// (writing hub.fossil under .orchestrator) and returns the
+// workspace.Info shape AcquireFresh / Resume consume. Per ADR
+// 0030 this uses real NATS + real Fossil — no mocks.
+type leaseFixture struct {
+	dir  string
+	hub  *coord.Hub
+	info workspace.Info
+}
+
+func newLeaseFixture(t *testing.T) *leaseFixture {
+	t.Helper()
+	dir := t.TempDir()
+	orch := filepath.Join(dir, ".orchestrator")
+	if err := os.MkdirAll(orch, 0o755); err != nil {
+		t.Fatalf("mkdir orchestrator: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	hub, err := coord.OpenHub(ctx, orch, freePort(t))
+	if err != nil {
+		t.Fatalf("OpenHub: %v", err)
+	}
+	t.Cleanup(func() { _ = hub.Stop() })
+	return &leaseFixture{
+		dir: dir,
+		hub: hub,
+		info: workspace.Info{
+			WorkspaceDir: dir,
+			NATSURL:      hub.NATSURL(),
+		},
+	}
+}
+
+// createTask inserts an open task on the hub so AcquireFresh has
+// something to claim. Uses a temporary fixture leaf to call
+// coord.Leaf.OpenTask — same path the bones tasks-create CLI verb
+// takes — so the substrate sees a fully-formed task record. The
+// fixture leaf is closed before returning; the lease under test
+// opens its own leaf inside AcquireFresh.
+func (f *leaseFixture) createTask(t *testing.T, title, holdPath string) coord.TaskID {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	fixtureLeaf, err := coord.OpenLeaf(ctx, coord.LeafConfig{
+		Hub:     f.hub,
+		Workdir: filepath.Join(f.dir, ".bones", "fixture"),
+		SlotID:  "fixture-" + title,
+	})
+	if err != nil {
+		t.Fatalf("fixture OpenLeaf: %v", err)
+	}
+	defer func() { _ = fixtureLeaf.Stop() }()
+	taskID, err := fixtureLeaf.OpenTask(ctx, title, []string{holdPath})
+	if err != nil {
+		t.Fatalf("OpenTask: %v", err)
+	}
+	return taskID
+}
+
+// TestAcquireFresh_RefusesWithoutHubFossil pins the role-leak
+// guard from PR #54. A workspace dir with no
+// `.orchestrator/hub.fossil` MUST cause AcquireFresh to return
+// ErrWorkspaceNotBootstrapped without attempting any other work.
+// The error string MUST NOT contain "run `bones up`" — that
+// guidance is for orchestrators, not leaves.
+func TestAcquireFresh_RefusesWithoutHubFossil(t *testing.T) {
+	dir := t.TempDir() // no .orchestrator/hub.fossil
+	info := workspace.Info{WorkspaceDir: dir, NATSURL: "nats://127.0.0.1:1"}
+
+	_, err := AcquireFresh(context.Background(), info, "demo", "task-x", AcquireOpts{})
+	if !errors.Is(err, ErrWorkspaceNotBootstrapped) {
+		t.Fatalf("AcquireFresh: want ErrWorkspaceNotBootstrapped, got %v", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "refusing to bootstrap from a leaf context") {
+		t.Errorf("error missing leaf-context refusal: %s", msg)
+	}
+	if strings.Contains(msg, "run `bones up`") {
+		t.Errorf("error contains orchestrator-targeted guidance: %s", msg)
+	}
+}
+
+// TestAcquireFresh_SuccessAndRelease covers the happy path: fresh
+// acquire writes the session record + opens the leaf + claims the
+// task; Release tears down the leaf without deleting the record.
+func TestAcquireFresh_SuccessAndRelease(t *testing.T) {
+	f := newLeaseFixture(t)
+	holdPath := filepath.Join(f.dir, "rendering", "hello.txt")
+	taskID := string(f.createTask(t, "rendering-task-1", holdPath))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	lease, err := AcquireFresh(ctx, f.info, "rendering", taskID, AcquireOpts{
+		Hub: f.hub,
+	})
+	if err != nil {
+		t.Fatalf("AcquireFresh: %v", err)
+	}
+	if lease.Slot() != "rendering" {
+		t.Errorf("Slot: got %q want %q", lease.Slot(), "rendering")
+	}
+	if lease.TaskID() != taskID {
+		t.Errorf("TaskID: got %q want %q", lease.TaskID(), taskID)
+	}
+	if lease.WT() == "" {
+		t.Errorf("WT: empty")
+	}
+	if lease.SessionRevision() == 0 {
+		t.Errorf("SessionRevision: zero")
+	}
+
+	// Session record must be visible on the manager.
+	mgr := lease.Manager()
+	got, _, err := mgr.Get(ctx, "rendering")
+	if err != nil {
+		t.Fatalf("post-acquire Get: %v", err)
+	}
+	if got.TaskID != taskID {
+		t.Errorf("session task: got %q want %q", got.TaskID, taskID)
+	}
+	if got.HubURL == "" {
+		t.Errorf("session hub URL: empty")
+	}
+
+	// Pid file must exist.
+	if _, err := os.Stat(SlotPidFile(f.dir, "rendering")); err != nil {
+		t.Errorf("pid file missing: %v", err)
+	}
+
+	// Release should NOT delete the session record. Verify by opening
+	// a fresh Manager (different from the lease's, which Release just
+	// closed) and reading the slot's record back.
+	if err := lease.Release(ctx); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	verifyMgr := openVerifyManager(t, f)
+	if _, _, err := verifyMgr.Get(ctx, "rendering"); err != nil {
+		t.Errorf("session record gone after Release (expected to persist): %v", err)
+	}
+
+	// Release must be idempotent.
+	if err := lease.Release(ctx); err != nil {
+		t.Errorf("second Release: %v", err)
+	}
+}
+
+// openVerifyManager dials NATS at the fixture hub's URL and opens a
+// swarm.Manager that the test owns the lifetime of. Used to read
+// session records the lease wrote, after the lease's own Manager
+// has been closed by Release/Close.
+func openVerifyManager(t *testing.T, f *leaseFixture) *Manager {
+	t.Helper()
+	mgr, _, _, err := openLeaseManager(context.Background(), f.info, nil)
+	if err != nil {
+		t.Fatalf("openVerifyManager: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	return mgr
+}
+
+// TestAcquireFresh_RefusesActiveLiveSession pins the
+// ErrSessionAlreadyLive path: a live session on the same host
+// without --force must be rejected.
+func TestAcquireFresh_RefusesActiveLiveSession(t *testing.T) {
+	f := newLeaseFixture(t)
+	holdPath := filepath.Join(f.dir, "physics", "hello.txt")
+	taskID := string(f.createTask(t, "physics-task-1", holdPath))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	first, err := AcquireFresh(ctx, f.info, "physics", taskID, AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("first AcquireFresh: %v", err)
+	}
+	t.Cleanup(func() { _ = first.Release(ctx) })
+
+	// Without --force, second acquire must refuse.
+	_, err = AcquireFresh(ctx, f.info, "physics", taskID, AcquireOpts{Hub: f.hub})
+	if !errors.Is(err, ErrSessionAlreadyLive) {
+		t.Fatalf("second AcquireFresh: want ErrSessionAlreadyLive, got %v", err)
+	}
+}
+
+// TestResume_FailsWithoutSession ensures Resume on a slot that
+// has no session record returns ErrSessionNotFound, not a generic
+// substrate error.
+func TestResume_FailsWithoutSession(t *testing.T) {
+	f := newLeaseFixture(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := Resume(ctx, f.info, "ghost", AcquireOpts{Hub: f.hub})
+	if !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("Resume: want ErrSessionNotFound, got %v", err)
+	}
+}
+
+// TestResume_AfterAcquireFresh confirms Resume reconstructs a
+// usable lease from the session record AcquireFresh wrote.
+func TestResume_AfterAcquireFresh(t *testing.T) {
+	f := newLeaseFixture(t)
+	holdPath := filepath.Join(f.dir, "ui", "hello.txt")
+	taskID := string(f.createTask(t, "ui-task-1", holdPath))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	first, err := AcquireFresh(ctx, f.info, "ui", taskID, AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("AcquireFresh: %v", err)
+	}
+	if err := first.Release(ctx); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+
+	resumed, err := Resume(ctx, f.info, "ui", AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	t.Cleanup(func() { _ = resumed.Release(ctx) })
+
+	if resumed.Slot() != "ui" || resumed.TaskID() != taskID {
+		t.Errorf("resumed lease: slot=%q task=%q want slot=%q task=%q",
+			resumed.Slot(), resumed.TaskID(), "ui", taskID)
+	}
+	if resumed.HubURL() == "" {
+		t.Errorf("resumed lease: hubURL empty")
+	}
+	if resumed.FossilUser() != "slot-ui" {
+		t.Errorf("resumed lease: fossilUser=%q", resumed.FossilUser())
+	}
+}
+
+// TestClose_DeletesRecord pins the Close contract: removes the
+// session record (CAS-gated against the lease's revision) and
+// stops the underlying leaf. After Close, AcquireFresh on the
+// same slot must succeed without --force.
+func TestClose_DeletesRecord(t *testing.T) {
+	f := newLeaseFixture(t)
+	holdPath := filepath.Join(f.dir, "audio", "hello.txt")
+	taskID := string(f.createTask(t, "audio-task-1", holdPath))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	first, err := AcquireFresh(ctx, f.info, "audio", taskID, AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("first AcquireFresh: %v", err)
+	}
+	if err := first.Close(ctx); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Second acquire on same slot without --force should now succeed.
+	holdPath2 := filepath.Join(f.dir, "audio", "v2.txt")
+	taskID2 := string(f.createTask(t, "audio-task-2", holdPath2))
+	second, err := AcquireFresh(ctx, f.info, "audio", taskID2, AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("post-Close AcquireFresh: %v", err)
+	}
+	t.Cleanup(func() { _ = second.Release(ctx) })
+}
