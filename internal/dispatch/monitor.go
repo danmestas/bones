@@ -4,34 +4,44 @@ import (
 	"context"
 	"fmt"
 	"time"
-
-	"github.com/danmestas/bones/internal/coord"
 )
 
+// WaitWorkerAbsent polls the substrate's presence view via probe and
+// returns nil once workerAgentID is no longer present, or an error
+// if the deadline elapses first. Used by the dispatch parent to
+// detect worker dropout (heartbeat lapse) before reclaiming the
+// claim.
+//
+// The probe callback decouples dispatch from coord: tests can pass
+// a closure backed by an in-memory list, and production wiring uses
+// `coord.Coord.PresentAgentIDs`.
 func WaitWorkerAbsent(
 	ctx context.Context,
-	c *coord.Coord,
+	probe PresenceProbe,
 	workerAgentID string,
 	deadline time.Duration,
 ) error {
 	timer := time.NewTimer(deadline)
 	defer timer.Stop()
-	ticker := time.NewTicker(250 * time.Millisecond)
+	ticker := time.NewTicker(PollInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-timer.C:
-			return fmt.Errorf("agent %s still present after %s", workerAgentID, deadline)
+			return fmt.Errorf(
+				"agent %s still present after %s",
+				workerAgentID, deadline,
+			)
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			entries, err := c.Who(ctx)
+			ids, err := probe(ctx)
 			if err != nil {
-				return fmt.Errorf("who: %w", err)
+				return fmt.Errorf("presence probe: %w", err)
 			}
 			found := false
-			for _, p := range entries {
-				if p.AgentID() == workerAgentID {
+			for _, id := range ids {
+				if id == workerAgentID {
 					found = true
 					break
 				}
@@ -41,13 +51,4 @@ func WaitWorkerAbsent(
 			}
 		}
 	}
-}
-
-func ReclaimClaim(
-	ctx context.Context,
-	c *coord.Coord,
-	taskID coord.TaskID,
-	ttl time.Duration,
-) (func() error, error) {
-	return c.Reclaim(ctx, taskID, ttl)
 }

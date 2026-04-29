@@ -38,6 +38,23 @@ func (c *Coord) Who(ctx context.Context) ([]Presence, error) {
 	return out, nil
 }
 
+// PresentAgentIDs returns just the AgentID values from Who as a flat
+// string slice. Convenience for callers (e.g. dispatch's
+// WaitWorkerAbsent) that only need the IDs and would otherwise
+// flatten the slice themselves; the method reference satisfies
+// dispatch.PresenceProbe directly.
+func (c *Coord) PresentAgentIDs(ctx context.Context) ([]string, error) {
+	entries, err := c.Who(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(entries))
+	for i, p := range entries {
+		ids[i] = p.AgentID()
+	}
+	return ids, nil
+}
+
 // WatchPresence returns a channel of coord.Event values that fire
 // whenever an agent comes online or goes offline in this Coord's
 // project. Concrete type is PresenceChange. Consumers discriminate

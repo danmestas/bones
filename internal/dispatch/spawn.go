@@ -14,7 +14,7 @@ import (
 // 5s subscribe timeout. Flags-only is the single source of truth.
 func BuildWorkerCommand(bin string, spec Spec) (*exec.Cmd, error) {
 	cmd := exec.Command(bin, "tasks", "dispatch", "worker",
-		"--task-id="+string(spec.TaskID),
+		"--task-id="+spec.TaskID,
 		"--task-thread="+spec.Thread,
 		"--worker-agent-id="+spec.WorkerAgentID,
 	)
