@@ -91,9 +91,10 @@ normalization. See ADR 0033.
 `bones-swarm-sessions[slot]` (`swarm.Session` type) that ties a
 slot to its current task, agent ID, hub URL, and last-renewed
 timestamp. Persists across CLI verbs; TTL-evicted if not renewed.
-Written by `swarm join` (a fresh `Lease.AcquireFresh`), bumped by
-`swarm commit` (`Lease.Commit`), deleted by `swarm close`
-(`Lease.Close`). See ADR 0028.
+Written by `swarm join` via `swarm.Acquire` (returns
+`*FreshLease`), bumped by `swarm commit` via
+`ResumedLease.Commit`, deleted by `swarm close` via
+`ResumedLease.Close`. See ADRs 0028 and 0033.
 
 **Sessions.** The read view across all session records in
 `bones-swarm-sessions` (`swarm.Sessions` type, returned by

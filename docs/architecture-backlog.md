@@ -40,6 +40,11 @@ through five separate paths.
 
 ## 2. Introduce a CLI Session as the missing seam
 
+**Status:** partial progress — the swarm `commit`/`close` opening is
+now consolidated behind `cli/swarm.go:bootstrapResume`. The broader
+Session abstraction (every verb takes a Session, output through an
+`io.Writer` for unit testability) is still open.
+
 **Files:** `cli/tasks_common.go` (`joinWorkspace`, `openManager`), then ~12
 verbs (`tasks_create.go:27-43`, `tasks_list.go:32-50`, `tasks_claim.go:33-41`,
 etc.) repeating the same 17–21 line bootstrap; plus `swarm_status.go:60-73`
@@ -90,6 +95,13 @@ session-record path. Makes the Sessions narrowing intent enforceable.
 
 ## 4. Redraw the substrate seam: lift domain types out of `coord`'s public surface
 
+**Status:** partial progress — `internal/dispatch` now defines its own
+`Task` interface and no longer imports `coord` (Phase 4 of the
+Ousterhout redesign). The bulk of the candidate is still open:
+`coord.Task`, `coord.Presence`, `coord.File`, and `coord.Edge` are
+still re-exported on `coord`'s public surface, and the translation
+helpers (`taskFromRecord`, `presenceFromEntry`) still live there.
+
 **Files:** `internal/coord/types.go` (re-exports `Task`, `Presence`, `Edge`,
 `File`), `internal/coord/coord.go` (28 exported types total), translation
 helpers `taskFromRecord` / `presenceFromEntry`.
@@ -118,6 +130,16 @@ locking + storage + events, period.
 ---
 
 ## 5. Extract the KV-Manager pattern shared by Holds and Tasks
+
+**Status:** evaluated and deliberately not done. Survey during the
+Ousterhout redesign (Phase 6) found the audit's "~60 lines of
+boilerplate per package" estimate inflated; the actual shared shape
+across tasks/holds/presence is closer to ~15 lines per package and
+the divergence is meaningful (tasks+holds have subscriber slices,
+presence has a heartbeat goroutine; chat is fundamentally different
+— fossil + notify, not KV). Forcing them into a common base would
+add complexity, not remove it. Reopen if a third KV-manager use
+case appears and the shared shape grows.
 
 **Files:** `internal/tasks/tasks.go`, `internal/tasks/subscribe.go`,
 `internal/holds/holds.go`, `internal/holds/subscribe.go`; today
