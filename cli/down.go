@@ -94,37 +94,7 @@ func runDown(root string, c *DownCmd, confirmIn interface {
 		return first
 	}
 	fmt.Println("down: complete")
-	printGoodbye()
 	return nil
-}
-
-// goodbye is the skull-and-crossbones farewell printed after a
-// successful bones down when stdout is a TTY. Pure ASCII; renders
-// identically across terminals. Suppressed when stdout is
-// redirected so script output stays clean.
-const goodbye = `
-       .ed$""$be.
-     d$"        "$b
-     $  ()    ()  $
-     $     \/     $
-     "$.   --   .$"
-       "*ee$$ee*"
-
-  now exiting the 5th dimension`
-
-// printGoodbye writes the goodbye banner to stdout when stdout is a
-// TTY. No-op otherwise — script consumers see only the structured
-// "down: complete" line.
-func printGoodbye() {
-	fi, err := os.Stdout.Stat()
-	if err != nil {
-		return
-	}
-	if (fi.Mode() & os.ModeCharDevice) == 0 {
-		return
-	}
-	fmt.Println(goodbye)
-	fmt.Println()
 }
 
 // downAction is one step in the destructive plan. Each step has a
