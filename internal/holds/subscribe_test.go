@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/danmestas/bones/internal/holds"
+	"github.com/danmestas/bones/internal/wspath"
 )
 
 // recvEvent reads one event from ch with a timeout. It fails the test
@@ -63,11 +64,11 @@ func TestSubscribe_ReceivesAnnounce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	file := "/work/a.txt"
+	file := wspath.Must("/work/a.txt")
 	if err := m.Announce(ctx, file, newHold("A", time.Second)); err != nil {
 		t.Fatalf("Announce: %v", err)
 	}
-	ev := waitForKind(t, ch, file, holds.EventAnnounced)
+	ev := waitForKind(t, ch, file.AsAbsolute(), holds.EventAnnounced)
 	if ev.Hold.AgentID != "A" {
 		t.Fatalf("agent: got %q, want A", ev.Hold.AgentID)
 	}
@@ -86,16 +87,16 @@ func TestSubscribe_ReceivesRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	file := "/work/b.txt"
+	file := wspath.Must("/work/b.txt")
 	if err := m.Announce(ctx, file, newHold("A", time.Second)); err != nil {
 		t.Fatalf("Announce: %v", err)
 	}
-	waitForKind(t, ch, file, holds.EventAnnounced)
+	waitForKind(t, ch, file.AsAbsolute(), holds.EventAnnounced)
 
 	if err := m.Release(ctx, file, "A"); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	waitForKind(t, ch, file, holds.EventReleased)
+	waitForKind(t, ch, file.AsAbsolute(), holds.EventReleased)
 }
 
 func TestSubscribe_CancelsOnCtx(t *testing.T) {
@@ -137,12 +138,12 @@ func TestSubscribe_MultipleSubscribers(t *testing.T) {
 		t.Fatalf("Subscribe 2: %v", err)
 	}
 
-	file := "/work/shared.txt"
+	file := wspath.Must("/work/shared.txt")
 	if err := m.Announce(ctx, file, newHold("A", time.Second)); err != nil {
 		t.Fatalf("Announce: %v", err)
 	}
-	ev1 := waitForKind(t, ch1, file, holds.EventAnnounced)
-	ev2 := waitForKind(t, ch2, file, holds.EventAnnounced)
+	ev1 := waitForKind(t, ch1, file.AsAbsolute(), holds.EventAnnounced)
+	ev2 := waitForKind(t, ch2, file.AsAbsolute(), holds.EventAnnounced)
 	if ev1.Hold.AgentID != "A" || ev2.Hold.AgentID != "A" {
 		t.Fatalf(
 			"expected both subscribers to see A: %+v / %+v", ev1, ev2,

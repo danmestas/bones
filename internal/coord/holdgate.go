@@ -21,10 +21,12 @@ func (c *Coord) checkHolds(ctx context.Context, files []File) error {
 	for _, f := range files {
 		h, ok, err := c.sub.holds.WhoHas(ctx, f.Path)
 		if err != nil {
-			return fmt.Errorf("coord.Commit: whohas %q: %w", f.Path, err)
+			return fmt.Errorf(
+				"coord.Commit: whohas %q: %w", f.Path.AsAbsolute(), err,
+			)
 		}
 		if !ok || h.AgentID != c.cfg.AgentID {
-			notHeld = append(notHeld, f.Path)
+			notHeld = append(notHeld, f.Path.AsAbsolute())
 		}
 	}
 	if len(notHeld) > 0 {

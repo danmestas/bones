@@ -5,6 +5,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/danmestas/bones/internal/wspath"
 )
 
 // TestLeafConfig_Metadata verifies that Metadata key=value pairs set on
@@ -146,7 +148,9 @@ func TestLeafConfig_FossilUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
-	_, err = l.Commit(ctx, cl, []File{{Path: "/slot-fuser/a.txt", Content: []byte("hi")}})
+	_, err = l.Commit(ctx, cl, []File{
+		{Path: wspath.Must("/slot-fuser/a.txt"), Content: []byte("hi")},
+	})
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
 	}

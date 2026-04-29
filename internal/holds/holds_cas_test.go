@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/danmestas/bones/internal/holds"
+	"github.com/danmestas/bones/internal/wspath"
 )
 
 // The CAS tests live alongside holds_test.go. They exercise the
@@ -29,7 +30,7 @@ func TestAnnounce_CAS_RetryOnConcurrentWrite(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	file := "/work/cas-retry.txt"
+	file := wspath.Must("/work/cas-retry.txt")
 
 	// Seed the bucket with a hold owned by A so the Announce below
 	// (also by A, lease-renewal) hits the Update path rather than
@@ -68,7 +69,7 @@ func TestAnnounce_CAS_RetryOnConcurrentWrite(t *testing.T) {
 		// revision so the racing Announce's Update revision is
 		// stale and must retry.
 		payload := rawHoldBytes(t, "A", time.Second)
-		if _, err := kv.Put(ctx, keyForTest(file), payload); err != nil {
+		if _, err := kv.Put(ctx, keyForTest(file.AsAbsolute()), payload); err != nil {
 			t.Errorf("direct KV Put: %v", err)
 		}
 	}()
@@ -115,7 +116,7 @@ func TestAnnounce_CAS_ConcurrentContention(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	file := "/work/cas-stress.txt"
+	file := wspath.Must("/work/cas-stress.txt")
 
 	const racers = 16
 	startGun := make(chan struct{})
@@ -204,7 +205,7 @@ func TestAnnounce_CAS_RenewUnderContention(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	file := "/work/cas-renew.txt"
+	file := wspath.Must("/work/cas-renew.txt")
 
 	if err := m.Announce(ctx, file, newHold("A", time.Second)); err != nil {
 		t.Fatalf("seed Announce: %v", err)
@@ -265,5 +266,5 @@ func rawHoldBytes(t *testing.T, agent string, ttl time.Duration) []byte {
 // keyForTest reproduces holds.keyOf's escaping in test code that
 // writes to the raw KV. Exposed via the holds package.
 func keyForTest(file string) string {
-	return holds.KeyForTest(file)
+	return holds.KeyForTest(wspath.Must(file))
 }

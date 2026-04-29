@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danmestas/bones/internal/wspath"
 	"github.com/danmestas/libfossil"
 )
 
@@ -45,7 +46,7 @@ func TestLeaf_CommitWritesAndSyncs(t *testing.T) {
 	t.Cleanup(func() { _ = cl.Release() })
 
 	uuid, err := l.Commit(ctx, cl, []File{
-		{Path: "/slot-A/file.txt", Content: []byte("hello")},
+		{Path: wspath.Must("/slot-A/file.txt"), Content: []byte("hello")},
 	})
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
@@ -107,7 +108,7 @@ func TestLeaf_CommitDivergenceBranch(t *testing.T) {
 		t.Fatalf("Claim 1: %v", err)
 	}
 	uuidA, err := l.Commit(ctx, clA, []File{
-		{Path: "/slot-B/a.txt", Content: []byte("first")},
+		{Path: wspath.Must("/slot-B/a.txt"), Content: []byte("first")},
 	})
 	if err != nil {
 		t.Fatalf("Commit 1: %v", err)
@@ -131,7 +132,7 @@ func TestLeaf_CommitDivergenceBranch(t *testing.T) {
 		t.Fatalf("Claim 2: %v", err)
 	}
 	uuidB, err := l.Commit(ctx, clB, []File{
-		{Path: "/slot-B/b.txt", Content: []byte("second")},
+		{Path: wspath.Must("/slot-B/b.txt"), Content: []byte("second")},
 	})
 	if err != nil {
 		t.Fatalf("Commit 2 (parent != \"\"): %v", err)
@@ -198,7 +199,7 @@ func TestLeaf_CommitFileNameOverride(t *testing.T) {
 	t.Cleanup(func() { _ = cl.Release() })
 
 	uuid, err := l.Commit(ctx, cl, []File{
-		{Path: holdPath, Name: repoName, Content: []byte("body")},
+		{Path: wspath.Must(holdPath), Name: repoName, Content: []byte("body")},
 	})
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
@@ -273,7 +274,7 @@ func TestLeaf_CommitAutosyncLinearizes(t *testing.T) {
 			t.Fatalf("Claim: %v", err)
 		}
 		uuid, err := l.Commit(ctx, cl, []File{
-			{Path: holdPath, Name: repoName, Content: body},
+			{Path: wspath.Must(holdPath), Name: repoName, Content: body},
 		})
 		if err != nil {
 			t.Fatalf("Commit: %v", err)

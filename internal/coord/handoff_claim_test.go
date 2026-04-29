@@ -7,6 +7,7 @@ import (
 
 	"github.com/danmestas/bones/internal/tasks"
 	"github.com/danmestas/bones/internal/testutil/natstest"
+	"github.com/danmestas/bones/internal/wspath"
 )
 
 func TestHandoffClaim_TaskNotClaimed_Refused(t *testing.T) {
@@ -73,7 +74,7 @@ func TestHandoffClaim_Success(t *testing.T) {
 	if rec.ClaimEpoch != 2 {
 		t.Fatalf("claim_epoch=%d, want 2", rec.ClaimEpoch)
 	}
-	hold, ok, err := worker.sub.holds.WhoHas(ctx, "/a.go")
+	hold, ok, err := worker.sub.holds.WhoHas(ctx, wspath.Must("/a.go"))
 	if err != nil {
 		t.Fatalf("WhoHas: %v", err)
 	}
@@ -84,7 +85,7 @@ func TestHandoffClaim_Success(t *testing.T) {
 	// asserts the same hold-gate / epoch-gate invariant against the
 	// underlying helpers that Leaf.Commit composes. The parent's view
 	// after a successful HandoffClaim must fail one of the two gates.
-	files := []File{{Path: "/a.go", Content: []byte("p\n")}}
+	files := []File{{Path: wspath.Must("/a.go"), Content: []byte("p\n")}}
 	holdsErr := parent.checkHolds(ctx, files)
 	epochErr := parent.checkEpoch(ctx, id)
 	if !errors.Is(holdsErr, ErrNotHeld) && !errors.Is(epochErr, ErrEpochStale) {

@@ -281,8 +281,13 @@ func runSlot(
 	if err != nil {
 		return l, fmt.Errorf("claim %d: %w", i, err)
 	}
+	cp, err := coord.NewPath(path)
+	if err != nil {
+		_ = cl.Release()
+		return l, fmt.Errorf("path %d: %w", i, err)
+	}
 	if _, err := l.Commit(ctx, cl, []coord.File{
-		{Path: path, Content: []byte(fmt.Sprintf("v%d", i))},
+		{Path: cp, Content: []byte(fmt.Sprintf("v%d", i))},
 	}); err != nil {
 		_ = cl.Release()
 		return l, fmt.Errorf("commit %d: %w", i, err)

@@ -7,13 +7,14 @@ import (
 	"time"
 
 	"github.com/danmestas/bones/internal/holds"
+	"github.com/danmestas/bones/internal/wspath"
 )
 
 func TestTTL_ExpiryMakesWhoHasReturnFalse(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	file := "/work/ttl-a.txt"
+	file := wspath.Must("/work/ttl-a.txt")
 
 	if err := m.Announce(ctx, file, newHold("A", 50*time.Millisecond)); err != nil {
 		t.Fatalf("Announce: %v", err)
@@ -34,7 +35,7 @@ func TestTTL_AnnounceAfterExpiry_Succeeds_DifferentAgent(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
 	ctx := context.Background()
-	file := "/work/ttl-b.txt"
+	file := wspath.Must("/work/ttl-b.txt")
 
 	if err := m.Announce(ctx, file, newHold("A", 50*time.Millisecond)); err != nil {
 		t.Fatalf("Announce A: %v", err)
