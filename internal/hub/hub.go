@@ -24,12 +24,24 @@ import (
 const detachEnv = "BONES_HUB_FOREGROUND"
 
 // readyTimeout bounds how long Start waits for each server to accept
-// connections. Mirrors EdgeSync's leaf-agent budget.
-const readyTimeout = 5 * time.Second
+// connections. ADR 0034 raised this from 5s to 15s after the
+// 2026-04-29 serverdom incident, where loaded-machine NATS startup
+// reliably exceeded 5s on first attempt and was misread by operators
+// as bones being broken.
+const readyTimeout = 15 * time.Second
 
 // pollInterval is how often readiness probes retry. Short enough to keep
 // total wakeup latency low, long enough not to busy-spin on the listener.
 const pollInterval = 25 * time.Millisecond
+
+// natsBootstrapAttempts is the number of times startNATS retries on
+// readiness failure before giving up. Each retry uses readyTimeout
+// for its own probe; backoff is exponential between attempts.
+const natsBootstrapAttempts = 3
+
+// natsBootstrapBackoff is the wait between failed attempts. Doubles
+// each round (1s, 2s, 4s).
+const natsBootstrapBackoff = 1 * time.Second
 
 // Start brings up the orchestrator hub: a Fossil repository at
 // .orchestrator/hub.fossil seeded from git-tracked files, a Fossil HTTP
@@ -450,6 +462,11 @@ func startFossil(p paths, port int) (cancel context.CancelFunc, done chan struct
 // p.natsStore. Equivalent to `nats-server -js -p <port>`. The store
 // directory persists across hub restarts so JetStream streams survive a
 // reopen — the bash flow relied on the OS process owning that state.
+//
+// Retries readiness up to natsBootstrapAttempts times with exponential
+// backoff between attempts (ADR 0034). The single-attempt 5s probe in
+// the original implementation was the documented cause of operators
+// believing bones was unreliable on loaded machines.
 func startNATS(p paths, port int) (*natsserver.Server, error) {
 	if err := os.MkdirAll(p.natsStore, 0o755); err != nil {
 		return nil, fmt.Errorf("nats store dir: %w", err)
@@ -467,6 +484,29 @@ func startNATS(p paths, port int) (*natsserver.Server, error) {
 		NoSigs:     true,
 		ServerName: "bones-hub",
 	}
+
+	backoff := natsBootstrapBackoff
+	var lastErr error
+	for attempt := 1; attempt <= natsBootstrapAttempts; attempt++ {
+		srv, err := tryStartNATS(opts, p)
+		if err == nil {
+			return srv, nil
+		}
+		lastErr = err
+		if attempt < natsBootstrapAttempts {
+			time.Sleep(backoff)
+			backoff *= 2
+		}
+	}
+	return nil, fmt.Errorf("nats bootstrap failed after %d attempts: %w",
+		natsBootstrapAttempts, lastErr)
+}
+
+// tryStartNATS performs one bootstrap attempt. Caller retries on
+// failure. A failed attempt fully tears down the server so the
+// retry sees a clean state; this is correct because NATS holds
+// listening sockets that would otherwise block the next attempt.
+func tryStartNATS(opts *natsserver.Options, p paths) (*natsserver.Server, error) {
 	srv, err := natsserver.NewServer(opts)
 	if err != nil {
 		return nil, fmt.Errorf("new server: %w", err)

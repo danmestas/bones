@@ -13,6 +13,7 @@ import (
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
+	"github.com/danmestas/bones/internal/githook"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
@@ -112,12 +113,32 @@ type downAction struct {
 func planDown(root string, c *DownCmd) []downAction {
 	var plan []downAction
 	plan = append(plan, planStopHub(root, c)...)
+	plan = append(plan, planRemoveGitHook(root)...)
 	plan = append(plan, planRemoveBonesDir(root)...)
 	plan = append(plan, planRemoveOrchestrator(root, c)...)
 	plan = append(plan, planRemoveSkills(root, c)...)
 	plan = append(plan, planRemoveHooks(root, c)...)
 	plan = append(plan, planRemoveFossilMarkers(root)...)
 	return plan
+}
+
+// planRemoveGitHook restores the user's original pre-commit (if any)
+// and removes the bones-managed hook. The githook package treats a
+// missing or non-bones hook as a no-op, so this is safe to call on
+// partial installs.
+func planRemoveGitHook(root string) []downAction {
+	gitDir := githook.FindGitDir(root)
+	if gitDir == "" {
+		return nil
+	}
+	installed, err := githook.IsInstalled(gitDir)
+	if err != nil || !installed {
+		return nil
+	}
+	return []downAction{{
+		description: "remove bones pre-commit hook from " + gitDir,
+		do:          func() error { return githook.Uninstall(gitDir) },
+	}}
 }
 
 func planStopHub(root string, c *DownCmd) []downAction {
