@@ -32,8 +32,8 @@ const defaultChanBuffer = 32
 //
 // The heartbeat goroutine is the distinguishing feature versus the
 // other substrate managers (holds/tasks/chat): Open spawns it, Close
-// joins it. Invariant 18 (ADR 0009) requires Close to return only
-// after the goroutine has terminated.
+// joins it. Invariant 18 requires Close to return only after the
+// goroutine has terminated.
 type Manager struct {
 	cfg       Config
 	nc        *nats.Conn
@@ -226,8 +226,8 @@ func (m *Manager) Who(ctx context.Context) ([]Entry, error) {
 // in this Manager's project. A live entry is a KV Put that has not
 // been deleted and has not yet aged past its TTL. Returns false (with
 // nil error) for missing, tombstoned, or expired entries — the caller
-// cannot distinguish those cases, and ADR 0009 treats them identically
-// (all three mean "not reachable").
+// cannot distinguish those cases, and the presence substrate treats
+// them identically (all three mean "not reachable").
 //
 // Cheaper than Who for a single-recipient check: one Get, no list or
 // scan. The ergonomic wrapper for admin-Ask-style pre-flights.

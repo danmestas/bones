@@ -293,7 +293,7 @@ func TestClaim_ReleaseAfterCloseTask(t *testing.T) {
 }
 
 // TestClaim_BumpsClaimEpoch verifies that a first successful Claim
-// sets ClaimEpoch to 1 in the stored task record (ADR 0013 la2.2).
+// sets ClaimEpoch to 1 in the stored task record (ADR 0007).
 func TestClaim_BumpsClaimEpoch(t *testing.T) {
 	c := newTestCoord(t, "agent-1")
 	ctx := context.Background()
@@ -319,7 +319,7 @@ func TestClaim_BumpsClaimEpoch(t *testing.T) {
 
 // TestClaim_SecondClaim_BumpsEpoch verifies that a second Claim on
 // the same task (after a release) increments ClaimEpoch to 2
-// (ADR 0013 la2.2, Invariant 24 strict monotonic).
+// (ADR 0007, Invariant 24 strict monotonic).
 func TestClaim_SecondClaim_BumpsEpoch(t *testing.T) {
 	c := newTestCoord(t, "agent-1")
 	ctx := context.Background()

@@ -12,7 +12,7 @@ import (
 )
 
 // Reclaim transfers an abandoned claim from a crashed or unreachable
-// agent to the caller. Preconditions per ADR 0013:
+// agent to the caller. Preconditions per ADR 0007:
 //
 //  1. Task must exist and be in 'claimed' status — Reclaim on an 'open'
 //     task returns ErrTaskNotClaimed (the caller wants Claim).
@@ -173,7 +173,7 @@ func (c *Coord) releaseOldHolds(
 }
 
 // notifyReclaim posts a single-line notice to the task's chat thread.
-// Best-effort per ADR 0013 — failures are logged via the substrate
+// Best-effort per ADR 0007 — failures are logged via the substrate
 // but do not fail the Reclaim.
 func (c *Coord) notifyReclaim(
 	ctx context.Context, taskID TaskID, prev string, epoch uint64,

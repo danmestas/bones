@@ -19,13 +19,11 @@ import (
 // the thread-name hash.
 //
 // Unlike Subscribe, SubscribePattern does NOT hash its pattern —
-// callers supply a raw substrate-level pattern. This is the
-// deliberate substrate leak called out in ADR 0009's Open Questions
-// (ticket agent-infra-6wv): option 1 lands a Phase-4 glob-Subscribe
-// commitment without the new KV registry bucket and per-Post write
-// cost of option 3. Callers that need name-level pattern matching
-// (e.g. "deploy.*" matching thread names) must layer a registry
-// themselves or wait for a future option-3 ticket.
+// callers supply a raw substrate-level pattern. This is a deliberate
+// substrate leak: it delivers glob-Subscribe without a new KV
+// registry bucket or per-Post write cost. Callers that need
+// name-level pattern matching (e.g. "deploy.*" matching thread
+// names) must layer a registry themselves.
 //
 // pattern is asserted non-empty to keep the "project-wide" path on
 // Subscribe(ctx, "") and the "pattern" path on SubscribePattern.

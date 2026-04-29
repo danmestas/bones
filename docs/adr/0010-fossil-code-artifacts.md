@@ -2,25 +2,21 @@
 
 ## Status
 
-Accepted 2026-04-19. Drives Phase 5 implementation of `coord.Commit`,
-`coord.Checkout`, `coord.Open` (file read), `coord.Diff`, and
-`coord.Merge`. Operationalizes ADR 0004 (fork plus chat-notify) for
-code artifacts per the narrowing in ADR 0006.
+Accepted 2026-04-19. Operationalizes ADR 0004 (fork plus chat-notify)
+for code artifacts.
 
 ## Context
 
 Tasks and chat have their substrates pinned. Tasks live on NATS
 JetStream KV (ADR 0005); chat rides EdgeSync notify with Fossil as the
 backing store (ADR 0008). Code artifacts — the actual files agents
-write — have not had their substrate decided on paper, even though the
-README thesis has always placed them in Fossil, and ADRs 0004 and 0006
-assume that placement when they reason about code-artifact forks.
+write — need a substrate. Fossil is the natural fit: ADR 0004 already
+assumes that placement when reasoning about code-artifact forks.
 
-Phase 5 is when code arrives. The implementation needs a `*Coord`
-surface to write files, a contract with the hold protocol for
-file-path ownership during a commit, and a concrete answer for how
-ADR 0004's fork-as-sibling-leaf resolution manifests when the commit
-substrate is no longer hypothetical.
+The implementation needs a `*Coord` surface to write files, a contract
+with the hold protocol for file-path ownership during a commit, and a
+concrete answer for how ADR 0004's fork-as-sibling-leaf resolution
+manifests as a substrate-hidden API.
 
 Five questions are coupled tightly enough that one ADR covers them:
 repo ownership (does coord own a repo or do agents bring one), the
@@ -50,10 +46,10 @@ and would re-introduce the orchestration burden ADR 0003 removed.
 
 Coord does not own a single global Fossil repo on the caller's
 behalf. The repo is an operational artifact the leaf daemon already
-manages (per the architecture diagram in the README); coord opens a
-checkout against it. This keeps coord embeddable — an agent process
-that imports `coord` does not inherit responsibility for repo
-lifecycle, only for the checkout its process writes to.
+manages; coord opens a checkout against it. This keeps coord
+embeddable — an agent process that imports `coord` does not inherit
+responsibility for repo lifecycle, only for the checkout its process
+writes to.
 
 ### 2. Minimal commit/checkout/read API
 
@@ -83,7 +79,7 @@ back into `Checkout` or `Diff`.
 
 `Commit` requires the caller to hold file-path scoped holds on every
 path in `files`. This reuses the existing scoped-hold primitive
-established by ADR 0002; no new commit-lock concept is introduced.
+established by ADR 0007; no new commit-lock concept is introduced.
 Coord verifies at `Commit` entry that each path is held by
 `cfg.AgentID`; if any path is not held, `Commit` returns `ErrNotHeld`
 without writing anything.
@@ -101,8 +97,8 @@ list becomes the hold set; the closure the agent defers releases them
 after commit. Agents that commit outside the task flow —
 administrative tools, supervisor agents reconciling state — acquire
 holds directly via a lower-level primitive that is already
-internal-only (the `holds` Manager). No public `coord.Hold` method is
-added in Phase 5; the claim flow is the supported path.
+internal-only (the `holds` Manager). There is no public `coord.Hold`
+method; the claim flow is the supported path.
 
 ### 4. Fork-on-conflict via Fossil autosync, surfaced as `ErrConflictForked`
 
@@ -142,9 +138,9 @@ name coord itself chose (ADR 0003).
 Branch name format: `${agent_id}-${task_id}-${unix_nano}`. The
 `unix_nano` suffix disambiguates retries — an agent that hits
 `ErrConflictForked`, resolves locally, and retries generates a fresh
-suffix on the retry's conflict. Beads-style hash IDs would work too;
-`unix_nano` is cheaper and the deterministic seeds (agent + task)
-already guarantee cross-agent uniqueness.
+suffix on the retry's conflict. Hash IDs would work too; `unix_nano`
+is cheaper and the deterministic seeds (agent + task) already
+guarantee cross-agent uniqueness.
 
 On conflict, coord auto-posts a `ChatMessage` to the task's chat
 thread (resolvable from the task record's thread pointer) using a
@@ -155,12 +151,8 @@ one message rather than multi-line prose. Exact form:
 fork: agent=<agent-id> branch=<agent-id>-<task-id>-<unix-nano> rev=<rev> path=<committed-path>
 ```
 
-The single-line format was chosen during 0p9.5 implementation over the
-multi-line sketch this ADR originally carried: one `coord.Post` stays
-one `ChatMessage`, which keeps Subscribe-side matching trivial (a
-single `strings.HasPrefix(body, "fork: ")` check) and lines up with
-the `examples/two-agents-commit` smoke harness's fork-notify
-assertion.
+One `coord.Post` stays one `ChatMessage`, which keeps Subscribe-side
+matching trivial (a single `strings.HasPrefix(body, "fork: ")` check).
 
 The message body is coord-formatted but lives in chat as an ordinary
 `ChatMessage` — no new event type, no substrate wedge. A supervisor
@@ -177,15 +169,14 @@ func (c *Coord) Merge(
 ```
 
 Both `src` and `dst` are branch names. Any agent (or human via a CLI
-thin-wrapping coord) may call `Merge`; Phase 5 does not introduce a
-supervisor role. Role-based authorization is a Phase 8+ concern,
-matching ADR 0009's deferral of the admin role.
+thin-wrapping coord) may call `Merge`; there is no supervisor role.
+Role-based authorization is a future concern.
 
-This is consistent with ADR 0004 as narrowed by ADR 0006: fork plus
-chat-notify is the resolution posture for code artifacts, the chat
-thread is where humans or supervisor agents converge on the resolving
-merge, and the merge itself is the next commit referencing both
-parents per Fossil's native model.
+This is consistent with ADR 0004: fork plus chat-notify is the
+resolution posture for code artifacts, the chat thread is where humans
+or supervisor agents converge on the resolving merge, and the merge
+itself is the next commit referencing both parents per Fossil's native
+model.
 
 ## New public surface
 
@@ -203,7 +194,7 @@ type File struct {
 
 // Commit writes files into the current checkout and commits under
 // cfg.AgentID as the author. Every path in files must be held by
-// cfg.AgentID at entry (ADR 0002 scoped holds); if any is not held,
+// cfg.AgentID at entry (ADR 0007 scoped holds); if any is not held,
 // returns ErrNotHeld without writing. On a sibling-leaf conflict
 // discovered via Fossil autosync, returns a wrapped
 // ConflictForkedError — match with errors.Is(err, ErrConflictForked)
@@ -231,7 +222,7 @@ func (c *Coord) Diff(
 
 // Merge combines two branches into a single commit with both as
 // parents. Returns the rev of the merge commit. Any agent may call;
-// role gating is Phase 8+.
+// role gating is a future concern.
 func (c *Coord) Merge(
     ctx context.Context, src, dst string, message string,
 ) (RevID, error)
@@ -260,8 +251,8 @@ New `Config` fields:
 
 ```go
 // FossilRepoPath is the absolute path to the shared Fossil repo DB.
-// Must be set for Phase 5+; Phase 1–4 callers set an empty string
-// and commit methods return ErrNotConfigured.
+// Must be set for code-artifact callers; if empty, commit methods
+// return ErrNotConfigured.
 FossilRepoPath string
 
 // CheckoutRoot is the absolute root under which per-leaf checkouts
@@ -270,7 +261,7 @@ CheckoutRoot string
 ```
 
 All signatures respect ADR 0001 (coord-only), ADR 0003 (no Fossil
-types across the boundary), ADR 0002/0007 (holds compose scoped with
+types across the boundary), ADR 0007 (holds compose scoped with
 return-release), and TigerStyle discipline (bounded inputs explicit,
 sentinel errors explicit, no silent defaults).
 
@@ -278,10 +269,10 @@ sentinel errors explicit, no silent defaults).
 
 **Locks in.** Fossil is the code substrate. Swapping to a different
 VCS later would be a coord API break on `RevID`, `Checkout`, `Diff`,
-and the conflict sentinel — not merely an internal refactor. Phase 5
-callers can rely on fork-as-sibling-leaf semantics; they do not need
-to build their own retry loop against an `ErrConflict` that doesn't
-exist (cf. ADR 0004).
+and the conflict sentinel — not merely an internal refactor. Callers
+rely on fork-as-sibling-leaf semantics; they do not need to build
+their own retry loop against an `ErrConflict` that doesn't exist
+(cf. ADR 0004).
 
 **Forecloses.** Pessimistic commit-serialization is off the table.
 Every `Commit` may race against siblings; callers handle
@@ -297,8 +288,7 @@ failure the agent has to reason about. The hold-gated commit precheck
 prevents the common race (two agents editing the same file within
 overlapping `Claim` windows) before a fork is even possible.
 
-**Invariants.** Phase 5 adds three new invariants on top of the 1–19
-set:
+**Invariants.** Three invariants govern this surface:
 
 - **Invariant 20**: every path in `Commit`'s `files` must be held by
   `cfg.AgentID` at method entry. Checked explicitly; returns
@@ -312,74 +302,47 @@ set:
   requires an ADR amendment — human readers and supervisor tools
   rely on it being parseable.
 
-**Substrate aggregate.** `substrate` grows a fifth Manager
-(`fossil *fossil.Manager`). This is the second growth past the
-four-manager threshold ADR 0009 already refactored around; the
-shape holds. No additional refactor.
+**Substrate aggregate.** `substrate` grows a Fossil Manager
+(`fossil *fossil.Manager`) alongside the existing managers.
 
 **Chat coupling.** Conflict notification is a `ChatMessage` post on
 the task's thread. This requires the task record to carry a
-resolvable thread pointer. Phase 5's task schema already does (per
-the ADR 0005 `Thread` field); no additional task-schema change
-needed.
+resolvable thread pointer; the ADR 0005 `Thread` field provides it.
 
-## Open questions
+## Resolved design decisions
 
-**Concurrent commit timing.** RESOLVED in 0p9.3: synchronous
-pre-commit `Checkout.WouldFork()` check. No background goroutine, no
-sync tick. Deterministic for tests and for the caller — `Commit`
-returns after exactly one of (trunk-commit, forked-commit), never
-"maybe fork later". The libfossil primitive (`(*Checkout).WouldFork`)
-reads the leaf table on the current branch and reports whether a
-sibling leaf exists, which is what coord needs at commit time without
-waiting on autosync cadence.
+**Concurrent commit timing.** Synchronous pre-commit
+`Checkout.WouldFork()` check. No background goroutine, no sync tick.
+Deterministic for tests and for the caller — `Commit` returns after
+exactly one of (trunk-commit, forked-commit), never "maybe fork
+later". The libfossil primitive (`(*Checkout).WouldFork`) reads the
+leaf table on the current branch and reports whether a sibling leaf
+exists, which is what coord needs at commit time without waiting on
+autosync cadence.
 
-**Retry-suffix collisions.** RESOLVED in 0p9.3: `unix_nano` alone per
-Invariant 22 exact format. Single-host assumption documented here;
-multi-host hardening (e.g. hashing `(agent_id, task_id, nanos)` with
-a tiebreaker) is deferred until a multi-host deployment shape makes
-clock-skew collision observable. The single-host assumption is
-consistent with Phase 5 leaf-daemon-per-host semantics.
-
-**Merge authorization.** RESOLVED in 0p9.4: any agent may call
-`coord.Merge` in Phase 5. Role gating is deferred to Phase 8+
-alongside the admin role (ADR 0009). The gating mechanism (config
-flag vs. role-based) is itself a Phase 8+ design question and is
-not re-litigated here.
+**Retry-suffix collisions.** `unix_nano` alone, per Invariant 22.
+Single-host assumption; multi-host hardening (e.g. hashing
+`(agent_id, task_id, nanos)` with a tiebreaker) is deferred until a
+multi-host deployment shape makes clock-skew collision observable.
+Consistent with leaf-daemon-per-host semantics.
 
 **Large-file payloads.** `Commit`'s `[]File` takes content by byte
 slice in memory. Large artifacts (binaries, generated assets) would
-exceed a reasonable request size. Phase 5 ships with a bounded
-`MaxCommitFileBytes` (config, to be set at ~10MiB per file) and
-callers that need larger payloads go direct to the leaf daemon's
-Fossil commands — coord is the coordination surface, not the
-binary-artifact pipe. Media payloads (ADR 0009 deferred item) and
-large code artifacts may converge on the same solution; the ticket
-tracks them together.
-
-**ADR 0004 reconciliation.** RESOLVED in 0p9.5: the chat-notify step
-ships as a single-line `ChatMessage` body
-(`"fork: agent=<> branch=<> rev=<> path=<>"` — see §5) on the task's
-thread. No `Fork` event type was introduced — a one-path-only event
-subtype would have cost more surface than the chat-message format,
-and `ChatMessage` is already the supervisor-visible channel. ADR 0004
-is considered concretized by this landing; no further follow-up.
+exceed a reasonable request size. A bounded `MaxCommitFileBytes`
+config (default ~10MiB per file) caps the surface; callers that need
+larger payloads go direct to the leaf daemon's Fossil commands —
+coord is the coordination surface, not the binary-artifact pipe.
 
 ## Cross-links
 
 - **ADR 0001** — coord is the sole exported package; all Fossil
   Manager code lives at `internal/fossil/`.
-- **ADR 0002** — scoped holds with closure-based release; `Commit`
-  composes against this primitive without adding a new lock type.
 - **ADR 0003** — substrate hiding; `RevID` is a coord alias, no
   Fossil UUIDs in signatures.
 - **ADR 0004** — fork-plus-chat-notify for conflicts; this ADR is
   the code-artifact operationalization.
-- **ADR 0006** — narrows ADR 0004 to code only; this ADR is the
-  code-substrate landing of that narrowing.
-- **ADR 0007** — Claim orders task-CAS before holds; a `Claim`
-  followed by `Commit` and then release is the canonical write path.
+- **ADR 0007** — Claim orders task-CAS before holds; scoped-hold
+  primitive that gates `Commit`. A `Claim` followed by `Commit` and
+  then release is the canonical write path.
 - **ADR 0008** — chat as notify-backed substrate; the conflict
   notification is a `ChatMessage` on that substrate.
-- **ADR 0009** — presence + aggregate refactor; this ADR's fifth
-  Manager lands on the same `substrate` aggregate without rework.

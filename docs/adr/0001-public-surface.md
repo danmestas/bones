@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted 2026-04-18. Closes README Open Question #3.
+Accepted 2026-04-18.
 
 ## Context
 
@@ -12,10 +12,6 @@ external import. Libraries that expose many top-level packages force
 consumers to learn an API surface that is wider than the problem requires,
 and they make future refactors expensive because every internal rename is a
 breaking change.
-
-Beads — our reference design — exposes several top-level packages. That is
-a design smell we do not want to inherit. It makes the library harder to
-learn and harder to evolve.
 
 Ousterhout's "deep module" principle frames the same observation from a
 different angle: a module's public interface should be smaller than its
@@ -35,8 +31,8 @@ consumers are not supposed to touch it.
 
 ## Consequences
 
-Single-file public API freeze becomes possible — see agent-infra-3ps.
-Reviewers can audit every exported symbol in one place.
+Single-file public API freeze becomes possible. Reviewers can audit every
+exported symbol in one place.
 
 Refactors of `internal/holds`, `internal/tasks`, and `internal/chat` do
 not break downstream consumers. We can reshape the hold protocol, swap

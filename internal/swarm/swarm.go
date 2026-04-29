@@ -77,10 +77,10 @@ func (c Config) Validate() error {
 // Mutations (put, update, delete) are unexported; the only legal
 // mutator is `swarm.Lease`, which lives in the same package.
 //
-// The narrow public surface enforces the seam called out in ADR 0034:
-// the lifecycle of a session record is owned end-to-end by Lease, so
-// outside callers cannot bypass Lease's invariants (host match, CAS
-// revision tracking, claim-bound writes).
+// The narrow public surface enforces a seam: the lifecycle of a
+// session record is owned end-to-end by Lease, so outside callers
+// cannot bypass Lease's invariants (host match, CAS revision
+// tracking, claim-bound writes).
 //
 // Every public method is safe to call concurrently. Close is
 // idempotent. Unlike presence.Manager there is no heartbeat goroutine
@@ -146,7 +146,8 @@ func (s *Sessions) BucketName() string {
 // Get reads the session record for slot. Returns ErrNotFound if no
 // record exists. The returned revision is the JetStream KV sequence
 // number suitable for a follow-up CAS update or delete (callable only
-// from inside the swarm package — see ADR 0034).
+// from inside the swarm package — Sessions's mutators are
+// unexported).
 func (s *Sessions) Get(
 	ctx context.Context, slot string,
 ) (Session, uint64, error) {
@@ -265,8 +266,8 @@ const maxSessionEntries = 1024
 //
 // List is the canonical read-across-slots seam — `bones swarm status`,
 // `bones doctor`, and CLI slot-resolution helpers all consume it.
-// Per ADR 0034, this is one of the read methods that justify keeping
-// Sessions as a public type at all (versus folding into Lease).
+// This is one of the read methods that justify keeping Sessions as a
+// public type at all (versus folding into Lease).
 func (s *Sessions) List(ctx context.Context) ([]Session, error) {
 	assert.NotNil(ctx, "swarm.Sessions.List: ctx is nil")
 	if s.closed.Load() {

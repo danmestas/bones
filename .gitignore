@@ -30,7 +30,7 @@ go.work.sum
 !.claude/skills/
 !.claude/skills/**
 
-# Orchestrator runtime + Fossil checkout-at-root (ADR 0024)
+# Orchestrator runtime + Fossil checkout-at-root (ADR 0023)
 .fslckout
 .fossil-settings/
 .orchestrator/

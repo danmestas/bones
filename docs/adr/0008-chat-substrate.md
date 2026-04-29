@@ -2,16 +2,15 @@
 
 ## Status
 
-Accepted 2026-04-19. Drives Phase 3 implementation of `coord.Post`,
-`coord.Ask`, and `coord.Subscribe`.
+Accepted 2026-04-19.
 
 ## Context
 
-Phase 1's architectural direction (README §Phase 3) committed to reusing
-EdgeSync's notify service for chat rather than rolling a bespoke layer.
-A pre-implementation survey of `EdgeSync/leaf/agent/notify` and the
-companion `edgesync-notify-app` revealed three facts that shape the
-decision:
+`coord.Post`, `coord.Ask`, and `coord.Subscribe` need a substrate.
+The architectural direction was to reuse EdgeSync's notify service for
+chat rather than roll a bespoke layer. A pre-implementation survey of
+`EdgeSync/leaf/agent/notify` and the companion `edgesync-notify-app`
+revealed three facts that shape the decision:
 
 **Transport.** Notify runs on core NATS pub/sub (ephemeral), subject
 pattern `notify.<project>.<threadShort>`. Durability does not sit on
@@ -25,10 +24,10 @@ fossil checkout if a consumer needs to replay.
 **Message shape.** The on-the-wire `notify.Message` struct is rich —
 `id`, `thread`, `project`, `from`, `from_name`, `timestamp`, `body`,
 plus optional `priority`, `actions`, `reply_to`, `media`. Most of that
-shape is wider than Phase 3 needs; the core subset (`from`, `thread`,
+shape is wider than coord needs; the core subset (`from`, `thread`,
 `body`, `timestamp`, `reply_to`) covers every case we have in hand.
 
-**API coverage vs. Phase 3 needs.**
+**API coverage.**
 
 | `coord` method | EdgeSync notify coverage |
 |---|---|
@@ -47,10 +46,10 @@ per-method rather than pick one uniformly.
 `leaf/agent/notify` as a Go dependency and call `Service.Send` and
 `Service.Watch` directly from an internal adapter. Persistence is
 delegated to notify's fossil backing — `coord` owns no chat-message
-state of its own. The dependency on EdgeSync is deliberate: EdgeSync is
-already in scope for Phase 5+ (code-artifact storage per ADR 0004), so
-Phase 3 tightens a binding we have already chosen rather than taking on
-a fresh upstream.
+state of its own. The dependency on EdgeSync is deliberate: EdgeSync
+is already the code-artifact storage substrate (ADR 0010), so chat
+tightens a binding we have already chosen rather than taking on a
+fresh upstream.
 
 **Ask is built on raw NATS request-reply.** `nats.Conn.RequestWithContext`
 on subject `<proj>.ask.<recipient>` with an ephemeral inbox for the
@@ -69,16 +68,14 @@ new unexported `eventFromMessage` helper in `coord` — analogous to
 `taskFromRecord` in `coord/types.go:54` — translates into a
 `coord.ChatMessage` struct carrying `From`, `Thread`, `Body`,
 `Timestamp`, `ReplyTo`. The remaining notify fields (`Priority`,
-`Actions`, `Media`, `FromName`) are deferred until a Phase 3 consumer
-asks for them; adding fields to `ChatMessage` later is source-compatible,
+`Actions`, `Media`, `FromName`) are deferred until a consumer asks
+for them; adding fields to `ChatMessage` later is source-compatible,
 removing them would not be.
 
-**`coord.Event` is an interface, not a struct.** Phase 3 ships with one
-concrete event type (`ChatMessage`). Phase 4 is expected to add
-`PresenceChange` (agent up/down), and leaving the door open for
-multiple event classes now — at the cost of one type assertion at the
-consumer — beats an awkward migration later. Consumers read via a
-type switch:
+**`coord.Event` is an interface, not a struct.** Today there is one
+concrete event type (`ChatMessage`). Leaving the door open for multiple
+event classes — at the cost of one type assertion at the consumer —
+beats an awkward migration later. Consumers read via a type switch:
 
 ```go
 for e := range events {
@@ -93,19 +90,17 @@ for e := range events {
 implementation pre-checks `ctx.Err()` and returns immediately on
 cancellation, then calls `Service.Send`, which is uninterruptible
 once entered. The `Post` godoc states this explicitly. Threading ctx
-through `Send` would require patching EdgeSync — out of Phase 3
-scope, and the write latency is sub-millisecond in normal operation,
-so the observed cost of the limitation is small.
+through `Send` would require patching EdgeSync, and the write latency
+is sub-millisecond in normal operation, so the observed cost of the
+limitation is small.
 
 **`Subscribe`'s close semantics are explicit.** The returned
 `func() error` cancels an internal ctx derived from the caller's ctx,
 waits for the notify Watch goroutine to drain, and closes the delivered
-channel. Invariant 17 (new, this ADR) applies: the closure is
-idempotent per the invariant-7 pattern, wrapped in `sync.Once`. The
-`MaxSubscribers` bound from `coord.Config` is enforced at `Subscribe`
-entry; exceeding it returns a new sentinel `ErrTooManySubscribers`.
-This closes out agent-infra-743, which was filed as a standalone
-fragility ticket and is now superseded.
+channel. Invariant 17 applies: the closure is idempotent per the
+invariant-7 pattern, wrapped in `sync.Once`. The `MaxSubscribers` bound
+from `coord.Config` is enforced at `Subscribe` entry; exceeding it
+returns a new sentinel `ErrTooManySubscribers`.
 
 **Subject scheme.**
 
@@ -114,16 +109,14 @@ fragility ticket and is now superseded.
 
 `<proj>` is derived from `coord.Config.AgentID`'s project prefix
 (the `<proj>` portion of `<proj>-<agent-suffix>`). `<thread>` is an
-opaque caller-supplied string; ADR 0009, if warranted later, may
-formalize its shape.
+opaque caller-supplied string.
 
-**Recipient resolution is opaque for Phase 3.** `recipient` in
+**Recipient resolution is opaque.** `recipient` in
 `Ask(ctx, recipient, question)` is the subject suffix as-typed by
 the caller. No registry, no presence check. If the recipient is not
 subscribed, Ask times out via `ErrAskTimeout` rather than returning a
 distinct "unknown recipient" error — the substrate cannot distinguish
-the two cases cheaply. Phase 4 presence work may layer a registry on
-top; that is not a Phase 3 commitment.
+the two cases cheaply.
 
 ## Consequences
 
@@ -145,41 +138,27 @@ discipline is the same: substrate types live in unexported fields,
 public methods translate.
 
 The Event-translation surface is a maintenance vector. If EdgeSync's
-`notify.Message` grows a field Phase 3 needs, `eventFromMessage` must
+`notify.Message` grows a field coord needs, `eventFromMessage` must
 be updated. We accept the coupling because (a) substrate-hiding is
 non-negotiable per ADR 0003, (b) the translation is one function, and
 (c) EdgeSync message evolution has been slow historically. Deliberate
 coupling beats accidental coupling.
 
-The three-manager Coord is the last point where the "just add another
-field" pattern reads clean. If Phase 4 presence work adds a fourth
-manager, the struct starts to lose signal — at that point an internal
-composition (one `substrate` aggregate carrying the four managers)
-will be worth the refactor. Not in Phase 3 scope.
+If a fourth manager is added, the "just add another field" pattern
+starts to lose signal — at that point an internal composition (one
+`substrate` aggregate carrying the managers) is worth the refactor.
 
-The `isCASConflict` extraction ticket (agent-infra-5o0) was landed
-post-Phase-3 as a hygiene commit — the predicate and MaxRetries
-bound now live in `internal/jskv` so a third CAS consumer (presence
-in Phase 4) inherits them instead of copying a third time.
+Invariant 17 (Subscribe close closure idempotence) extends the contract
+surface. Invariants 1–16 remain unchanged.
 
-Invariant 17 (Subscribe close closure idempotence, documented in
-docs/invariants.md) extends the contract surface. Invariants 1–10
-(Phase 1) and 11–16 (Phase 2) remain unchanged.
+## Deterministic thread identity
 
-Presence, reactions, media payloads, glob-pattern Subscribe, and an
-admin-override Ask target are all explicit Phase 4+ concerns. Phase 3
-delivers chat narrowly — the three stubbed methods go real — and
-stops there.
+A naive per-Manager thread cache (a `sync.Map` bridging caller-supplied
+names to notify-assigned ThreadShorts) breaks the multi-agent chat
+contract: two Managers on the same substrate posting to "t1" would
+create two separate notify threads, and restarts would lose the mapping.
 
-## Update (2026-04-19): deterministic thread identity
-
-The Phase 3B thread cache was a per-Manager `sync.Map` bridging
-caller-supplied names to notify-assigned ThreadShorts. Two Managers on
-the same substrate posting to "t1" therefore created two separate
-notify threads, and restarts lost the mapping. That broke the multi-
-agent chat contract this ADR asserts.
-
-Resolved in agent-infra-x0t (2026-04-19) via a deterministic hash:
+Thread identity is therefore a deterministic hash:
 Thread UUID = "thread-" + first 32 chars of SHA-256(project + ":" +
 name) hex-encoded, and ThreadShort is the first 8 chars of that hash —
 matching the shape `notify.Message.ThreadShort()` derives from the
@@ -199,6 +178,4 @@ No coordination substrate (KV bucket, lock service) is required. The
 trade-off is that two names that happen to hash-collide at the 8-char
 ThreadShort level would share a NATS subject — at 2^32 of space the
 probability is far below any operational concern and collisions do
-not corrupt messages, only multiplex them. No new invariant; the
-mechanism is internal to `internal/chat` and does not touch the coord
-public surface.
+not corrupt messages, only multiplex them.

@@ -13,9 +13,9 @@ import (
 // TestReact_HappyPath exercises the full reaction round-trip: both A
 // and B subscribe, A posts, B receives a ChatMessage and captures
 // MessageID, B calls React, A receives a Reaction event carrying that
-// MessageID plus the reaction body. This is the primary React contract
-// from ADR 0009; every other React test exists to cover a specific
-// error or edge lane.
+// MessageID plus the reaction body. This is the primary React
+// contract; every other React test exists to cover a specific error
+// or edge lane.
 //
 // Subscribe order matters: notify subscriptions are live-forward only,
 // so both peers must subscribe BEFORE the Post — otherwise B misses

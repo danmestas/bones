@@ -13,12 +13,12 @@ import (
 // peers subscribed to the same thread as a Reaction event on the
 // coord.Subscribe channel.
 //
-// Per ADR 0009 reactions piggyback on the chat substrate: they are
-// encoded in-band as a notify.Message body with the REACT prefix and
-// routed through the same chat.Send path as Post. No new KV bucket,
-// no new NATS subject. The encoding is a substrate detail and never
-// appears on the public surface — callers emit reactions through
-// React and receive them through Subscribe as Reaction events.
+// Reactions piggyback on the chat substrate: they are encoded
+// in-band as a notify.Message body with the REACT prefix and routed
+// through the same chat.Send path as Post. No new KV bucket, no new
+// NATS subject. The encoding is a substrate detail and never appears
+// on the public surface — callers emit reactions through React and
+// receive them through Subscribe as Reaction events.
 //
 // messageID is whatever ChatMessage.MessageID returned for the target
 // message. Coord does not verify that messageID corresponds to a real

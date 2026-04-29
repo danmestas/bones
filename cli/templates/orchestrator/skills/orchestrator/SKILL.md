@@ -162,7 +162,7 @@ When the integration agent returns:
    all slots plus the integration agent's commits.
 
 2. Materialize the merged tip into the host project's working tree
-   (per ADR 0024). Run from the project root (where `.fslckout` lives):
+   (per ADR 0023). Run from the project root (where `.fslckout` lives):
 
    ```
    ROOT="$(git rev-parse --show-toplevel)"

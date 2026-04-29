@@ -13,9 +13,9 @@ import (
 // TestAskAdmin_HappyPath mirrors TestAsk_HappyPath but takes the
 // pre-flight lane: B is online (its Open registered a presence entry),
 // A's AskAdmin Presence check passes, and the reply echoes back. If
-// this ever stops matching TestAsk_HappyPath, one of the two paths has
-// drifted from the other and ADR 0009's "same chat path after pre-
-// flight" promise is broken.
+// this ever stops matching TestAsk_HappyPath, one of the two paths
+// has drifted from the other and the "same chat path after
+// pre-flight" promise is broken.
 func TestAskAdmin_HappyPath(t *testing.T) {
 	nc, _ := natstest.NewJetStreamServer(t)
 	url := nc.ConnectedUrl()

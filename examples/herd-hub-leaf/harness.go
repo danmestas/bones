@@ -1,5 +1,5 @@
 // Package herdhubleaf is a thundering-herd trial harness for the
-// hub-and-leaf architecture (ADR 0018, Phase 2 of hub-leaf-orchestrator).
+// hub-and-leaf architecture (ADR 0023).
 //
 // The harness brings up:
 //   - one coord.Hub (libfossil hub fossil + embedded leaf.Agent NATS

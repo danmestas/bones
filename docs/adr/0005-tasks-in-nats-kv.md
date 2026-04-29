@@ -2,17 +2,14 @@
 
 ## Status
 
-Accepted 2026-04-19. Supersedes the README "tasks-as-files-in-fossil" plan
-(Phase 2, §Initial plan). ADR 0004's task-state language is narrowed to
-code artifacts only by ADR 0006.
+Accepted 2026-04-19.
 
 ## Context
 
-The README's first-pass plan put tasks in fossil: one markdown-or-JSON
-file per task under `tasks/`, with state in frontmatter, committed to the
-repo, and conflict resolution handled by fossil's native fork-plus-chat-notify
-model (ADR 0004). That plan was written before we looked closely at what
-task-management actually does at the access pattern level.
+An early sketch put tasks in fossil: one markdown-or-JSON file per task
+under `tasks/`, with state in frontmatter, committed to the repo, and
+conflict resolution handled by fossil's native fork-plus-chat-notify
+model (ADR 0004).
 
 Tasks are not commit-shaped. Their usage profile is closer to a hot
 key-value store than to a version-controlled document:
@@ -31,24 +28,21 @@ key-value store than to a version-controlled document:
   not the primary read path.
 
 NATS JetStream KV is shaped for this profile. It gives us CAS via
-revision-gated `Create`/`Update` — the same primitive ADR 0002's atomic
-holds already lean on — plus bounded per-key history, a native watch
-channel for the Ready scan, and TTL support we do not need here but would
-not have to work around. Tasks on KV means claim-contention resolves in
-one round trip with a deterministic winner, and the Phase 1 holds package
-is a direct template for the Phase 2 tasks package.
+revision-gated `Create`/`Update` — the same primitive the atomic holds
+in ADR 0007 lean on — plus bounded per-key history, a native watch
+channel for the Ready scan, and TTL support we do not need here but
+would not have to work around. Tasks on KV means claim-contention
+resolves in one round trip with a deterministic winner, and the holds
+package is a direct template for the tasks package.
 
 Fossil remains the right substrate for **code**. Code is commit-shaped —
 developers and agents both benefit from timeline, blame, and merge. The
-fork-and-notify posture of ADR 0004 still applies to code artifacts when
-fossil lands in Phase 5+. It just no longer describes task state; ADR 0006
-records that narrowing.
+fork-and-notify posture of ADR 0004 applies to code artifacts only.
 
 ## Decision
 
-Tasks are persisted in a NATS JetStream KV bucket. The README plan is
-superseded. Fossil enters the project for code artifacts in Phase 5+ and
-does not touch task state.
+Tasks are persisted in a NATS JetStream KV bucket. Fossil owns code
+artifacts and does not touch task state.
 
 **Bucket name.** `bones-tasks`, parallel to the existing
 `bones-holds`. Substrate detail, lives in `coord` package constants
@@ -74,17 +68,18 @@ trivial.
   "closed_at":      RFC3339 UTC, // zero value if not closed
   "closed_by":      string,      // empty if not closed
   "closed_reason":  string,      // empty if not closed
-  "schema_version": int          // starts at 1
+  "defer_until":    RFC3339 UTC, // optional; absent unless task is deferred
+  "schema_version": int          // 2
 }
 ```
 
 All timestamps are wall-clock UTC, same rule `holds.Hold` uses.
 
 **Status enum.** Exactly `open | claimed | closed`. No `blocked` or
-`deferred` in Phase 2. Legal transitions are `open → claimed`,
+`deferred` status. Legal transitions are `open → claimed`,
 `claimed → closed`, `open → closed`, and `claimed → open` — the last
-edge added by ADR 0007 so `coord.Claim`'s release closure can return a
-claimed (but not yet closed) task to the open pool (invariant 16).
+edge defined by ADR 0007 so `coord.Claim`'s release closure can return
+a claimed (but not yet closed) task to the open pool (invariant 16).
 `closed` remains terminal; no edge out of it is legal. Enforced by
 invariant 13 (see docs/invariants.md).
 
@@ -117,40 +112,51 @@ any substrate limit.
 audit trail and the inputs to future compaction both require closed
 tasks to remain readable.
 
+**Schedule-time gate (`defer_until`).** Optional pointer-typed timestamp.
+When set, `coord.Ready` excludes the task while `defer_until > now()` —
+the gate fires on open, unclaimed tasks only. A task already claimed
+when its defer expires stays claimed (deferral is a scheduling hint,
+not a claim-revocation primitive); a task past its defer is
+indistinguishable from a never-deferred task. Cleared via update with
+empty value. Tradeoff considered: explicit `deferred` status enum value
+vs separate field — chose field because deferral is a property, not a
+state, and conflating it with status would multiply legal-transition
+edges.
+
+**Schema migration on read.** Records without `defer_until` decode with
+nil pointer. The `Get`/`List` paths upgrade decoded records in-memory
+and opportunistically rewrite under CAS so subsequent reads see the
+populated record on the wire. No migrator, no big-bang, no
+session-blocking pause. This is the template for subsequent additive
+schema bumps.
+
 ## Consequences
 
 `internal/tasks/` mirrors `internal/holds/` structurally: a `Manager` with
 `Open`/`Close`, a JSON record type, CAS-gated `Create`/`Update`, a
 prefix-scan `List`, and a `Watch` channel. Every claim-contention path
 resolves in one CAS round trip; the loser receives an immediate sentinel
-error with no intermediate fork state to reconcile. That is what Phase 2's
+error with no intermediate fork state to reconcile. That is what the
 `ErrTaskAlreadyClaimed` sentinel is for.
 
-Task-state conflict is no longer a resolution surface. ADR 0004's
-fork-plus-notify model narrows to code artifacts. ADR 0006 records that
-narrowing and puts the superseding note at the top of 0004.md.
+Task-state conflict is not a resolution surface. ADR 0004's fork-plus-notify
+model applies to code artifacts only.
 
 Ready-scan cost scales with the total number of task entries in the
 bucket, including closed ones, because JetStream KV does not natively
-index by status. The Phase 2 implementation filters client-side. This is
+index by status. The implementation filters client-side. This is
 acceptable while the bucket is small, and the bounded `MaxReadyReturn`
-caps worst-case response size; once a project accumulates more closed
-tasks than we want to scan, Phase 4 compaction (see below) removes them.
-
-**Phase 4 roadmap note.** Closed tasks are expected to be compacted into
-repo ADRs — a semantic summarization analogous to beads' compaction —
-and then pruned from the KV bucket. That pruning is out of scope for
-ADR 0005; this document records only that the bucket is the
-authoritative store while the task is live and for a grace period after
-close, and that the compaction pipeline is planned.
+caps worst-case response size; closed-task compaction (ADR 0016)
+removes them once a project accumulates more closed tasks than we want
+to scan.
 
 TaskID format is fixed by this ADR. Changing the alphabet, length, or
 shape later would be an API break per invariant 15 and would require a
 new ADR plus a migration story for existing bucket contents.
 
-Invariants 11–16 (documented in docs/invariants.md per ADR 0006 /
-issue agent-infra-gi7, with invariant 16 added by ADR 0007) are the
-contract surface of this decision. Every `coord` method that touches
-task state asserts against them at entry or exit: claimed_by/status
-coupling (11), closer identity (12), transition DAG (13), value size
-cap (14), ID shape (15), release-closure symmetry (16).
+Invariants 11–16 (documented in docs/invariants.md, with invariant 16
+defined by ADR 0007) are the contract surface of this decision. Every
+`coord` method that touches task state asserts against them at entry
+or exit: claimed_by/status coupling (11), closer identity (12),
+transition DAG (13), value size cap (14), ID shape (15), release-closure
+symmetry (16).

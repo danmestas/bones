@@ -261,7 +261,7 @@ func TestCloseTask_AlreadyClosed(t *testing.T) {
 // refuses a write when the record's ClaimEpoch has been bumped past the
 // caller's view in activeEpochs (simulating a concurrent Reclaim by a
 // peer). ErrEpochStale must be returned and the record must remain
-// unchanged. ADR 0013 la2.3.
+// unchanged. ADR 0007.
 func TestCloseTask_StaleEpoch_Refused(t *testing.T) {
 	// Simulate: A claims. A's Coord remembers epoch=1. Then the KV
 	// record's ClaimEpoch gets bumped out from under A (as if B had
@@ -293,7 +293,7 @@ func TestCloseTask_StaleEpoch_Refused(t *testing.T) {
 // fence: when activeEpochs has no entry for the task (simulates a Coord
 // that was restarted after Claim — in-memory tracker gone, KV record
 // still has ClaimEpoch > 0), CloseTask must treat the expected epoch as
-// zero and refuse the write. Matches checkEpoch in Commit. ADR 0013 la2.3.
+// zero and refuse the write. Matches checkEpoch in Commit. ADR 0007.
 func TestCloseTask_NoTracker_EpochNonZero_Refused(t *testing.T) {
 	// Simulates post-restart: task is in KV with ClaimEpoch > 0 and
 	// ClaimedBy=agent, but activeEpochs is empty (crashed/restarted

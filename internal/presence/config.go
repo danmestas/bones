@@ -1,7 +1,7 @@
 // Package presence is the substrate layer that backs coord's Who and
 // WatchPresence. A single JetStream KV bucket carries one entry per
 // live agent, refreshed on Config.HeartbeatInterval cadence. Entry TTL
-// is 3x HeartbeatInterval per ADR 0009 invariant 19 — tightening the
+// is 3x HeartbeatInterval (invariant 19) — tightening the
 // multiplier requires an ADR amendment.
 //
 // This package is internal and unexported: callers outside
@@ -30,8 +30,8 @@ type Config struct {
 
 	// Project is the <proj> segment used to scope presence queries.
 	// Matches the project-prefix scheme Post/Ask use for NATS subjects
-	// (ADR 0008). Presence is project-scoped per ADR 0009: agents in
-	// project A cannot see agents in project B.
+	// (ADR 0008). Presence is project-scoped: agents in project A
+	// cannot see agents in project B.
 	Project string
 
 	// Bucket is the name of the JetStream KV bucket backing presence.
@@ -45,8 +45,8 @@ type Config struct {
 	NATSConn *nats.Conn
 
 	// HeartbeatInterval is the cadence at which the heartbeat goroutine
-	// refreshes this agent's KV entry. Bucket TTL is 3x this value per
-	// ADR 0009 invariant 19; the multiplier is fixed in code, not
+	// refreshes this agent's KV entry. Bucket TTL is 3x this value
+	// (invariant 19); the multiplier is fixed in code, not
 	// configurable.
 	HeartbeatInterval time.Duration
 
@@ -88,9 +88,9 @@ func (c Config) Validate() error {
 }
 
 // TTLMultiplier is the fixed multiplier that derives the KV bucket TTL
-// from Config.HeartbeatInterval per ADR 0009 invariant 19. Three
-// heartbeat intervals give two missed-heartbeat intervals of slack
-// before an entry expires, which is the published convention for
-// similar liveness systems. Changing this multiplier requires an ADR
+// from Config.HeartbeatInterval (invariant 19). Three heartbeat
+// intervals give two missed-heartbeat intervals of slack before an
+// entry expires, which is the published convention for similar
+// liveness systems. Changing this multiplier requires an ADR
 // amendment.
 const TTLMultiplier = 3

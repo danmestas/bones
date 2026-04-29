@@ -20,11 +20,10 @@ repo. See ADR 0023 for the original spec.
 **Hub.** The single fossil repo + embedded NATS server that holds
 the trunk and the live coordination state. Lives at
 `<workspace>/.orchestrator/hub.fossil` plus JetStream KV buckets.
-Exactly one hub per workspace. See ADR 0023, ADR 0026 (Go
-implementation).
+Exactly one hub per workspace. See ADR 0023.
 
 **Leaf.** A per-agent fossil clone of the hub. Each leaf syncs with
-the hub via NATS-bridged HTTP xfer (ADR 0018). The workspace itself
+the hub via NATS-bridged HTTP xfer (ADR 0023). The workspace itself
 runs a long-lived **workspace leaf** (the `leaf` daemon started by
 `bones init`); each running swarm slot opens an additional **per-slot
 leaf** for the duration of a CLI verb. See ADR 0023.
@@ -62,15 +61,15 @@ claim hold, and the session record. Acquired fresh by `swarm join`
 (creates the session record), resumed by `swarm commit` and
 `swarm close` (read existing record). One lease per CLI invocation;
 the persistent state across invocations is the session record in
-`bones-swarm-sessions[slot]`, not the lease itself. See ADR 0031.
+`bones-swarm-sessions[slot]`, not the lease itself. See ADR 0028.
 
 **Claim.** An exclusive bind between an agent and a task. Backed by
 a fossil-recorded ownership marker plus a hold. Released when the
-task is closed or the lease ends. See ADR 0007, ADR 0013.
+task is closed or the lease ends. See ADR 0007.
 
 **Hold.** A scoped exclusive resource lock with a TTL, used to gate
 claim handoff and reclamation. Lives in `bones-holds` (NATS
-JetStream KV). See ADR 0002, ADR 0013.
+JetStream KV). See ADR 0007 (claim lifecycle).
 
 **Session record.** The per-slot row in
 `bones-swarm-sessions[slot]` (`swarm.Session` type) that ties a
@@ -85,7 +84,7 @@ Written by `swarm join` (a fresh `Lease.AcquireFresh`), bumped by
 `swarm.Open`). Public reads — `Get`, `List`, `Close` — are consumed
 by `bones swarm status`, `bones doctor`, and CLI slot-resolution
 helpers. Mutations (`put`, `update`, `delete`) are unexported; the
-only legal mutator is `swarm.Lease`. See ADR 0034.
+only legal mutator is `swarm.Lease`.
 
 ## Work shape
 
@@ -140,6 +139,6 @@ must not run `bones up` or otherwise bootstrap. See PR #54.
 **Real-substrate tests.** Tests that exercise substrate behavior
 (NATS CAS semantics, fossil commit linearization, race conditions)
 run against a real embedded NATS + real libfossil. Mocks are
-forbidden for substrate behavior — see ADR 0030 for rationale.
-Test helpers live in `internal/testutil/natstest/` and the
-in-process hub helpers in `internal/coord/`.
+forbidden for substrate behavior. Test helpers live in
+`internal/testutil/natstest/` and the in-process hub helpers in
+`internal/coord/`.

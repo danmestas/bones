@@ -23,7 +23,7 @@ import (
 //
 // All the assembly (workspace check, fossil-user creation, KV
 // session record CAS, leaf open/claim) lives in
-// internal/swarm.Lease (ADR 0031). This verb is a thin adapter
+// internal/swarm.Lease (ADR 0028). This verb is a thin adapter
 // from CLI flags to AcquireFresh + Release.
 type SwarmJoinCmd struct {
 	Slot          string `name:"slot" required:"" help:"slot name (matches plan [slot: X])"`
@@ -33,8 +33,8 @@ type SwarmJoinCmd struct {
 	HubURL        string `name:"hub-url" help:"override hub fossil HTTP URL"`
 }
 
-// Run drives the join flow per ADR 0028 §"swarm join", now via
-// swarm.Lease (ADR 0031): open workspace, AcquireFresh (which does
+// Run drives the join flow per ADR 0028 §"swarm join", via
+// swarm.Lease: open workspace, AcquireFresh (which does
 // the role-guard check, ensures the slot user, CAS-writes the
 // session record, opens the leaf, claims the task, writes the pid
 // file), emit the report, Release.

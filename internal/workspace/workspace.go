@@ -81,8 +81,8 @@ var spawnLeafFunc = spawnLeaf
 // instrumented wraps op with a tracing span (via the telemetry seam) plus
 // slog start/complete events. The previous OTel meter-based op counters
 // were dropped during the audit's seam migration: SigNoz endpoint is broken
-// (project memory: signoz-trial-blocker) and ADR 0022 marks the
-// observability trial as paused, so no consumer reads them today.
+// (project memory: signoz-trial-blocker) and the observability trial is
+// paused, so no consumer reads them today.
 func instrumented(
 	ctx context.Context,
 	op, cwd string,

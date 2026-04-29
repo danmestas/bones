@@ -70,8 +70,8 @@ func (m ChatMessage) Thread() string { return m.thread }
 
 // MessageID returns the substrate-assigned identifier for this
 // message. Opaque to callers — consumers pass it back to coord.React
-// as the target identifier without interpreting the contents. Added
-// in Phase 4 per ADR 0009; source-compatible extension.
+// as the target identifier without interpreting the contents.
+// Source-compatible extension to ChatMessage.
 func (m ChatMessage) MessageID() string { return m.messageID }
 
 // Body returns the message payload as a string.
@@ -89,10 +89,10 @@ func (m ChatMessage) ReplyTo() string { return m.replyTo }
 // package boundary per ADR 0003. Mirrors the taskFromRecord helper in
 // coord/types.go.
 //
-// Phase 4 routes REACT-prefixed bodies to Reaction instead of
-// ChatMessage (ADR 0009); a malformed REACT body (missing the second
-// colon) surfaces as an ordinary ChatMessage, so garbage on the wire
-// degrades to a visible chat post rather than being silently dropped.
+// REACT-prefixed bodies route to Reaction instead of ChatMessage; a
+// malformed REACT body (missing the second colon) surfaces as an
+// ordinary ChatMessage, so garbage on the wire degrades to a visible
+// chat post rather than being silently dropped.
 func eventFromMessage(msg notify.Message) Event {
 	if m, ok := mediaFromMessage(msg); ok {
 		return m

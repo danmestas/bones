@@ -122,12 +122,12 @@ func verifyHooks(t *testing.T, path string) {
 }
 
 func TestScaffoldOrchestrator_HubBootstrapShimsToGoCmd(t *testing.T) {
-	// The bash hub-bootstrap.sh used to enforce ADR 0024 directly via
-	// `git ls-files`, `fossil open --force`, etc. After ADR 0026 the
-	// Go path in internal/hub owns those invariants and the shipped
-	// shim only re-execs `bones hub start --detach`. Both shims must
-	// stay short (so any drift back into bash is obvious) and must
-	// dispatch to the Go subcommand.
+	// The bash hub-bootstrap.sh used to enforce ADR 0023 directly via
+	// `git ls-files`, `fossil open --force`, etc. The Go path in
+	// internal/hub owns those invariants and the shipped shim only
+	// re-execs `bones hub start --detach`. Both shims must stay short
+	// (so any drift back into bash is obvious) and must dispatch to the
+	// Go subcommand.
 	dir := t.TempDir()
 	if err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
@@ -160,7 +160,7 @@ func TestScaffoldOrchestrator_HubBootstrapShimsToGoCmd(t *testing.T) {
 	}
 }
 
-func TestScaffoldOrchestrator_SkillHasADR0024Completion(t *testing.T) {
+func TestScaffoldOrchestrator_SkillHasADR0023Completion(t *testing.T) {
 	dir := t.TempDir()
 	if err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
@@ -175,7 +175,7 @@ func TestScaffoldOrchestrator_SkillHasADR0024Completion(t *testing.T) {
 		"fossil update",
 	} {
 		if !strings.Contains(string(skill), want) {
-			t.Errorf("orchestrator SKILL.md missing %q (ADR 0024)", want)
+			t.Errorf("orchestrator SKILL.md missing %q (ADR 0023)", want)
 		}
 	}
 }

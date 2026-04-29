@@ -247,11 +247,11 @@ func (m *Manager) WatchAll(ctx context.Context) <-chan notify.Message {
 // literal ThreadShort for a single known stream, or an already-hashed
 // short from a ChatMessage.Thread()).
 //
-// This is the substrate half of coord.SubscribePattern's option-1
-// resolution of ADR 0009's glob-Subscribe Open Question. The raw-
-// pattern leak is deliberate: callers see the NATS pattern shape that
-// ADR 0003 normally hides, the payoff being a Phase-4 deliverable
-// without a new KV bucket or per-Post registry writes.
+// This is the substrate half of coord.SubscribePattern's
+// glob-Subscribe surface. The raw-pattern leak is deliberate:
+// callers see the NATS pattern shape that ADR 0003 normally hides,
+// the payoff being a glob-Subscribe deliverable without a new KV
+// bucket or per-Post registry writes.
 //
 // Empty pattern is asserted — use WatchAll for project-wide streams.
 // Use-after-close returns an already-closed channel, same shape as

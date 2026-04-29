@@ -1,115 +1,53 @@
-# ADR 0023: Hub-and-leaf orchestrator — per-agent libfossil + slot-based dispatch
+# ADR 0023 — Hub-leaf orchestrator
 
-## Status
-
-**Superseded in part** by ADR 0018 (EdgeSync refactor, 2026-04-26) and
-ADR 0024 (orchestrator Fossil checkout = git working tree, 2026-04-27).
-
-What carries forward from this ADR (the orchestrator contract):
-hub/leaf topology, slot partitioning, planner contract, and
-orchestrator/subagent skill responsibilities.
-
-What was replaced:
-- The custom NATS broadcast + fork-retry layer specified here was
-  deleted in ADR 0018 in favor of `leaf.Agent`'s native mesh sync.
-- The "v1 stub" of the Fossil-checkout-vs-git-worktree relationship
-  was closed by ADR 0024.
-- The bash hub-bootstrap implementation referenced here was rewritten
-  in Go in ADR 0026 (PR #33).
-
-Read this ADR for the orchestrator contract; read 0018 for the sync
-substrate, 0024 for checkout-as-worktree, and 0026 for the Go hub.
-
-Originally accepted 2026-04-25. Compressed from
-`2026-04-25-hub-leaf-orchestrator-design.md` and the matching plan.
-Empirical results in `docs/trials/2026-04-25/trial-report.md`.
+**Status:** Accepted (2026-04-26, deployment merge 2026-04-29)
 
 ## Context
 
-The herd-observability trial (ADR 0022) ran 8 agents against one shared
-`code.fossil` file as a deliberate stress amplifier and produced 5–11
-extra fork commits per run. The shared file was not the *intended*
-production architecture — the intended architecture is per-agent
-libfossil + per-agent SQLite, with each agent in its own sandbox
-(potentially across clouds) coordinating through a central hub.
-
-The trial validated that the coord layer holds under contention; it did
-not specify how to actually build the per-agent model. This ADR
-specifies that build.
-
-Three coupled questions:
-
-1. **Topology.** Where does the canonical fossil tip live? How do
-   leaves discover updates?
-2. **Conflict semantics.** When two agents commit against the same
-   parent, what does "fork" mean operationally?
-3. **Dispatch contract.** How does the orchestrator know which agent
-   gets which work, and how is conflict prevention designed in vs.
-   recovered from?
+bones runs many agents in parallel against one project. The deployment
+shape has to answer four coupled questions: where the canonical Fossil
+tip lives, how agent commits land in git, what carries commits between
+leaves and the hub, and what an operator needs on `PATH`. One
+architecture answers all four — a per-workspace hub with libfossil
+embedded in-process, leaves whose Fossil checkout opens at the project
+root and doubles as the git working tree, sync wired through
+EdgeSync's `leaf.Agent`, and the hub itself shipped as a Go subcommand
+that embeds both the Fossil HTTP server and the NATS server.
 
 ## Decision
 
 ### Topology
 
 ```
-  Markdown plan file
-  (slot-annotated plan)
+  Markdown plan (slot-annotated)
          │
          ▼
   Claude Code session + orchestrator skill
-  ├─ Hub libfossil repo (.orchestrator/hub.fossil — bare, no checkout)
-  ├─ fossil server   (HTTP, localhost:8765)
-  ├─ NATS server     (JetStream, localhost:4222)
-  └─ Dispatcher (Task tool, or remote harness in v2)
+  ├─ Hub: bare libfossil repo at .orchestrator/hub.fossil
+  │  ├─ libfossil ServeHTTP on :8765 (xfer protocol)
+  │  └─ embedded nats-server on :4222 (mesh bus)
+  └─ Dispatcher (Task tool)
          │
     ┌────┼────┐
     ▼    ▼    ▼
- Subagent A, B, C ... — each with own libfossil leaf + worktree
+ Leaf A, B, C — each a coord.Leaf wrapping leaf.Agent + libfossil checkout
+              opened at the project root, doubling as the git working tree
 ```
 
-- **Hub** — bare Fossil repo at `.orchestrator/hub.fossil` (no
-  checkout), served over HTTP via `fossil server`. Canonical tip lives
-  here.
-- **Leaf** — per-subagent Fossil repo + working tree, cloned from hub
-  at subagent spawn.
-- **Sync transport** — Fossil-native sync over HTTP; NATS for
-  "tip changed" notifications only. Reuses Fossil's content-addressed
-  protocol; NATS is fast event signaling.
-
-> **ADR 0018 amendment:** the custom `coord.tip.changed` broadcast +
-> pull-coalescing + fork-retry layers described below were deleted.
-> EdgeSync's `leaf.Agent` provides per-agent embedded NATS mesh,
-> `serve_http`/`serve_nats` sync, and an automatic poll loop. The
-> contracts in this ADR (slot partitioning, planner format, skill
-> responsibilities) are unchanged; the sync substrate is now
-> `leaf.Agent`, not coord-owned NATS broadcast.
-
-### Sync flow (pre-0018)
-
-Happy path:
-1. Subagent commits locally via `fossil commit`.
-2. Fossil's autosync pushes the commit to the hub.
-3. Subagent publishes `tip.changed` on NATS.
-4. Subscribed leaves receive the broadcast and run `fossil pull`
-   (repo-only, doesn't touch the WT).
-
-Conflict path (would-fork retry):
-1. Subagent calls `fossil commit`.
-2. Hub responds "would fork" because the hub tip moved during work.
-3. Coord catches the error, runs `fossil update` (merges hub changes
-   into the WT), retries `fossil commit` once.
-4. On second `would fork`: surfaces `coord.ErrConflictForked` per
-   ADR 0010. Two consecutive forks after a fresh pull+update means two
-   slots claimed overlapping files — a planner failure, unrecoverable
-   without replanning.
-
-**Retry count is 1 by design.** Eagerness is "pull eager, update lazy"
-— `tip.changed` triggers `pull` (cheap, repo-only); `update` runs only
-at commit time on a fork (avoids merging into a mid-task WT and
-confusing the LLM with conflict markers).
-
-> Both behaviors above are now provided by `leaf.Agent`'s mesh sync;
-> coord no longer owns the broadcast or the retry loop.
+- **Hub** is bare (no checkout) and serves the canonical tip over
+  HTTP. The hub binary embeds libfossil's `(*Repo).ServeHTTP` and
+  `nats-server/v2/server` directly — nothing on `PATH` beyond `git`
+  and `bones`.
+- **Leaf** is a `coord.Leaf` per slot, wrapping a `*leaf.Agent` that
+  holds the single `*libfossil.Repo` for that fossil file and handles
+  HTTP/NATS sync. Each leaf's checkout opens at the host project root
+  with `.fslckout` and `.fossil-settings/` gitignored. Coord exposes
+  `OpenTask`/`Claim`/`Commit`/`Close`/`Compact`/`PostMedia`/`Tip`/`WT`/
+  `Stop`.
+- **Sync substrate** is EdgeSync's `leaf.Agent`. Tip propagation, pull
+  coalescing, and the poll loop are EdgeSync primitives. The hub
+  agent's mesh NATS port *is* the hub's NATS bus; leaves solicit
+  upstream as leaf-nodes. No separate broker.
 
 ### Slot-based partitioning (durable contract)
 
@@ -121,95 +59,104 @@ Tasks are annotated with explicit slot scope:
 **Files:** libfossil/pull.go, libfossil/update.go
 ```
 
-The `[slot: name]` annotation is **required on every task**. Plans
-missing it are rejected at validation. The orchestrator does not infer
-slots from file paths — one contract, one mechanism.
+`[slot: name]` is required on every task. Plan validation rejects:
+tasks without a slot annotation, plans where two slots claim
+overlapping directories, and tasks whose `Files:` paths fall outside
+their slot's directory. Slot disjointness makes runtime forks
+impossible by construction; `coord.ErrConflict` is a defense-in-depth
+assertion, not a recovery path.
 
-**Validation rejects:**
-- Any task lacking `[slot: name]`.
-- Plans where two slots claim overlapping directories.
-- Tasks whose `Files:` list paths outside their slot's directory.
+### Fresh-start wipe and completion materialization
 
-Slot disjointness makes runtime forks impossible by construction. ADR
-0018's deletion of the merge layer relies on this validator —
-`ErrConflict` becomes a defense-in-depth assertion, not a recovery path.
+On bootstrap, when no live fossil PID is detected, the hub removes
+`.orchestrator/hub.fossil`, `<root>/.fslckout`, and
+`<root>/.fossil-settings/` *before* `fossil new`. Working-tree files
+are untouched — git-committed work lives in `.git/`, not Fossil. The
+hub then seeds itself by walking `git ls-files -z`, calling
+`libfossil.Repo.Commit` on each entry, and recording the seed commit
+as `session base: <git-short-sha>` so it's traceable to a git ref.
 
-### Orchestrator skill responsibilities
+On completion, the orchestrator runs `fossil update` against the
+project-root checkout. Because the checkout shares the hub repo file
+directly (opened locally, not cloned), no pull is required —
+`fossil update` reads the autosynced tip and materializes leaf
+commits into the working tree as ordinary file changes. From there
+`git add/commit/push` is the standard flow; PR creation stays
+caller-driven.
 
-`.claude/skills/orchestrator/SKILL.md`:
+`agent-init` appends `.fslckout`, `.fossil-settings/`, and
+`.orchestrator/` to the host project's root `.gitignore` idempotently.
 
-1. **Plan validation.** Parse Markdown, extract slots, verify
-   disjointness, verify task `Files:` belong to slot directory.
-2. **Hub bootstrap** (session start). `fossil new` if needed, start
-   `fossil server` in background, start NATS.
-3. **Subagent dispatch.** Clone leaf, open worktree, spawn via Task
-   tool with env (`LEAF_REPO`, `LEAF_WT`, `HUB_URL`, `NATS_URL`,
-   `AGENT_ID`, `SLOT_ID`) + instruction to load the `subagent` skill.
-4. **Monitoring.** Subscribe `tip.changed` and coord
-   `task.closed`/`task.failed`.
-5. **Completion.** Kill servers; stub PR-creation log line for v1.
-6. **Failure handling.** Surface dispatch failures, conflict errors,
-   hub crashes; no auto-respawn.
+### Architectural invariants
 
-### Subagent skill responsibilities
+1. One commit code path: `(*Leaf).Commit` only.
+2. One `*libfossil.Repo` per fossil file, owned by `leaf.Agent` and
+   reached via `agent.Repo()`. Pinned to `SetMaxOpenConns(1)` +
+   `PRAGMA busy_timeout=30000` so SyncNow and Commit don't race on the
+   WAL lock.
+3. One `*Coord` per `*Leaf`, matching the per-slot `coord.Open` topology.
+4. Hub mesh is THE NATS bus — no separate external broker.
+5. Slot disjointness — plan validator enforces it; coord trusts it.
 
-`.claude/skills/subagent/SKILL.md`:
+## Tradeoffs
 
-- **On startup:** open `LEAF_REPO`, connect to `NATS_URL`, subscribe
-  `tip.changed`.
-- **For each task:** standard work loop using coord. Coord wrappers
-  (per ADR 0018: `leaf.Agent` wrappers) handle pull-on-broadcast,
-  retry-on-fork, span emission.
-- **On all tasks closed:** emit final presence ping, exit.
+**Hub-and-leaf vs shared central NATS broadcast.** A shared broker
+fanning out `coord.tip.changed` to every leaf is simpler to draw but
+turns every commit into N–1 broadcast-driven pulls. At N≥12 that
+exhausts libfossil's 100-round Pull-negotiation budget; agents abort
+and throughput collapses. Hub-and-leaf with EdgeSync mesh sync
+eliminates the fan-out — leaves pull on demand, single-hop
+subject-interest propagation handles routing.
 
-### Session lifecycle
+**Libfossil checkout at project root vs separate workspace dir.** A
+separate workspace would keep `.fslckout` out of the host tree, but
+forces a `coord.Export(ctx, rev) ([]File, error)` primitive to
+materialize bytes into git without Fossil metadata leaking.
+Checkout-at-root is the narrower fix: `fossil update` alone bridges
+the swarm to the user's git diff. The cost is that tooling scanning
+the tree sees `.fslckout`, and single-session-per-project becomes a
+hard constraint — multi-orchestrator users run one orchestrator per
+git worktree.
 
-```
-session start
- ├─ Bootstrap hub (idempotent): fossil new/open, fossil server, NATS up
- ├─ Active orchestration (when user invokes a plan):
- │   validate plan → clone leaves → dispatch subagents →
- │   monitor → subagents exit on completion (hub keeps running)
- └─ session end:
-     finalize → [v2: PR for the delta] → stop fossil server → stop NATS
-```
+**EdgeSync vs hand-rolled sync layers.** A hand-rolled `tip.changed`
+broadcast plus pull coalescing plus per-message-CAS plus fork+merge
+recovery duplicates capabilities `leaf.Agent` already ships
+(embedded NATS mesh, `serve_http`/`serve_nats`, automatic poll loop,
+on-demand `SyncNow`). The duplication was the bottleneck before;
+collapsing onto `leaf.Agent` cut P99 from 49ms to 1ms at N=4 and
+from 10.5s to 5ms at N=12, and removed the N=13+ abort wall. The
+cost is coupling to EdgeSync's API surface.
 
-Hub `.fossil` retained between sessions; commit history accumulates.
-Last-PR marker stored as a Fossil property (v2).
+**Embedded hub binary vs `brew install` external deps.** Shelling out
+to `fossil server` and `nats-server` makes the hub a thin script but
+pushes setup friction to every consumer and creates version drift
+between binaries on `PATH` and the `libfossil` linked into agents.
+Embedding `(*Repo).ServeHTTP` and `nats-server/v2/server` in `bones`
+means Fossil and NATS versions track `go.mod`, the hub runs on
+Windows via `CREATE_NEW_PROCESS_GROUP`, and `bones hub start` gains
+a usable foreground mode. The cost is a slight recursion risk in the
+detach dance (`bones hub start --detach` fork-execs itself); a
+`BONES_HUB_FOREGROUND=1` env var on the child breaks the loop.
 
 ## Consequences
 
-- **Forks become rare-but-recoverable** instead of common-and-noisy
-  (pre-0018) or impossible-by-construction (post-0018 with disjoint
-  slots). The trial's shared-file architecture stays as a stress
-  amplifier; production is per-agent.
-- **Planner becomes load-bearing.** A bad partitioning fails loud
-  (`ErrConflictForked` pre-0018; assertion post-0018). The contract
-  for plans is `[slot: name]` annotation + directory disjointness.
-- **NATS payload is minimal.** `{"manifest_hash": "<hex>"}`. Identity
-  (agent_id, branch, ts) and trace context travel in OTel propagation
-  headers (ADR 0022); the coordination message is free of telemetry.
-- **Multi-cloud is realistic.** Per-agent libfossil + per-agent SQLite
-  + remote hub means subagents can live on different machines once a
-  remote-harness dispatcher exists (v2). The protocol is HTTP +
-  NATS — both already work over WAN.
-- **Single retry policy.** `pull → update → commit` runs once on
-  `would fork`. Second fork surfaces immediately. Operators or future
-  replan logic handle re-partitioning.
+- Forks impossible by construction (slot disjointness) rather than
+  recoverable through retry; planner is load-bearing — bad
+  partitioning fails loud at validation.
+- Multi-cloud realistic: per-agent libfossil + per-agent SQLite +
+  remote hub, with HTTP + NATS as the WAN-friendly protocol once a
+  remote-harness dispatcher exists.
+- Swarm produces git diffs the user reviews and commits normally.
+- Consumers need only `git` and `bones` on `PATH`.
 
-## Out of scope
-
-- GitHub PR generation on session end (v2).
-- Remote harness subagents — multi-cloud (v2).
-- Conflict escalation / planner re-run on partitioning failure (v2).
-- Multi-session hub coordination beyond simple persistence.
+Known operational debt tracked in `architecture-backlog.md` §7.
 
 ## Rejected alternatives
 
-- **Commit lease via NATS-KV.** Eliminates forks entirely but requires
-  every commit to acquire a lease — too restrictive, kills parallelism.
-- **Per-agent branch namespacing.** Loses single-trunk semantics; turns
-  the hub into N parallel histories that must be merged later.
+- **Commit lease via NATS-KV.** Eliminates forks but every commit
+  acquires a lease — kills parallelism.
+- **Per-agent branch namespacing.** Loses single-trunk semantics;
+  hub becomes N parallel histories needing later merge.
 - **Reimplementing Fossil sync over NATS.** Loses content-addressing
-  guarantees Fossil already provides; redundant with `leaf.Agent`'s
-  HTTP/NATS dual transport.
+  Fossil already provides; redundant with `leaf.Agent`'s dual
+  transport.
