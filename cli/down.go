@@ -103,17 +103,14 @@ func runDown(root string, c *DownCmd, confirmIn interface {
 // identically across terminals. Suppressed when stdout is
 // redirected so script output stays clean.
 const goodbye = `
-            _____
-           /     \
-          | () () |
-           \  ~  /
-            |||||
-       X----|||||----X
-            \|||/
-             \|/
-              X
+       .ed$""$be.
+     d$"        "$b
+     $  ()    ()  $
+     $     \/     $
+     "$.   --   .$"
+       "*ee$$ee*"
 
-       workspace cleared`
+  now exiting the 5th dimension`
 
 // printGoodbye writes the goodbye banner to stdout when stdout is a
 // TTY. No-op otherwise — script consumers see only the structured
