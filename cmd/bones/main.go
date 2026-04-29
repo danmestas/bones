@@ -10,6 +10,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/alecthomas/kong"
@@ -53,6 +54,15 @@ func main() {
 			os.Exit(code)
 		}),
 	)
+	// Default slog level is Info; demote operational telemetry sites
+	// to Debug so non-`-v` invocations stay quiet. `-v` (libfossilcli
+	// Globals.Verbose) reinstalls a Debug-level handler so the same
+	// sites are visible when troubleshooting.
+	if c.Verbose {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr,
+			&slog.HandlerOptions{Level: slog.LevelDebug})))
+	}
+
 	if err := ctx.Run(&c.Globals); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

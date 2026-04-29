@@ -93,7 +93,7 @@ func instrumented(
 		telemetry.String("cwd", cwd),
 	)
 	start := time.Now()
-	slog.InfoContext(ctx, op+" start", "cwd", cwd)
+	slog.DebugContext(ctx, op+" start", "cwd", cwd)
 
 	info, err := fn(ctx)
 
@@ -101,7 +101,7 @@ func instrumented(
 	if err != nil {
 		result = "error"
 	}
-	slog.InfoContext(ctx, op+" complete",
+	slog.DebugContext(ctx, op+" complete",
 		"cwd", cwd,
 		"duration_ms", time.Since(start).Milliseconds(),
 		"result", result)
@@ -160,7 +160,7 @@ func initLogic(ctx context.Context, cwd string) (Info, error) {
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}
 
-	slog.InfoContext(ctx, "agent_id generated", "agent_id", cfg.AgentID)
+	slog.DebugContext(ctx, "agent_id generated", "agent_id", cfg.AgentID)
 
 	repo, err := libfossil.Create(repoPath, libfossil.CreateOpts{User: cfg.AgentID})
 	if err != nil {
@@ -229,7 +229,7 @@ func joinLogic(ctx context.Context, cwd string) (Info, error) {
 		return Info{}, fmt.Errorf("load config: %w", err)
 	}
 
-	slog.InfoContext(ctx, "config loaded", "agent_id", cfg.AgentID)
+	slog.DebugContext(ctx, "config loaded", "agent_id", cfg.AgentID)
 
 	pidData, err := os.ReadFile(filepath.Join(workspaceDir, markerDirName, "leaf.pid"))
 	if err != nil {

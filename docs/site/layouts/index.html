@@ -392,7 +392,8 @@ footer a { color: inherit; border-bottom-color: var(--mute); }
 
 <section class="title">
   <h1>bones</h1>
-  <p class="lead">A unified CLI for multi-agent software development. Coordinates parallel AI agents over NATS and Fossil, with the full repository, sync, and notification command surfaces in one binary.</p>
+  <p class="lead"><strong>Trunk-based development for agents.</strong> One linear timeline. No PRs, no merge queues, no fork-and-resolve. Drop ten parallel agents on your repo and watch the trunk advance, commit by commit.</p>
+  <p class="lead"><em>Fossil-style cathedral discipline applied to AI swarms. Autosync, not pull requests. Receipts, not vibes.</em></p>
   <table class="spec">
     <tbody>
       <tr><td>Project</td>      <td>bones — unified CLI for the bones agent-infra substrate</td></tr>
@@ -436,10 +437,13 @@ $ bones --help</pre>
 <section>
   <span class="num">§03</span>
   <h2>Why you might want it <span class="anchor">why</span></h2>
-  <p>Three reasons to reach for bones instead of running agents serially or stitching together <code>git</code> + a task tracker + a chat channel.</p>
-  <p><strong>You're running 3+ AI coding agents in parallel.</strong> Two agents editing the same file is a runtime fork, not a usable PR. bones validates plans for slot disjointness before any agent starts, so the only way to land overlapping work is to misdesign the plan — caught upfront, not at merge time.</p>
-  <p><strong>You want durable state across short-lived sessions.</strong> Each Claude Code session is ephemeral; bones writes claims, holds, presence, and code commits to substrates that outlive the session. An agent that crashes leaves no orphans — TTL-backed claims expire, holds release, the next agent picks up.</p>
-  <p><strong>You don't want to invent your own orchestration substrate.</strong> NATS JetStream KV gives you transactional task state; Fossil gives you content-addressed code with built-in fork detection; libfossil gives you that in pure Go. bones is the assembly that makes all of it usable from a single command.</p>
+  <p>Six things bones does that the obvious alternatives don't.</p>
+  <p><strong>Trunk-based, by construction.</strong> Every leaf pulls from the hub before it commits, so commits parent off the latest tip — not whatever the agent saw at clone time. Ten agents in parallel produce one linear chain. No fan-in to untangle, no merge conflicts to resolve.</p>
+  <p><strong>A worktree your filesystem doesn't see.</strong> Agents don't write to your working directory. They commit into the fossil repo first; the diff lands in your tree only when <em>you</em> sign off. Your editor never opens half-finished work it didn't ask for.</p>
+  <p><strong>Two embedded dependencies. That's it.</strong> SQLite and NATS — both embedded in the binary. No Postgres to run, no Redis to babysit, no k8s. The hub starts when your shell does and goes away when you're done.</p>
+  <p><strong>Built on Fossil's heritage.</strong> Fossil — Dr. Hipp's all-in-one SCM, tickets, and chat, born alongside SQLite — pioneered autosync for close-knit teams. bones inherits the discipline: one trunk, one truth, full history. <code>bones peek</code> opens straight into Fossil's UI.</p>
+  <p><strong>Boring timelines are good timelines.</strong> A linear chain is dull to look at. That's the point. When every commit advances the same trunk, your timeline is a story you read top-to-bottom — not a graph you decode.</p>
+  <p><strong>Observability without the vendor tax.</strong> OpenTelemetry exporters wired in if you have a stack. Skip it entirely and <code>bones peek</code> shows every commit, claim, and slot event in Fossil's native UI. Two paths, no required SaaS.</p>
 </section>
 
 <section>

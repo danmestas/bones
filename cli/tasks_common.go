@@ -112,7 +112,7 @@ func runOp(ctx context.Context, op string, fn func(context.Context) error) error
 		telemetry.String("op", op),
 	)
 	start := time.Now()
-	slog.InfoContext(ctx, op+" start")
+	slog.DebugContext(ctx, op+" start")
 
 	err := fn(ctx)
 
@@ -120,7 +120,7 @@ func runOp(ctx context.Context, op string, fn func(context.Context) error) error
 	if err != nil {
 		result = "error"
 	}
-	slog.InfoContext(ctx, op+" complete",
+	slog.DebugContext(ctx, op+" complete",
 		"duration_ms", time.Since(start).Milliseconds(),
 		"result", result)
 	end(err)
