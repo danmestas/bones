@@ -132,11 +132,23 @@ type Edge struct {
 // is not. Under the hood it is Fossil's 40-character SHA-1 UUID.
 type RevID string
 
-// File is a single file body paired with its logical path. The path is
-// whatever naming scheme the caller uses for its holds (typically
-// absolute). Content is the raw bytes to commit. Fossil stores both
-// verbatim — coord applies no path normalization.
+// File is a single file body paired with two address forms.
+//
+// Path is the holds-gate key — typically the absolute workspace path
+// the task record carries (holds.assertFile rejects non-absolute
+// values). It is NOT used to derive the libfossil file name when Name
+// is set.
+//
+// Name is the repo-relative file name libfossil stores under (e.g.
+// "src/foo/bar.go"). When empty, Leaf.Commit falls back to stripping
+// a single leading slash off Path — sufficient for the simple case
+// where the holds key looks like "/relpath" but wrong when Path has
+// any deeper prefix (e.g. a workspace directory). Slot-style flows
+// where the worktree lives at <workspace>/.bones/swarm/<slot>/wt MUST
+// set Name to the wt-relative path; otherwise the file lands at
+// "<workspace-segments>/<rel>" inside the repo.
 type File struct {
 	Path    string
+	Name    string
 	Content []byte
 }

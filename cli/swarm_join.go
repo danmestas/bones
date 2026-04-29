@@ -112,9 +112,23 @@ func (c *SwarmJoinCmd) slotAgentID() string {
 // Mirrors `bones hub user add` (cli/hub_user.go) so the join verb is
 // self-contained — agents do not need to know about the hub user
 // table directly. ADR 0028 §"swarm join" step 2.
+//
+// If the workspace isn't bootstrapped, refuses with a leaf-appropriate
+// message: bootstrap is the orchestrator's job. The orchestrator-side
+// commands (peek, fanin, hub_user) keep the default "run `bones up`"
+// guidance via the same hubRepoPath helper; only the leaf-side join
+// path swaps the message so a swarm subagent doesn't read the error
+// as an instruction to bootstrap from its own context.
 func (c *SwarmJoinCmd) ensureSlotUser() error {
 	repoPath, err := hubRepoPath()
 	if err != nil {
+		if errors.Is(err, ErrHubRepoNotBootstrapped) {
+			return fmt.Errorf(
+				"swarm join: workspace not bootstrapped — the orchestrator " +
+					"must bring up the hub before leaves can join; refusing " +
+					"to bootstrap from a leaf context",
+			)
+		}
 		return err
 	}
 	repo, err := libfossil.Open(repoPath)
@@ -219,6 +233,7 @@ func (c *SwarmJoinCmd) openSwarmLeaf(
 		Workdir:    swarmRoot,
 		SlotID:     c.Slot,
 		FossilUser: c.slotAgentID(),
+		Autosync:   true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open leaf: %w", err)

@@ -173,6 +173,7 @@ func (c *SwarmCommitCmd) openLeafForCommit(
 		Workdir:    swarmRoot,
 		SlotID:     slot,
 		FossilUser: "slot-" + slot,
+		Autosync:   true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("re-open leaf: %w", err)
@@ -210,11 +211,17 @@ func (c *SwarmCommitCmd) gatherFiles(info workspace.Info, slot string) ([]coord.
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", abs, err)
 		}
-		// Prefer the workspace-relative absolute path on the task's
-		// files list — that is what was registered in the holds
-		// bucket. Search via filepath.Join(workspaceDir, ...).
+		// Path is the holds-gate key (must be absolute per
+		// holds.assertFile); Name is what libfossil stores the file
+		// under in the repo. Without an explicit Name, Leaf.Commit
+		// would derive the repo name by stripping one leading slash
+		// off Path, dragging the workspace prefix into the commit.
 		taskPath := filepath.Join(info.WorkspaceDir, clean)
-		out = append(out, coord.File{Path: taskPath, Content: data})
+		out = append(out, coord.File{
+			Path:    taskPath,
+			Name:    clean,
+			Content: data,
+		})
 	}
 	return out, nil
 }
@@ -273,11 +280,15 @@ func (c *SwarmCommitCmd) discoverDirtyFiles(
 		if err != nil {
 			return fmt.Errorf("rel %s: %w", path, err)
 		}
-		// Same path convention as the explicit-files branch: the
-		// holds-gate key is workspaceDir/<rel>, which is what the
-		// task record carries when --files= is passed.
+		// Same path convention as the explicit-files branch: Path is
+		// the workspace-absolute holds-gate key, Name is the
+		// wt-relative repo path libfossil uses inside leaf.fossil.
 		taskPath := filepath.Join(info.WorkspaceDir, rel)
-		out = append(out, coord.File{Path: taskPath, Content: data})
+		out = append(out, coord.File{
+			Path:    taskPath,
+			Name:    rel,
+			Content: data,
+		})
 		return nil
 	})
 	if err != nil {

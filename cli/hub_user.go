@@ -84,8 +84,19 @@ func (c *HubUserListCmd) Run(g *libfossilcli.Globals) error {
 	return nil
 }
 
+// ErrHubRepoNotBootstrapped is returned by hubRepoPath when the
+// workspace has no hub.fossil yet. Callers can switch on this to
+// emit role-appropriate guidance: orchestrator commands tell the
+// user to run `bones up`; leaf commands (`swarm join`) refuse to
+// bootstrap and tell the agent the orchestrator must do it.
+var ErrHubRepoNotBootstrapped = errors.New("hub repo not bootstrapped")
+
 // hubRepoPath finds the workspace from cwd and returns the hub repo path.
 // Surfaces clear errors when the workspace or repo isn't there yet.
+// When the hub.fossil file is missing, wraps ErrHubRepoNotBootstrapped
+// so leaf-side callers can swap the orchestrator-leaning default
+// message ("run `bones up`") for one that refuses bootstrap from a
+// leaf context.
 func hubRepoPath() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -99,8 +110,8 @@ func hubRepoPath() (string, error) {
 	if _, err := os.Stat(repoPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", fmt.Errorf(
-				"hub repo not found at %s — run `bones up` or `bones hub start` first",
-				repoPath,
+				"hub repo not found at %s — run `bones up` or `bones hub start` first: %w",
+				repoPath, ErrHubRepoNotBootstrapped,
 			)
 		}
 		return "", fmt.Errorf("stat hub repo: %w", err)

@@ -52,16 +52,19 @@ func (c *Claim) Release() error {
 // paths route through it. The substrate (l.coord.sub) does NOT carry
 // its own fossil field.
 type Leaf struct {
-	agent      *agent.Agent
-	coord      *Coord
-	repoPath   string
-	wtPath     string
-	slotID     string
-	claimTTL   time.Duration     // zero → use substrate HoldTTLDefault
-	fossilUser string            // commit author; empty → fall back to slotID
-	metadata   map[string]string // harness-supplied opaque key=value pairs
-	mu         sync.Mutex
-	stopped    bool
+	agent       *agent.Agent
+	coord       *Coord
+	repoPath    string
+	wtPath      string
+	slotID      string
+	claimTTL    time.Duration     // zero → use substrate HoldTTLDefault
+	fossilUser  string            // commit author; empty → fall back to slotID
+	metadata    map[string]string // harness-supplied opaque key=value pairs
+	hubHTTPAddr string            // hub's fossil HTTP URL; used by autosync pull
+	projectCode string            // hub's fossil project-code; required by Sync
+	autosync    bool              // pull from hub before each Commit (LeafConfig.Autosync)
+	mu          sync.Mutex
+	stopped     bool
 }
 
 // LeafConfig is the configuration passed to OpenLeaf. One of Hub or
@@ -106,6 +109,23 @@ type LeafConfig struct {
 	// to the leaf for its own bookkeeping. Not used by coord; stored
 	// on *Leaf so harnesses can call l.Metadata("foo").
 	Metadata map[string]string
+
+	// Autosync, when true, makes Leaf.Commit pull from the hub before
+	// resolving the trunk tip, so the new commit lists the latest
+	// hub-known commit as its parent. This implements bones'
+	// trunk-based-development promise: every slot commit advances a
+	// shared trunk rather than producing a parallel leaf that fan-in
+	// must collapse later.
+	//
+	// Cost: one hub HTTP round-trip per commit. Tradeoff: a sub-second
+	// race window between pull and push can still produce a fork when
+	// two slots commit nearly simultaneously; fossil auto-merges those
+	// on the next pull cycle. A real check-in lock will land when
+	// libfossil exposes the necessary API.
+	//
+	// Default false preserves the prior branch-per-slot behavior
+	// expected by existing tests/examples that don't run a real hub.
+	Autosync bool
 }
 
 // HubAddrs holds the three URLs OpenLeaf needs from a hub. Each
@@ -177,6 +197,52 @@ func OpenLeaf(ctx context.Context, cfg LeafConfig) (*Leaf, error) {
 		_ = r.Close()
 	}
 
+	a, err := startLeafAgent(cfg, repoPath, hubNATSUpstream)
+	if err != nil {
+		return nil, err
+	}
+
+	cc, err := openLeafCoord(ctx, cfg.SlotID, hubNATSClient, slotDir)
+	if err != nil {
+		_ = a.Stop()
+		return nil, fmt.Errorf("coord.OpenLeaf: coord: %w", err)
+	}
+
+	projectCode, err := readProjectCodeIfAutosync(a, cfg.Autosync)
+	if err != nil {
+		_ = a.Stop()
+		return nil, err
+	}
+
+	return &Leaf{
+		agent:       a,
+		coord:       cc,
+		repoPath:    repoPath,
+		wtPath:      wtPath,
+		slotID:      cfg.SlotID,
+		claimTTL:    cfg.ClaimTTL,
+		fossilUser:  cfg.FossilUser,
+		metadata:    cfg.Metadata,
+		hubHTTPAddr: hubHTTPAddr,
+		projectCode: projectCode,
+		autosync:    cfg.Autosync,
+	}, nil
+}
+
+// startLeafAgent constructs and starts the agent.Agent that owns the
+// leaf's libfossil.Repo. Sets SQLite busy_timeout on the resulting
+// repo so concurrent writes (Leaf.Commit vs in-flight SyncNow) wait
+// for the WAL lock instead of failing with SQLITE_BUSY. The pragma
+// is per-connection, so MaxOpenConns is pinned to 1 to make it apply
+// to all queries — internal/fossil/fossil.go's prior setup surfaced
+// the pool semantics in Phase 1.
+//
+// FossilUser becomes the User field on sync handshakes. The earlier
+// clone is always unauthenticated ("nobody") regardless of
+// FossilUser — SlotID isn't in the hub's user table and setting User
+// during clone would fail authentication. FossilUser only affects
+// post-clone sync sessions and Commit author attribution.
+func startLeafAgent(cfg LeafConfig, repoPath, hubNATSUpstream string) (*agent.Agent, error) {
 	agentCfg := agent.Config{
 		RepoPath:     repoPath,
 		NATSUpstream: hubNATSUpstream,
@@ -188,11 +254,6 @@ func OpenLeaf(ctx context.Context, cfg LeafConfig) (*Leaf, error) {
 	if cfg.PollInterval != 0 {
 		agentCfg.PollInterval = cfg.PollInterval
 	}
-	// FossilUser: used as the User field on sync handshakes. The clone
-	// at open time is always unauthenticated ("nobody") regardless of
-	// FossilUser — SlotID isn't in the hub's user table and setting User
-	// during clone would fail authentication. FossilUser only affects
-	// post-clone sync sessions and Commit author attribution.
 	if cfg.FossilUser != "" {
 		agentCfg.User = cfg.FossilUser
 	}
@@ -204,43 +265,28 @@ func OpenLeaf(ctx context.Context, cfg LeafConfig) (*Leaf, error) {
 		_ = a.Stop()
 		return nil, fmt.Errorf("coord.OpenLeaf: agent.Start: %w", err)
 	}
-
-	// Set SQLite busy_timeout on the leaf's repo so concurrent writes
-	// (Leaf.Commit vs in-flight leaf.Agent.SyncNow pull) wait briefly
-	// for the WAL lock instead of failing with SQLITE_BUSY. Phase 2
-	// trial #1 surfaced this at N=4: agent.SyncNow runs a pull/push
-	// round on a goroutine after Leaf.Commit returns, and the next
-	// Commit can fire before that round drains. 30s mirrors the value
-	// the deleted internal/fossil.Manager used.
-	//
-	// Pin to MaxOpenConns=1 so the pragma applies to ALL queries —
-	// busy_timeout is a per-connection setting and the database/sql
-	// pool may otherwise hand subsequent queries a fresh connection
-	// without the pragma. internal/fossil/fossil.go set the pragma
-	// only; the Phase 1 refactor surfaced that the pool semantics
-	// require single-conn pinning to make the timeout actually apply.
 	a.Repo().DB().SqlDB().SetMaxOpenConns(1)
 	if _, err := a.Repo().DB().Exec(`PRAGMA busy_timeout = 30000`); err != nil {
 		_ = a.Stop()
 		return nil, fmt.Errorf("coord.OpenLeaf: busy_timeout: %w", err)
 	}
+	return a, nil
+}
 
-	cc, err := openLeafCoord(ctx, cfg.SlotID, hubNATSClient, slotDir)
-	if err != nil {
-		_ = a.Stop()
-		return nil, fmt.Errorf("coord.OpenLeaf: coord: %w", err)
+// readProjectCodeIfAutosync reads project-code from the agent's repo
+// when autosync is enabled. SyncOpts requires the code on every call;
+// caching once at open time avoids re-reading on every Leaf.Commit.
+// When autosync is off, the value is unused — skip the read so legacy
+// callers without a real hub aren't subject to a new failure mode.
+func readProjectCodeIfAutosync(a *agent.Agent, autosync bool) (string, error) {
+	if !autosync {
+		return "", nil
 	}
-
-	return &Leaf{
-		agent:      a,
-		coord:      cc,
-		repoPath:   repoPath,
-		wtPath:     wtPath,
-		slotID:     cfg.SlotID,
-		claimTTL:   cfg.ClaimTTL,
-		fossilUser: cfg.FossilUser,
-		metadata:   cfg.Metadata,
-	}, nil
+	pc, err := a.Repo().Config("project-code")
+	if err != nil {
+		return "", fmt.Errorf("coord.OpenLeaf: read project-code for autosync: %w", err)
+	}
+	return pc, nil
 }
 
 // resolveHubAddrs returns the leaf-upstream, NATS-client, and HTTP
@@ -406,11 +452,32 @@ func (l *Leaf) Commit(
 	// Write through the agent's repo handle — the only *libfossil.Repo
 	// that should ever touch leaf.fossil in this process.
 	repo := l.agent.Repo()
+
+	// Pull from hub before resolving the trunk tip so the new commit's
+	// parent is the latest hub-known commit, not whatever this leaf
+	// snapshot saw at clone time. This is the implementation of
+	// trunk-based development across slots: every slot.Commit advances
+	// a shared trunk rather than producing a sibling leaf that fan-in
+	// must collapse later.
+	//
+	// A failed pull is fatal: continuing on a stale parent silently
+	// turns a "trunk advance" into "trunk fork", which is exactly what
+	// autosync exists to prevent. Callers that need offline tolerance
+	// should leave Autosync off and accept branch-per-slot semantics.
+	if l.autosync {
+		if err := l.pullFromHub(ctx); err != nil {
+			return "", fmt.Errorf("coord.Leaf.Commit: pre-commit pull: %w", err)
+		}
+	}
 	toCommit := make([]libfossil.FileToCommit, 0, len(files))
 	for _, f := range files {
 		assert.NotEmpty(f.Path, "coord.Leaf.Commit: file.Path is empty")
+		name := f.Name
+		if name == "" {
+			name = normalizeLeadingSlash(f.Path)
+		}
 		toCommit = append(toCommit, libfossil.FileToCommit{
-			Name:    normalizeLeadingSlash(f.Path),
+			Name:    name,
 			Content: f.Content,
 		})
 	}
@@ -484,6 +551,29 @@ func commitMessage(c *Claim) string {
 // orphan-root manifest.
 func isBranchTipMissing(err error) bool {
 	return errors.Is(err, sql.ErrNoRows)
+}
+
+// pullFromHub runs a one-shot fossil pull against the configured hub
+// over libfossil's HTTP transport. Authenticates as l.fossilUser
+// (which has 'i' caps from ensureSlotUser) when set; otherwise falls
+// back to anonymous "nobody" (the hub grants gio to anonymous which
+// is enough for a pull). Used by Leaf.Commit when autosync is on so
+// the next BranchTip("trunk") sees the hub's latest tip.
+func (l *Leaf) pullFromHub(ctx context.Context) error {
+	transport := libfossil.NewHTTPTransport(l.hubHTTPAddr)
+	user := l.fossilUser
+	if user == "" {
+		user = l.slotID
+	}
+	if _, err := l.agent.Repo().Sync(ctx, transport, libfossil.SyncOpts{
+		Pull:        true,
+		Push:        false,
+		User:        user,
+		ProjectCode: l.projectCode,
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // CommitOption tunes Leaf.Commit. Construct with WithMessage / WithUser.

@@ -110,7 +110,7 @@ func (c *SwarmFanInCmd) mergeLeaves(fossilBin, hubRepo string, leaves []string) 
 		return fmt.Errorf("update to canonical %s: %w", canonical, err)
 	}
 	for _, leaf := range others {
-		if err := runFossilIn(fossilBin, wt, "merge", "--no-warnings", leaf); err != nil {
+		if err := runFossilIn(fossilBin, wt, "merge", leaf); err != nil {
 			return fmt.Errorf("merge leaf %s: %w", leaf, err)
 		}
 	}
