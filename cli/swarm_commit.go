@@ -132,7 +132,7 @@ func (c *SwarmCommitCmd) resolveHubURL(sess swarm.Session) string {
 	if sess.HubURL != "" {
 		return sess.HubURL
 	}
-	return defaultHubFossilURL
+	return swarm.DefaultHubFossilURL
 }
 
 // assertSessionLocal returns an error if the session's host does not

@@ -138,7 +138,7 @@ func (c *SwarmCloseCmd) releaseAndMaybeCloseTask(
 ) error {
 	hubURL := c.HubURL
 	if hubURL == "" {
-		hubURL = defaultHubFossilURL
+		hubURL = swarm.DefaultHubFossilURL
 	}
 	swarmRoot := info.WorkspaceDir + "/.bones/swarm"
 	leaf, err := coord.OpenLeaf(ctx, coord.LeafConfig{
