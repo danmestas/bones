@@ -8,6 +8,7 @@ import (
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
+	"github.com/danmestas/bones/internal/banner"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
@@ -15,6 +16,7 @@ import (
 type InitCmd struct{}
 
 func (c *InitCmd) Run(g *libfossilcli.Globals) error {
+	banner.Print()
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("cwd: %w", err)
@@ -60,6 +62,7 @@ func (c *OrchestratorCmd) Run(g *libfossilcli.Globals) error {
 type UpCmd struct{}
 
 func (c *UpCmd) Run(g *libfossilcli.Globals) error {
+	banner.Print()
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("cwd: %w", err)
