@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "bones-docs",
+  "name": "bones",
   "compatibility_date": "2026-04-25",
   "observability": { "enabled": true },
   "assets": { "directory": "./docs/site/public" },
