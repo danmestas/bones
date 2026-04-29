@@ -174,7 +174,7 @@ func TestRunAutoclaim_ClaimRace_ReturnsRaceLost(t *testing.T) {
 		t.Fatalf("second runAutoclaimTick: %v", second.err)
 	}
 
-	var sawClaimed, sawRaceLost bool
+	var sawClaimed, sawLost bool
 	for _, got := range []autoclaimResult{first.res, second.res} {
 		switch got.Action {
 		case autoclaimClaimed:
@@ -183,16 +183,24 @@ func TestRunAutoclaim_ClaimRace_ReturnsRaceLost(t *testing.T) {
 				t.Fatalf("claimed TaskID=%q, want %q", got.TaskID, id)
 			}
 		case autoclaimRaceLost:
-			sawRaceLost = true
+			sawLost = true
 			if got.TaskID != id {
 				t.Fatalf("race-lost TaskID=%q, want %q", got.TaskID, id)
 			}
+		case autoclaimNoReady:
+			// The loser ran list-ready after the winner's claim
+			// landed and observed no claimable tasks. From the
+			// caller's perspective indistinguishable from race-lost.
+			sawLost = true
 		default:
 			t.Fatalf("unexpected action %q", got.Action)
 		}
 	}
-	if !sawClaimed || !sawRaceLost {
-		t.Fatalf("want one claimed and one race-lost, got %#v and %#v", first.res, second.res)
+	if !sawClaimed || !sawLost {
+		t.Fatalf(
+			"want one claimed and one race-lost or no-ready, got %#v and %#v",
+			first.res, second.res,
+		)
 	}
 }
 
