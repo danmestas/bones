@@ -123,6 +123,20 @@ type AcquireOpts struct {
 	// Now is the time source for StartedAt and LastRenewed. nil →
 	// time.Now().UTC. Tests inject a fixed clock.
 	Now func() time.Time
+
+	// NoAutosync disables the pre-commit hub pull on this lease's
+	// underlying coord.Leaf. Default (false) keeps autosync ON,
+	// which is the production default per ADR 0023's trunk-linearity
+	// promise: every commit pulls from the hub before resolving the
+	// trunk tip so the new commit's parent is the hub's-latest-tip,
+	// producing one linear chain instead of N parallel forks.
+	//
+	// Set to true (CLI flag --no-autosync on swarm join / swarm
+	// commit) when the caller has an explicit reason to operate in
+	// branch-per-slot mode: offline tolerance, single-slot work
+	// where no peer commits will race, or testing fan-in semantics.
+	// Cost: one less hub HTTP round-trip per commit.
+	NoAutosync bool
 }
 
 // CommitResult is the outcome of ResumedLease.Commit. UUID is set on
@@ -300,7 +314,9 @@ func Acquire(
 		return nil, err
 	}
 
-	leaf, claim, err := openLeafAndClaim(ctx, info, slot, fossilUser, hubURL, taskID, opts.Hub)
+	leaf, claim, err := openLeafAndClaim(
+		ctx, info, slot, fossilUser, hubURL, taskID, opts.Hub, !opts.NoAutosync,
+	)
 	if err != nil {
 		cleanupConn()
 		return nil, err
@@ -387,7 +403,7 @@ func Resume(
 		hubURL = DefaultHubFossilURL
 	}
 
-	leaf, err := openLeaf(ctx, info, slot, sess.AgentID, hubURL, opts.Hub)
+	leaf, err := openLeaf(ctx, info, slot, sess.AgentID, hubURL, opts.Hub, !opts.NoAutosync)
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("swarm.Resume: open leaf: %w", err)
@@ -697,9 +713,9 @@ func defaultAcquireOpts(opts AcquireOpts) (func() time.Time, string, string) {
 // stopped before return.
 func openLeafAndClaim(
 	ctx context.Context, info workspace.Info,
-	slot, fossilUser, hubURL, taskID string, hub *coord.Hub,
+	slot, fossilUser, hubURL, taskID string, hub *coord.Hub, autosync bool,
 ) (*coord.Leaf, *coord.Claim, error) {
-	leaf, err := openLeaf(ctx, info, slot, fossilUser, hubURL, hub)
+	leaf, err := openLeaf(ctx, info, slot, fossilUser, hubURL, hub, autosync)
 	if err != nil {
 		return nil, nil, fmt.Errorf("swarm.Acquire: open leaf: %w", err)
 	}
@@ -912,12 +928,14 @@ func clearExistingRecord(
 }
 
 // openLeaf opens the per-slot coord.Leaf rooted at
-// `<workspace>/.bones/swarm`. When opts.Hub is set, opens against the
+// `<workspace>/.bones/swarm`. When hub is non-nil, opens against the
 // in-process hub directly (test path). Otherwise uses HubAddrs with
-// the workspace's NATS URL and the supplied hub HTTP URL.
+// the workspace's NATS URL and the supplied hub HTTP URL. Autosync
+// flows through from the lease's AcquireOpts; default-on at the
+// AcquireOpts layer, opt-out via --no-autosync.
 func openLeaf(
 	ctx context.Context, info workspace.Info,
-	slot, fossilUser, hubURL string, hub *coord.Hub,
+	slot, fossilUser, hubURL string, hub *coord.Hub, autosync bool,
 ) (*coord.Leaf, error) {
 	swarmRoot := filepath.Join(info.WorkspaceDir, ".bones", "swarm")
 	if err := os.MkdirAll(swarmRoot, 0o755); err != nil {
@@ -927,7 +945,7 @@ func openLeaf(
 		Workdir:    swarmRoot,
 		SlotID:     slot,
 		FossilUser: fossilUser,
-		Autosync:   true,
+		Autosync:   autosync,
 	}
 	if hub != nil {
 		cfg.Hub = hub

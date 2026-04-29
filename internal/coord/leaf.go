@@ -123,8 +123,17 @@ type LeafConfig struct {
 	// on the next pull cycle. A real check-in lock will land when
 	// libfossil exposes the necessary API.
 	//
+	// Project-code cache: when Autosync is true, OpenLeaf reads the
+	// repo's project-code config once at open time and caches it on
+	// the Leaf for use by every later Commit's Sync call. The
+	// project-code is immutable for the life of a fossil repository,
+	// so caching at open time is safe; mid-session repository
+	// metadata changes are not part of this contract.
+	//
 	// Default false preserves the prior branch-per-slot behavior
 	// expected by existing tests/examples that don't run a real hub.
+	// Production swarm leases default Autosync ON via
+	// AcquireOpts.NoAutosync (default false → Autosync=true).
 	Autosync bool
 }
 
@@ -412,6 +421,16 @@ func (l *Leaf) AnnounceHolds(
 
 // Commit writes files into the leaf's libfossil repo as a new checkin
 // authored by the slot, then triggers a sync round (SyncNow).
+//
+// When LeafConfig.Autosync was true at OpenLeaf time, Commit performs
+// a hub HTTP round-trip (pull /xfer) BEFORE resolving the trunk tip
+// so the new commit's parent is the latest hub-known commit. This is
+// the implementation of trunk-based development across slots: every
+// slot.Commit advances a shared trunk rather than producing a parallel
+// leaf that fan-in must collapse later. Cost is one network round-trip
+// per Commit; callers that prefer offline tolerance over linearity
+// should set Autosync=false at OpenLeaf time and accept
+// branch-per-slot semantics.
 //
 // The hold-gate (Invariant 20) and epoch-gate (Invariant 24) are
 // enforced via the leaf's Coord: every File.Path must be held by this
