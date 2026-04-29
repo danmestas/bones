@@ -14,6 +14,7 @@ type CLI struct {
 
 	// Daily.
 	Up    bonescli.UpCmd    `cmd:"" group:"daily" help:"Bootstrap workspace, scaffold, leaf, hub"`
+	Down  bonescli.DownCmd  `cmd:"" group:"daily" help:"Reverse up: stop hub + clean scaffold"`
 	Tasks bonescli.TasksCmd `cmd:"" group:"daily" help:"Inspect and mutate runtime agent tasks"`
 	Swarm bonescli.SwarmCmd `cmd:"" group:"daily" help:"Run as a slot-shaped swarm participant"`
 
