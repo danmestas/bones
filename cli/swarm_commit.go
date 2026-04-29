@@ -173,6 +173,7 @@ func (c *SwarmCommitCmd) openLeafForCommit(
 		Workdir:    swarmRoot,
 		SlotID:     slot,
 		FossilUser: "slot-" + slot,
+		Autosync:   true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("re-open leaf: %w", err)

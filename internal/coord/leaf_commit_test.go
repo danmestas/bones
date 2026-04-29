@@ -224,6 +224,107 @@ func TestLeaf_CommitFileNameOverride(t *testing.T) {
 	}
 }
 
+// TestLeaf_CommitAutosyncLinearizes pins the trunk-based contract:
+// when two leaves share a hub and both run with Autosync=true, the
+// second leaf's commit lists the first leaf's commit as its parent —
+// i.e. trunk advances linearly instead of forking into parallel
+// leaves that fan-in must collapse later.
+//
+// Without autosync each leaf's local view of "trunk tip" is the seed
+// (frozen at clone time), so both Commits would list the seed as
+// parent and the hub would carry two open leaves on trunk. With
+// autosync the second leaf pulls the first leaf's already-pushed
+// commit before resolving BranchTip, so its parent is the first
+// commit's UUID.
+func TestLeaf_CommitAutosyncLinearizes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	hubDir := t.TempDir()
+	hub, err := OpenHub(ctx, hubDir, freePort(t))
+	if err != nil {
+		t.Fatalf("OpenHub: %v", err)
+	}
+	t.Cleanup(func() { _ = hub.Stop() })
+
+	openLeaf := func(slot string) *Leaf {
+		l, err := OpenLeaf(ctx, LeafConfig{
+			Hub:      hub,
+			Workdir:  t.TempDir(),
+			SlotID:   slot,
+			Autosync: true,
+		})
+		if err != nil {
+			t.Fatalf("OpenLeaf %s: %v", slot, err)
+		}
+		t.Cleanup(func() { _ = l.Stop() })
+		return l
+	}
+	leafA := openLeaf("slot-A")
+	leafB := openLeaf("slot-B")
+
+	commitOnce := func(l *Leaf, holdPath, repoName string, body []byte) string {
+		t.Helper()
+		taskID, err := l.OpenTask(ctx, "auto-"+repoName, []string{holdPath})
+		if err != nil {
+			t.Fatalf("OpenTask: %v", err)
+		}
+		cl, err := l.Claim(ctx, taskID)
+		if err != nil {
+			t.Fatalf("Claim: %v", err)
+		}
+		uuid, err := l.Commit(ctx, cl, []File{
+			{Path: holdPath, Name: repoName, Content: body},
+		})
+		if err != nil {
+			t.Fatalf("Commit: %v", err)
+		}
+		if err := cl.Release(); err != nil {
+			t.Fatalf("Release: %v", err)
+		}
+		return uuid
+	}
+
+	// Slot-A commits first. With autosync, this pulls (no-op on a
+	// fresh hub) and commits on the seed.
+	uuidA := commitOnce(leafA, "/slot-A/file.txt", "a/file.txt", []byte("from A"))
+
+	// Wait for slot-A's commit to be visible on the hub before slot-B
+	// commits — otherwise slot-B's pull may run before A's push lands
+	// and the test would race against the in-process sync goroutine.
+	if err := assertCommitOnHub(t, hubDir, uuidA); err != nil {
+		t.Fatalf("hub propagation A: %v", err)
+	}
+
+	// Slot-B commits next. With autosync, slot-B pulls and now sees
+	// uuidA on hub trunk, so its commit's parent should be uuidA.
+	uuidB := commitOnce(leafB, "/slot-B/file.txt", "b/file.txt", []byte("from B"))
+
+	parentB, err := parentUUID(leafB.agent.Repo(), uuidB)
+	if err != nil {
+		t.Fatalf("parentUUID(uuidB): %v", err)
+	}
+	if parentB != uuidA {
+		t.Fatalf(
+			"autosync did not linearize trunk: uuidB parent = %q, want uuidA %q",
+			parentB, uuidA,
+		)
+	}
+}
+
+// parentUUID returns the parent commit UUID of the manifest with the
+// given UUID, by joining blob → plink → blob in fossil's schema. Used
+// to assert pre-commit pull made the prior commit visible.
+func parentUUID(repo *libfossil.Repo, child string) (string, error) {
+	var parent string
+	err := repo.DB().QueryRow(`
+		SELECT pblob.uuid FROM blob AS pblob
+		JOIN plink ON plink.pid = pblob.rid
+		JOIN blob AS cblob ON cblob.rid = plink.cid
+		WHERE cblob.uuid = ?
+	`, child).Scan(&parent)
+	return parent, err
+}
+
 // assertCommitOnHub opens hub.fossil read-only and checks that the
 // manifest with the given UUID exists in the blob table. The hub's
 // running agent owns the write side; a separate read-only handle is

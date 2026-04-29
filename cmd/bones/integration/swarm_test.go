@@ -181,6 +181,49 @@ func TestCLI_Swarm(t *testing.T) {
 	})
 }
 
+// TestCLI_SwarmJoin_RefusesBootstrapFromLeafContext pins the
+// role-separation guard: when a workspace has no hub.fossil yet,
+// `swarm join` must refuse with a leaf-appropriate message instead
+// of telling the agent to run `bones up`. Bootstrap is the
+// orchestrator's job; if a leaf reads "run `bones up`" in a join
+// failure it will (and has) bootstrapped from its own context,
+// which silently re-points the workspace at a fresh hub and breaks
+// the trunk-linearization promise autosync exists to provide.
+func TestCLI_SwarmJoin_RefusesBootstrapFromLeafContext(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	requireBinaries(t)
+	dir := setupSwarmWorkspace(t)
+	// Deliberately skip startSwarmHub — the workspace has .bones/
+	// (workspace leaf) but no .orchestrator/hub.fossil. This is the
+	// exact state a leaf subagent encounters when an orchestrator
+	// hasn't run `bones up` (or when the orchestrator is running but
+	// pointed at a different workspace, as happened during the
+	// 2026-04-28 autosync demo).
+	stdout, stderr, code := runCmd(t, bonesBin, dir,
+		"swarm", "join",
+		"--slot=demo-leaf",
+		"--task-id=00000000-0000-0000-0000-000000000000",
+	)
+	if code == 0 {
+		t.Fatalf("swarm join unexpectedly succeeded: stdout=%s", stdout)
+	}
+	combined := stderr + stdout
+	if !strings.Contains(combined, "refusing to bootstrap from a leaf context") {
+		t.Errorf("error missing leaf-context refusal: %s", combined)
+	}
+	// The orchestrator-targeted "run `bones up`" guidance must NOT
+	// appear in a leaf-side failure — that's the message that caused
+	// the demo subagents to re-bootstrap.
+	if strings.Contains(combined, "run `bones up`") {
+		t.Errorf("error still contains orchestrator-targeted guidance: %s", combined)
+	}
+	if !strings.Contains(combined, "swarm join") {
+		t.Errorf("error missing command tag for context: %s", combined)
+	}
+}
+
 // setupSwarmWorkspace creates a git-initialized tmpdir with a single
 // tracked file so the Go-implemented hub's seedHubRepo finds something
 // to commit. Then runs `bones init` to bring up the workspace leaf.
