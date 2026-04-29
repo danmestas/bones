@@ -448,68 +448,58 @@ $ bones --help</pre>
 
 <section>
   <span class="num">§04</span>
-  <h2>How it fits together <span class="anchor">architecture</span></h2>
+  <h2>Trunk-based by construction <span class="anchor">architecture</span></h2>
   <div class="table-scroll">
-    <svg class="diagram" viewBox="0 0 640 380" role="img" aria-labelledby="arch-title arch-desc" preserveAspectRatio="xMidYMid meet">
-      <title id="arch-title">bones architecture</title>
-      <desc id="arch-desc">Three layers: callers (orchestrator skill, subagents, humans, CI) on top; the bones binary in the middle exposing four command groups; two durable substrates underneath, NATS for live coordination state and Fossil for content-addressed artifacts.</desc>
-
-      <defs>
-        <marker id="b-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path class="arrowhead" d="M0,0 L10,5 L0,10 Z"/>
-        </marker>
-      </defs>
-
-      <g class="head">
-        <text x="320" y="20" text-anchor="middle">callers</text>
-      </g>
-      <rect class="box" x="60" y="32" width="520" height="48"/>
-      <g class="item">
-        <text x="320" y="62" text-anchor="middle">orchestrator skill · subagent skill · humans · CI</text>
-      </g>
-
-      <g class="flow">
-        <line x1="320" y1="80" x2="320" y2="120" marker-end="url(#b-arrow)"/>
-      </g>
-      <g class="flow-label">
-        <text x="332" y="103" text-anchor="start">invoke</text>
-      </g>
-
-      <g class="head">
-        <text x="320" y="138" text-anchor="middle">bones (single binary)</text>
-      </g>
-      <rect class="box" x="60" y="150" width="520" height="120"/>
-      <g class="item">
-        <text x="320" y="180" text-anchor="middle">init  ·  up  ·  join  ·  orchestrator</text>
-        <text x="320" y="206" text-anchor="middle">tasks (add/list/claim/close)  ·  validate-plan</text>
-        <text x="320" y="232" text-anchor="middle">repo (commit · timeline · diff)</text>
-        <text x="320" y="258" text-anchor="middle">sync  ·  bridge  ·  notify  ·  doctor</text>
-      </g>
-
-      <g class="flow">
-        <line x1="180" y1="270" x2="180" y2="310" marker-end="url(#b-arrow)"/>
-        <line x1="460" y1="270" x2="460" y2="310" marker-end="url(#b-arrow)"/>
-      </g>
-      <g class="flow-label">
-        <text x="192" y="293" text-anchor="start">live state</text>
-        <text x="472" y="293" text-anchor="start">artifacts</text>
-      </g>
-
-      <g class="head">
-        <text x="180" y="328" text-anchor="middle">NATS</text>
-        <text x="460" y="328" text-anchor="middle">Fossil</text>
-      </g>
-      <rect class="box" x="60" y="340" width="240" height="32"/>
-      <g class="item">
-        <text x="180" y="361" text-anchor="middle">KV (tasks · holds · presence) · notify</text>
-      </g>
-      <rect class="box" x="340" y="340" width="240" height="32"/>
-      <g class="item">
-        <text x="460" y="361" text-anchor="middle">hub repo · leaf clones · code · chat</text>
-      </g>
-    </svg>
+    <svg class="diagram pikchr" role="img" aria-labelledby="arch-title arch-desc" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1046.82 351.36" preserveAspectRatio="xMidYMid meet"><title id="arch-title">bones architecture</title><desc id="arch-desc">Six trunk commits c1 through c6 form a single linear chain at the top. Four agents below feed into the trunk via autosync — each leaf pulls the latest tip before committing, so concurrent work linearizes by construction. The right edge shows the gated handoff: bones apply pushes the trunk to your git tree only when you sign off.</desc><style>:where(svg.diagram){background:var(--paper, #f5f1e6);}:where(svg.diagram) text{font-family:var(--mono, "Geist Mono", ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace); fill:currentColor;}</style>
+<circle cx="39.5424" cy="103.68" r="25.92"  style="fill:var(--ember, #c63a0f);stroke-width:2.25;stroke:var(--paper, #f5f1e6);" />
+<text x="39.5424" y="103.68" text-anchor="middle" fill="var(--paper, #f5f1e6)" dominant-baseline="central">c1</text>
+<polygon points="137.462,103.68 125.942,108 125.942,99.36" style="fill:currentColor"/>
+<path d="M65.4624,103.68L131.702,103.68"  style="fill:none;stroke-width:2.16;stroke:currentColor;" />
+<circle cx="163.382" cy="103.68" r="25.92"  style="fill:var(--ember, #c63a0f);stroke-width:2.25;stroke:var(--paper, #f5f1e6);" />
+<text x="163.382" y="103.68" text-anchor="middle" fill="var(--paper, #f5f1e6)" dominant-baseline="central">c2</text>
+<polygon points="261.302,103.68 249.782,108 249.782,99.36" style="fill:currentColor"/>
+<path d="M189.302,103.68L255.542,103.68"  style="fill:none;stroke-width:2.16;stroke:currentColor;" />
+<circle cx="287.222" cy="103.68" r="25.92"  style="fill:var(--ember, #c63a0f);stroke-width:2.25;stroke:var(--paper, #f5f1e6);" />
+<text x="287.222" y="103.68" text-anchor="middle" fill="var(--paper, #f5f1e6)" dominant-baseline="central">c3</text>
+<polygon points="385.142,103.68 373.622,108 373.622,99.36" style="fill:currentColor"/>
+<path d="M313.142,103.68L379.382,103.68"  style="fill:none;stroke-width:2.16;stroke:currentColor;" />
+<circle cx="411.062" cy="103.68" r="25.92"  style="fill:var(--ember, #c63a0f);stroke-width:2.25;stroke:var(--paper, #f5f1e6);" />
+<text x="411.062" y="103.68" text-anchor="middle" fill="var(--paper, #f5f1e6)" dominant-baseline="central">c4</text>
+<polygon points="508.982,103.68 497.462,108 497.462,99.36" style="fill:currentColor"/>
+<path d="M436.982,103.68L503.222,103.68"  style="fill:none;stroke-width:2.16;stroke:currentColor;" />
+<circle cx="534.902" cy="103.68" r="25.92"  style="fill:var(--ember, #c63a0f);stroke-width:2.25;stroke:var(--paper, #f5f1e6);" />
+<text x="534.902" y="103.68" text-anchor="middle" fill="var(--paper, #f5f1e6)" dominant-baseline="central">c5</text>
+<polygon points="632.822,103.68 621.302,108 621.302,99.36" style="fill:currentColor"/>
+<path d="M560.822,103.68L627.062,103.68"  style="fill:none;stroke-width:2.16;stroke:currentColor;" />
+<circle cx="658.742" cy="103.68" r="25.92"  style="fill:var(--ember, #c63a0f);stroke-width:2.25;stroke:var(--paper, #f5f1e6);" />
+<text x="658.742" y="103.68" text-anchor="middle" fill="var(--paper, #f5f1e6)" dominant-baseline="central">c6</text>
+<text x="341.942" y="17.28" text-anchor="middle" font-style="italic" fill="currentColor" dominant-baseline="central">trunk: one linear chain</text>
+<polygon points="857.462,103.68 845.462,108.18 845.462,99.18" style="fill:currentColor"/>
+<path d="M684.662,103.68L851.462,103.68"  style="fill:none;stroke-width:2.25;stroke:currentColor;" />
+<path d="M857.462,78.48L857.462,128.88A93.6 10.8 0 0 0 1044.66 128.88L1044.66,78.48A93.6 10.8 0 0 0 857.462 78.48A93.6 10.8 0 0 0 1044.66 78.48"  style="fill:var(--paper, #f5f1e6);stroke-width:1.8;stroke:var(--ink, #14110b);" />
+<text x="951.062" y="111.78" text-anchor="middle" fill="var(--ink, #14110b)" dominant-baseline="central">your git tree</text>
+<text x="771.062" y="77.76" text-anchor="middle" font-style="italic" fill="currentColor" dominant-baseline="central">bones apply</text>
+<text x="771.062" y="132.48" text-anchor="middle" font-style="italic" fill="currentColor" dominant-baseline="central">(you sign off)</text>
+<path d="M14.16,349.2L64.9248,349.2A12 12 0 0 0 76.9248 337.2L76.9248,330.96A12 12 0 0 0 64.9248 318.96L14.16,318.96A12 12 0 0 0 2.16 330.96L2.16,337.2A12 12 0 0 0 14.16 349.2Z"  style="fill:var(--ember, #c63a0f);stroke-width:2.25;stroke:var(--paper, #f5f1e6);" />
+<text x="39.5424" y="334.08" text-anchor="middle" fill="var(--paper, #f5f1e6)" dominant-baseline="central">agent 1</text>
+<path d="M138,349.2L188.765,349.2A12 12 0 0 0 200.765 337.2L200.765,330.96A12 12 0 0 0 188.765 318.96L138,318.96A12 12 0 0 0 126 330.96L126,337.2A12 12 0 0 0 138 349.2Z"  style="fill:var(--ember, #c63a0f);stroke-width:2.25;stroke:var(--paper, #f5f1e6);" />
+<text x="163.382" y="334.08" text-anchor="middle" fill="var(--paper, #f5f1e6)" dominant-baseline="central">agent 2</text>
+<path d="M385.68,349.2L436.445,349.2A12 12 0 0 0 448.445 337.2L448.445,330.96A12 12 0 0 0 436.445 318.96L385.68,318.96A12 12 0 0 0 373.68 330.96L373.68,337.2A12 12 0 0 0 385.68 349.2Z"  style="fill:var(--ember, #c63a0f);stroke-width:2.25;stroke:var(--paper, #f5f1e6);" />
+<text x="411.062" y="334.08" text-anchor="middle" fill="var(--paper, #f5f1e6)" dominant-baseline="central">agent 3</text>
+<path d="M633.36,349.2L684.125,349.2A12 12 0 0 0 696.125 337.2L696.125,330.96A12 12 0 0 0 684.125 318.96L633.36,318.96A12 12 0 0 0 621.36 330.96L621.36,337.2A12 12 0 0 0 633.36 349.2Z"  style="fill:var(--ember, #c63a0f);stroke-width:2.25;stroke:var(--paper, #f5f1e6);" />
+<text x="658.742" y="334.08" text-anchor="middle" fill="var(--paper, #f5f1e6)" dominant-baseline="central">agent 4</text>
+<polygon points="39.5424,129.6 43.1424,139.2 35.9424,139.2" style="fill:currentColor"/>
+<path d="M39.5424,318.96L39.5424,134.4"  style="fill:none;stroke-width:1.8;stroke:currentColor;" />
+<polygon points="163.382,129.6 166.982,139.2 159.782,139.2" style="fill:currentColor"/>
+<path d="M163.382,318.96L163.382,134.4"  style="fill:none;stroke-width:1.8;stroke:currentColor;" />
+<polygon points="411.062,129.6 414.662,139.2 407.462,139.2" style="fill:currentColor"/>
+<path d="M411.062,318.96L411.062,134.4"  style="fill:none;stroke-width:1.8;stroke:currentColor;" />
+<polygon points="658.742,129.6 662.342,139.2 655.142,139.2" style="fill:currentColor"/>
+<path d="M658.742,318.96L658.742,134.4"  style="fill:none;stroke-width:1.8;stroke:currentColor;" />
+<text x="379.382" y="254.16" text-anchor="middle" font-style="italic" fill="currentColor" dominant-baseline="central">autosync: each leaf pulls trunk before it commits</text>
+</svg>
   </div>
-  <p class="fineprint">bones is the binary; the work happens in the substrates. NATS holds the live coordination state (claims, holds, presence, chat). Fossil holds the durable artifacts (commits, chat history, compaction). Per-slot leaf agents replicate the hub repo so concurrent commits remain race-free.</p>
+  <p class="fineprint">Each agent owns a leaf — a per-slot Fossil clone that pulls the hub's latest tip before every commit. Concurrent agents land their commits in the order autosync resolves; the trunk advances as a single linear chain, never as parallel forks. <code>bones apply</code> lands the result in your git tree only when you sign off — agents never write to your working directory.</p>
 </section>
 
 <section>

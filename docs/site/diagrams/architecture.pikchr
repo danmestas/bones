@@ -1,0 +1,79 @@
+# bones architecture diagram (landing page §04).
+#
+# This is the SOURCE for the SVG inlined into docs/site/layouts/index.html.
+# Pikchr renders it deterministically; the rendered SVG is post-processed
+# to use the page's CSS variables (--paper, --ink, --ember, --mute) so it
+# inherits the bones landing page palette and dark mode automatically.
+#
+# Regenerate (requires the pikchr-generator skill installed):
+#
+#   SKILL=$HOME/.claude/skills/pikchr-generator
+#   "$SKILL/bin/compile.sh" --with-stdlib --theme latte \
+#     docs/site/diagrams/architecture.pikchr | \
+#     sed -E '
+#       s|#eff1f5|var(--paper, #f5f1e6)|gI
+#       s|#4c4f69|var(--ink, #14110b)|gI
+#       s|#8839ef|var(--ember, #c63a0f)|gI
+#       s|#9ca0b0|var(--mute, #5e5b53)|gI
+#       s|#eaecf1|var(--paper-2, #ece7d8)|gI
+#     '
+#
+# Then inline the result into the §04 <svg> block in
+# docs/site/layouts/index.html (replace the inline <style> font-family
+# with the --mono fallback chain; merge the two class= attributes
+# into class="diagram pikchr").
+#
+# The story: drop N agents, the hub trunk stays a single linear chain
+# (every leaf pulls before it commits, so every commit parents off the
+# latest tip). Right edge: bones apply lands the result in your git
+# tree only when you sign off.
+
+scale = 1.0
+fontscale = 1.0
+
+# ─── TRUNK row (top): single linear chain ──────────────────────────
+right
+C1: circle rad 0.18 fill 0x202122 color 0x010203 thickness 1.5px "c1"
+arrow                                # default color → currentColor (fg)
+C2: circle same "c2"
+arrow
+C3: circle same "c3"
+arrow
+C4: circle same "c4"
+arrow
+C5: circle same "c5"
+arrow
+C6: circle same "c6"
+
+# Trunk caption above the chain.
+text "trunk: one linear chain" italic at C3.e + (0.2, 0.6)
+
+# Apply / sign-off arrow → your git tree (right of trunk, on same line)
+arrow from C6.e right 1.2 thickness 1.5px
+GIT: cylinder "your git tree" ht 0.5 wid 1.3 \
+  fill 0x010203 color 0x0a0b0c thickness 1.2px \
+  with .w at last arrow.end
+
+# Apply label split above + below the apply arrow
+text "bones apply" italic at C6.e + (0.6,  0.18)
+text "(you sign off)" italic at C6.e + (0.6, -0.20)
+
+# ─── AGENTS row (below, four parallel feeders) ─────────────────────
+down
+A1: lambda("agent 1") at C1 - (0, 1.6)
+A2: lambda("agent 2") at C2 - (0, 1.6)
+A3: lambda("agent 3") at C4 - (0, 1.6)
+A4: lambda("agent 4") at C6 - (0, 1.6)
+
+# Each agent autosyncs into one trunk commit. Agents land c1, c2, c4, c6.
+# That intentional asymmetry conveys: some trunk commits (c3, c5) come
+# from the same agents — autosync linearizes regardless of who
+# commits when.
+arrow from A1.n to C1.s thickness 1.2px chop
+arrow from A2.n to C2.s thickness 1.2px chop
+arrow from A3.n to C4.s thickness 1.2px chop
+arrow from A4.n to C6.s thickness 1.2px chop
+
+# Single label spanning the autosync arrows.
+text "autosync: each leaf pulls trunk before it commits" italic \
+  at A2.n + (1.5, 0.45)
