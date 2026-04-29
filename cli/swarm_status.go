@@ -57,12 +57,12 @@ func (c *SwarmStatusCmd) Run(g *libfossilcli.Globals) error {
 }
 
 func (c *SwarmStatusCmd) run(ctx context.Context, info workspace.Info) error {
-	mgr, closeMgr, err := openSwarmManager(ctx, info)
+	sess, closeSess, err := openSwarmSessions(ctx, info)
 	if err != nil {
 		return err
 	}
-	defer closeMgr()
-	sessions, err := mgr.List(ctx)
+	defer closeSess()
+	sessions, err := sess.List(ctx)
 	if err != nil {
 		return err
 	}

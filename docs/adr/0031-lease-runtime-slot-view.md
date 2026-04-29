@@ -13,7 +13,9 @@ fan-in`) all share the same opening scaffold:
    long-running leaf-daemon's NATS.
 2. `ensureSlotUser` — verify the workspace is bootstrapped and create
    the slot's fossil user on the hub repo if missing.
-3. `openSwarmManager` — open the swarm sessions KV bucket.
+3. `openSwarmManager` — open the swarm sessions KV bucket. (Renamed
+   to `openSwarmSessions` and the underlying `swarm.Manager` type
+   narrowed to `swarm.Sessions` in ADR 0034.)
 4. Read or write the per-slot session record (`swarm.Session` in
    `bones-swarm-sessions[slot]`) under a CAS gate.
 5. `coord.OpenLeaf` — open a fresh per-slot fossil leaf bound to the
@@ -123,7 +125,10 @@ the type.
 
 Each PR is independent; the existing CLI verbs continue to work
 between phases because the underlying `coord.Leaf` and `swarm.Manager`
-APIs are unchanged.
+APIs are unchanged. (After this ADR landed, `swarm.Manager` was
+renamed to `swarm.Sessions` with mutating methods made unexported —
+see ADR 0034. The migration phasing above is still accurate; only
+the substrate-adapter type's name and visibility changed.)
 
 ## Consequences
 

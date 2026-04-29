@@ -75,19 +75,19 @@ func (c *SwarmCommitCmd) run(ctx context.Context, info workspace.Info) error {
 
 // resolveTargetSlot picks the slot to operate on. Honors --slot
 // when set; otherwise infers the unique active slot on this host
-// via swarm.Manager.List. The Manager is opened-and-closed inline
-// because Resume opens its own to read the session record; the
-// double-dial cost is negligible for a single CLI invocation.
+// via swarm.Sessions.List. The Sessions handle is opened-and-closed
+// inline because Resume opens its own to read the session record;
+// the double-dial cost is negligible for a single CLI invocation.
 func (c *SwarmCommitCmd) resolveTargetSlot(
 	ctx context.Context, info workspace.Info,
 ) (string, error) {
-	mgr, closeMgr, err := openSwarmManager(ctx, info)
+	sess, closeSess, err := openSwarmSessions(ctx, info)
 	if err != nil {
 		return "", err
 	}
-	defer closeMgr()
+	defer closeSess()
 	host, _ := os.Hostname()
-	slot, err := resolveSlot(ctx, mgr, c.Slot, host)
+	slot, err := resolveSlot(ctx, sess, c.Slot, host)
 	if err != nil {
 		return "", err
 	}

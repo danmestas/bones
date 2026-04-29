@@ -94,18 +94,18 @@ func (c *SwarmCloseCmd) validateResult() error {
 
 // resolveTargetSlot mirrors the helper in swarm_commit.go: honors
 // --slot when set, otherwise infers the unique active slot via
-// Manager.List. The Manager is opened-and-closed inline; Resume
-// opens its own to read the session record.
+// Sessions.List. The Sessions handle is opened-and-closed inline;
+// Resume opens its own to read the session record.
 func (c *SwarmCloseCmd) resolveTargetSlot(
 	ctx context.Context, info workspace.Info,
 ) (string, error) {
-	mgr, closeMgr, err := openSwarmManager(ctx, info)
+	sess, closeSess, err := openSwarmSessions(ctx, info)
 	if err != nil {
 		return "", err
 	}
-	defer closeMgr()
+	defer closeSess()
 	host, _ := os.Hostname()
-	slot, err := resolveSlot(ctx, mgr, c.Slot, host)
+	slot, err := resolveSlot(ctx, sess, c.Slot, host)
 	if err != nil {
 		return "", err
 	}

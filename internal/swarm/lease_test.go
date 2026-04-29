@@ -140,10 +140,10 @@ func TestAcquireFresh_SuccessAndRelease(t *testing.T) {
 		t.Errorf("SessionRevision: zero")
 	}
 
-	// Session record must be visible on a manager separate from
-	// the one Lease owns internally.
-	verifyMgr := openVerifyManager(t, f)
-	got, _, err := verifyMgr.Get(ctx, "rendering")
+	// Session record must be visible on a Sessions handle separate
+	// from the one Lease owns internally.
+	verifySess := openVerifySessions(t, f)
+	got, _, err := verifySess.Get(ctx, "rendering")
 	if err != nil {
 		t.Fatalf("post-acquire Get: %v", err)
 	}
@@ -160,12 +160,12 @@ func TestAcquireFresh_SuccessAndRelease(t *testing.T) {
 	}
 
 	// Release should NOT delete the session record. Verify by opening
-	// a fresh Manager (different from the lease's, which Release just
-	// closed) and reading the slot's record back.
+	// a fresh Sessions handle (different from the lease's, which
+	// Release just closed) and reading the slot's record back.
 	if err := lease.Release(ctx); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	if _, _, err := verifyMgr.Get(ctx, "rendering"); err != nil {
+	if _, _, err := verifySess.Get(ctx, "rendering"); err != nil {
 		t.Errorf("session record gone after Release (expected to persist): %v", err)
 	}
 
@@ -175,18 +175,18 @@ func TestAcquireFresh_SuccessAndRelease(t *testing.T) {
 	}
 }
 
-// openVerifyManager dials NATS at the fixture hub's URL and opens a
-// swarm.Manager that the test owns the lifetime of. Used to read
-// session records the lease wrote, after the lease's own Manager
-// has been closed by Release/Close.
-func openVerifyManager(t *testing.T, f *leaseFixture) *Manager {
+// openVerifySessions dials NATS at the fixture hub's URL and opens a
+// swarm.Sessions handle that the test owns the lifetime of. Used to
+// read session records the lease wrote, after the lease's own
+// Sessions handle has been closed by Release/Close.
+func openVerifySessions(t *testing.T, f *leaseFixture) *Sessions {
 	t.Helper()
-	mgr, _, _, err := openLeaseManager(context.Background(), f.info, nil)
+	sess, _, _, err := openLeaseSessions(context.Background(), f.info, nil)
 	if err != nil {
-		t.Fatalf("openVerifyManager: %v", err)
+		t.Fatalf("openVerifySessions: %v", err)
 	}
-	t.Cleanup(func() { _ = mgr.Close() })
-	return mgr
+	t.Cleanup(func() { _ = sess.Close() })
+	return sess
 }
 
 // TestAcquireFresh_RefusesActiveLiveSession pins the
@@ -323,8 +323,8 @@ func TestCommit_SuccessUpdatesTrunkAndRenewsSession(t *testing.T) {
 	}
 
 	// Capture the pre-commit LastRenewed so we can compare.
-	verifyMgr := openVerifyManager(t, f)
-	preSess, _, err := verifyMgr.Get(ctx, "render")
+	verifySess := openVerifySessions(t, f)
+	preSess, _, err := verifySess.Get(ctx, "render")
 	if err != nil {
 		t.Fatalf("pre-commit Get: %v", err)
 	}
@@ -364,7 +364,7 @@ func TestCommit_SuccessUpdatesTrunkAndRenewsSession(t *testing.T) {
 	}
 
 	// Verify session record's LastRenewed bumped.
-	postSess, _, err := verifyMgr.Get(ctx, "render")
+	postSess, _, err := verifySess.Get(ctx, "render")
 	if err != nil {
 		t.Fatalf("post-commit Get: %v", err)
 	}
@@ -399,14 +399,14 @@ func TestResume_RefusesCrossHost(t *testing.T) {
 	if err := first.Release(ctx); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	verifyMgr := openVerifyManager(t, f)
-	sess, rev, err := verifyMgr.Get(ctx, "ghosthost")
+	verifySess := openVerifySessions(t, f)
+	sess, rev, err := verifySess.Get(ctx, "ghosthost")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	sess.Host = "definitely-not-this-machine.invalid"
-	if err := verifyMgr.Update(ctx, sess, rev); err != nil {
-		t.Fatalf("Update with foreign host: %v", err)
+	if err := verifySess.update(ctx, sess, rev); err != nil {
+		t.Fatalf("update with foreign host: %v", err)
 	}
 
 	_, err = Resume(ctx, f.info, "ghosthost", AcquireOpts{Hub: f.hub})

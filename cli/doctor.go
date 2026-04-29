@@ -60,13 +60,13 @@ func (c *DoctorCmd) runSwarmReport() error {
 		fmt.Printf("  INFO  not in a bones workspace (%v)\n", err)
 		return nil
 	}
-	mgr, closer, err := openSwarmManager(ctx, info)
+	sess, closer, err := openSwarmSessions(ctx, info)
 	if err != nil {
-		fmt.Printf("  WARN  open swarm manager: %v\n", err)
+		fmt.Printf("  WARN  open swarm sessions: %v\n", err)
 		return nil
 	}
 	defer closer()
-	sessions, err := mgr.List(ctx)
+	sessions, err := sess.List(ctx)
 	if err != nil {
 		fmt.Printf("  WARN  list sessions: %v\n", err)
 		return nil

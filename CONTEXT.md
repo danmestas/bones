@@ -80,6 +80,13 @@ Written by `swarm join` (a fresh `Lease.AcquireFresh`), bumped by
 `swarm commit` (`Lease.Commit`), deleted by `swarm close`
 (`Lease.Close`). See ADR 0028.
 
+**Sessions.** The read view across all session records in
+`bones-swarm-sessions` (`swarm.Sessions` type, returned by
+`swarm.Open`). Public reads — `Get`, `List`, `Close` — are consumed
+by `bones swarm status`, `bones doctor`, and CLI slot-resolution
+helpers. Mutations (`put`, `update`, `delete`) are unexported; the
+only legal mutator is `swarm.Lease`. See ADR 0034.
+
 ## Work shape
 
 **Plan.** A markdown file describing the work to do, with task
