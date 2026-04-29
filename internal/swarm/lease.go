@@ -69,6 +69,15 @@ var ErrSessionForeignHost = errors.New(
 	"swarm: session owned by another host — refusing cross-host takeover",
 )
 
+// ErrCrossHostOperation is returned by Resume when the session
+// record's Host field doesn't match this machine's hostname.
+// Cross-host commit / close / status operations would manipulate
+// a leaf process bones can't reach; the right answer is for the
+// operator to run the verb on the owning host.
+var ErrCrossHostOperation = errors.New(
+	"swarm: cross-host operation refused — run the verb on the slot's owning host",
+)
+
 // AcquireOpts tunes AcquireFresh and Resume. Zero-value defaults are
 // production-correct: HubURL → DefaultHubFossilURL, Caps →
 // DefaultCaps, NATSConn dialed from info.NATSURL, Now →
@@ -168,6 +177,13 @@ func AcquireFresh(
 	assert.NotEmpty(info.WorkspaceDir, "swarm.AcquireFresh: info.WorkspaceDir is empty")
 
 	now, hubURL, caps := defaultAcquireOpts(opts)
+	if opts.HubURL == "" && opts.Hub != nil {
+		// In-process hub override (test path): stamp the test hub's
+		// actual HTTP address into the session record so post-commit
+		// pushes land at the live port instead of the production
+		// default.
+		hubURL = opts.Hub.HTTPAddr()
+	}
 	fossilUser := "slot-" + slot
 
 	if err := ensureSlotUser(info.WorkspaceDir, fossilUser, caps); err != nil {
@@ -304,10 +320,15 @@ func writeSessionAndPid(
 // exists in KV. Used by every swarm verb other than join.
 //
 // Resume does NOT re-take the claim — verbs that need a claim
-// (commit, close) re-acquire via Lease.Commit / Lease.Close. This
+// (Lease.Commit / Lease.Close) re-acquire it themselves. This
 // mirrors today's CLI behavior: claim holds have a TTL that
-// outlives a single verb only when bumped by a commit, and the
-// record's LastRenewed is the durable liveness signal.
+// outlives a single verb only when bumped, and the record's
+// LastRenewed is the durable liveness signal.
+//
+// Resume refuses cross-host operations: if the session record's
+// Host field doesn't match this machine, returns
+// ErrCrossHostOperation. The leaf process bones can manipulate
+// lives on the owning host, so the verb has to run there.
 //
 // Returns ErrSessionNotFound if the slot has no record. Returns the
 // underlying NATS / Fossil errors otherwise.
@@ -319,10 +340,7 @@ func Resume(
 	assert.NotEmpty(slot, "swarm.Resume: slot is empty")
 	assert.NotEmpty(info.WorkspaceDir, "swarm.Resume: info.WorkspaceDir is empty")
 
-	now := opts.Now
-	if now == nil {
-		now = func() time.Time { return time.Now().UTC() }
-	}
+	now, _, _ := defaultAcquireOpts(opts)
 
 	mgr, nc, ownsConn, err := openLeaseManager(ctx, info, opts.NATSConn)
 	if err != nil {
@@ -342,6 +360,12 @@ func Resume(
 			return nil, ErrSessionNotFound
 		}
 		return nil, fmt.Errorf("swarm.Resume: read session: %w", err)
+	}
+	host, _ := os.Hostname()
+	if sess.Host != host {
+		cleanup()
+		return nil, fmt.Errorf("%w (slot=%q owner=%q this=%q)",
+			ErrCrossHostOperation, slot, sess.Host, host)
 	}
 
 	hubURL := sess.HubURL
@@ -401,32 +425,251 @@ func (l *Lease) Release(ctx context.Context) error {
 	return nil
 }
 
-// Close terminates the lease and deletes the session record via a
-// CAS gate against the revision the lease holds. Idempotent — a
-// second Close after a successful first is a no-op. After Close,
-// the slot is available for a fresh AcquireFresh.
+// CloseOpts tunes Lease.Close. Zero value is the conservative
+// release-and-cleanup behavior; CloseTaskOnSuccess transitions the
+// lease's task to closed in the bones-tasks bucket.
+type CloseOpts struct {
+	// CloseTaskOnSuccess, when true, calls coord.Leaf.Close on the
+	// re-claimed task — closing the task in the bones-tasks bucket
+	// in addition to releasing the claim hold. False just releases
+	// the claim, leaving the task open for retry by the parent
+	// dispatch. swarm close --result=success sets this true; fail
+	// and fork leave it false.
+	CloseTaskOnSuccess bool
+}
+
+// Close terminates the lease, removes the host-local pid file, and
+// deletes the session record via a CAS gate against the revision
+// the lease holds. When CloseOpts.CloseTaskOnSuccess is true the
+// underlying task is also transitioned to closed in the
+// bones-tasks bucket via Leaf.Close. Idempotent — a second Close
+// after a successful first is a no-op.
 //
-// `bones swarm close` calls this. The CAS gate ensures we don't
-// delete a record some other process renewed; if it raced us, the
-// caller sees ErrCASConflict and can decide whether to re-Resume
-// and retry.
-func (l *Lease) Close(ctx context.Context) error {
+// Steps, in order:
+//
+//  1. Re-claim the lease's task (Resume did not claim it).
+//  2. If CloseTaskOnSuccess: Leaf.Close — closes the task and
+//     releases the claim hold in one operation. Otherwise just
+//     release the claim.
+//  3. Stop the leaf.
+//  4. Remove the host-local pid file.
+//  5. CAS-delete the session record.
+//  6. Tear down the swarm.Manager + NATS connection.
+//
+// `bones swarm close` calls this. The CAS gate on step 5 ensures
+// we don't delete a record some other process renewed; if it raced
+// us, the caller sees the underlying ErrCASConflict and can decide
+// whether to re-Resume and retry.
+func (l *Lease) Close(ctx context.Context, opts CloseOpts) error {
 	assert.NotNil(l, "swarm.Lease.Close: receiver is nil")
 	assert.NotNil(ctx, "swarm.Lease.Close: ctx is nil")
 	if l.released {
 		return nil
 	}
+	if err := l.closeTaskAndReleaseClaim(ctx, opts.CloseTaskOnSuccess); err != nil {
+		_ = l.releaseUnderlying()
+		return err
+	}
+	if l.leaf != nil {
+		_ = l.leaf.Stop()
+		l.leaf = nil
+	}
+	if err := os.Remove(SlotPidFile(l.info.WorkspaceDir, l.slot)); err != nil &&
+		!os.IsNotExist(err) {
+		_ = l.releaseUnderlying()
+		return fmt.Errorf("swarm.Lease.Close: remove pid file: %w", err)
+	}
 	if l.mgr != nil && l.rev != 0 {
 		if err := l.mgr.Delete(ctx, l.slot, l.rev); err != nil &&
-			!errors.Is(err, ErrNotFound) {
-			// Best-effort cleanup of the underlying resources even on
-			// CAS failure; the caller decides whether to retry the
-			// delete after re-Resume.
+			!errors.Is(err, ErrNotFound) && !errors.Is(err, ErrCASConflict) {
 			_ = l.releaseUnderlying()
 			return fmt.Errorf("swarm.Lease.Close: delete record: %w", err)
 		}
 	}
 	return l.releaseUnderlying()
+}
+
+// closeTaskAndReleaseClaim acquires a claim on the lease's task
+// (or reuses the one AcquireFresh already took) and either closes
+// the task (success) or releases the claim (fail/fork). Pulled out
+// so Close stays under the funlen lint cap.
+//
+// AcquireFresh leaves an active claim on the lease so AcquireFresh
+// → Close in a single CLI invocation reuses it; Resume → Close
+// (the more common path) re-claims here.
+func (l *Lease) closeTaskAndReleaseClaim(ctx context.Context, closeTask bool) error {
+	if l.leaf == nil {
+		return nil
+	}
+	claim := l.claim
+	if claim == nil {
+		c, err := l.leaf.Claim(ctx, coord.TaskID(l.taskID))
+		if err != nil {
+			return fmt.Errorf("swarm.Lease.Close: re-claim for close: %w", err)
+		}
+		claim = c
+	}
+	l.claim = nil // ownership transfers to the close-or-release call below
+	if closeTask {
+		if err := l.leaf.Close(ctx, claim); err != nil {
+			return fmt.Errorf("swarm.Lease.Close: leaf close: %w", err)
+		}
+		return nil
+	}
+	if err := claim.Release(); err != nil {
+		return fmt.Errorf("swarm.Lease.Close: release claim: %w", err)
+	}
+	return nil
+}
+
+// CommitResult is the outcome of Lease.Commit. UUID is set on every
+// successful local commit. PushResult is set when the post-commit
+// HTTP push to the hub succeeded; PushErr is set when it failed
+// (the local commit lands either way). RenewErr is set when the
+// session-record CAS-bump failed (the commit succeeded but the
+// session may TTL out before the next verb runs). Callers should
+// print warnings for the soft errors but should not roll back the
+// local commit on either of them.
+type CommitResult struct {
+	UUID       string
+	PushResult *libfossil.SyncResult
+	PushErr    error
+	RenewErr   error
+}
+
+// Commit takes a fresh claim on the lease's task, announces holds
+// for the file paths, commits the bytes via the underlying
+// coord.Leaf, releases the claim, stops the leaf, HTTP-pushes the
+// slot's leaf.fossil to the hub via /xfer, and CAS-bumps
+// LastRenewed on the session record.
+//
+// Returns CommitResult with the local-commit UUID always set on
+// success. PushResult / PushErr report the hub-push outcome; the
+// hub may be unreachable without rolling back the local commit.
+// RenewErr reports the session-record CAS bump; CAS conflicts are
+// silently treated as success (a sibling renewer raced and bumped
+// the TTL on our behalf).
+//
+// After Commit returns, the lease's underlying coord.Leaf has been
+// stopped — the push path needs an exclusive libfossil.Repo handle
+// on leaf.fossil. The lease can still be Released or Closed; doing
+// other verb work on the lease's leaf after Commit is undefined
+// and would have to re-Resume.
+func (l *Lease) Commit(
+	ctx context.Context, message string, files []coord.File,
+) (CommitResult, error) {
+	assert.NotNil(l, "swarm.Lease.Commit: receiver is nil")
+	assert.NotNil(ctx, "swarm.Lease.Commit: ctx is nil")
+	if l.leaf == nil {
+		return CommitResult{}, fmt.Errorf("swarm.Lease.Commit: leaf already stopped")
+	}
+	uuid, err := commitViaLeaf(ctx, l.leaf, l.taskID, message, files)
+	if err != nil {
+		return CommitResult{}, err
+	}
+	// Stop the leaf BEFORE pushing so the agent's libfossil.Repo
+	// handle is closed; pushLeafFossil opens its own handle on
+	// leaf.fossil cleanly.
+	_ = l.leaf.Stop()
+	l.leaf = nil
+
+	pushRes, pushErr := pushLeafFossil(ctx, l.info.WorkspaceDir, l.slot, l.fossilUser, l.hubURL)
+	renewErr := l.renewSessionAfterCommit(ctx)
+
+	return CommitResult{
+		UUID:       uuid,
+		PushResult: pushRes,
+		PushErr:    pushErr,
+		RenewErr:   renewErr,
+	}, nil
+}
+
+// renewSessionAfterCommit bumps LastRenewed via CAS so the bucket
+// TTL extends beyond the next slot heartbeat window. CAS conflict
+// is treated as success — a sibling commit raced ours and the
+// other writer's update already extended the TTL.
+func (l *Lease) renewSessionAfterCommit(ctx context.Context) error {
+	if l.mgr == nil || l.rev == 0 {
+		return nil
+	}
+	sess, rev, err := l.mgr.Get(ctx, l.slot)
+	if err != nil {
+		return fmt.Errorf("swarm.Lease.Commit: re-read session for renew: %w", err)
+	}
+	sess.LastRenewed = l.now()
+	if err := l.mgr.Update(ctx, sess, rev); err != nil {
+		if errors.Is(err, ErrCASConflict) {
+			return nil
+		}
+		return fmt.Errorf("swarm.Lease.Commit: renew session: %w", err)
+	}
+	l.rev = rev + 1 // best-effort; next Get re-syncs anyway
+	return nil
+}
+
+// commitViaLeaf re-claims the lease's task on the freshly-Resumed
+// leaf, announces holds for the file paths, commits, and releases.
+// Mirrors what cli/swarm_commit.go::commitViaLeaf used to do
+// directly — pulled into the swarm package so the CLI verb is just
+// flag-parsing + Lease.Commit.
+func commitViaLeaf(
+	ctx context.Context, leaf *coord.Leaf, taskID, message string, files []coord.File,
+) (string, error) {
+	claim, err := leaf.Claim(ctx, coord.TaskID(taskID))
+	if err != nil {
+		return "", fmt.Errorf("swarm.Lease.Commit: re-claim task %q: %w", taskID, err)
+	}
+	defer func() { _ = claim.Release() }()
+	paths := make([]string, 0, len(files))
+	for _, f := range files {
+		paths = append(paths, f.Path)
+	}
+	releaseHolds, err := leaf.AnnounceHolds(ctx, paths)
+	if err != nil {
+		return "", fmt.Errorf("swarm.Lease.Commit: announce holds: %w", err)
+	}
+	defer releaseHolds()
+	uuid, err := leaf.Commit(ctx, claim, files, coord.WithMessage(message))
+	if err != nil {
+		return "", fmt.Errorf("swarm.Lease.Commit: leaf commit: %w", err)
+	}
+	return uuid, nil
+}
+
+// pushLeafFossil HTTP-pushes the slot's leaf.fossil to the hub via
+// libfossil's /xfer transport. The two NATS deployments are
+// separate by design (hub NATS vs. workspace leaf NATS), so the
+// post-commit announce doesn't reach the hub's /xfer subscriber —
+// the explicit HTTP push here is what makes the commit visible to
+// `bones peek` and the hub timeline.
+//
+// Soft-fail-friendly: returns SyncResult and error separately so
+// the caller can warn on push failure without rolling back the
+// local commit.
+func pushLeafFossil(
+	ctx context.Context, workspaceDir, slot, fossilUser, hubURL string,
+) (*libfossil.SyncResult, error) {
+	leafRepoPath := filepath.Join(SlotDir(workspaceDir, slot), "leaf.fossil")
+	leafRepo, err := libfossil.Open(leafRepoPath)
+	if err != nil {
+		return nil, fmt.Errorf("swarm: open leaf repo for push: %w", err)
+	}
+	defer func() { _ = leafRepo.Close() }()
+	projectCode, err := leafRepo.Config("project-code")
+	if err != nil {
+		return nil, fmt.Errorf("swarm: read project-code: %w", err)
+	}
+	transport := libfossil.NewHTTPTransport(hubURL)
+	res, err := leafRepo.Sync(ctx, transport, libfossil.SyncOpts{
+		Push:        true,
+		Pull:        false,
+		User:        fossilUser,
+		ProjectCode: projectCode,
+	})
+	if err != nil {
+		return res, fmt.Errorf("swarm: sync push: %w", err)
+	}
+	return res, nil
 }
 
 // releaseUnderlying tears down the leaf + claim + manager + NATS
@@ -473,23 +716,11 @@ func (l *Lease) WT() string {
 	return l.leaf.WT()
 }
 
-// Leaf returns the underlying coord.Leaf. ESCAPE HATCH —
-// deprecated on arrival. Present so cli/swarm_commit.go and
-// cli/swarm_close.go can be migrated to use Lease in PR B and C
-// without porting their full code in PR A. Will be removed once
-// all swarm verbs use Lease's typed methods.
-func (l *Lease) Leaf() *coord.Leaf { return l.leaf }
-
 // SessionRevision returns the JetStream KV revision the lease
-// captured at acquisition. Callers that want to do their own CAS
-// updates against the session record (e.g. a future commit-without-
-// claim path) can pass this to swarm.Manager.Update.
+// captured at acquisition. Test-only utility — callers that want
+// to inspect the underlying record can pair this with a separate
+// swarm.Manager.Get; production verbs go through Commit / Close.
 func (l *Lease) SessionRevision() uint64 { return l.rev }
-
-// Manager returns the lease's swarm.Manager. Same escape-hatch
-// caveat as Leaf — used during migration; will be encapsulated
-// once Lease.Commit / Lease.Close cover all swarm verbs.
-func (l *Lease) Manager() *Manager { return l.mgr }
 
 // ensureSlotUser creates the slot's fossil user on the hub repo
 // if missing. The role-guard for "workspace not bootstrapped" lives

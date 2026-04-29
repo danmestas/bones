@@ -140,9 +140,10 @@ func TestAcquireFresh_SuccessAndRelease(t *testing.T) {
 		t.Errorf("SessionRevision: zero")
 	}
 
-	// Session record must be visible on the manager.
-	mgr := lease.Manager()
-	got, _, err := mgr.Get(ctx, "rendering")
+	// Session record must be visible on a manager separate from
+	// the one Lease owns internally.
+	verifyMgr := openVerifyManager(t, f)
+	got, _, err := verifyMgr.Get(ctx, "rendering")
 	if err != nil {
 		t.Fatalf("post-acquire Get: %v", err)
 	}
@@ -164,7 +165,6 @@ func TestAcquireFresh_SuccessAndRelease(t *testing.T) {
 	if err := lease.Release(ctx); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
-	verifyMgr := openVerifyManager(t, f)
 	if _, _, err := verifyMgr.Get(ctx, "rendering"); err != nil {
 		t.Errorf("session record gone after Release (expected to persist): %v", err)
 	}
@@ -264,11 +264,11 @@ func TestResume_AfterAcquireFresh(t *testing.T) {
 	}
 }
 
-// TestClose_DeletesRecord pins the Close contract: removes the
-// session record (CAS-gated against the lease's revision) and
-// stops the underlying leaf. After Close, AcquireFresh on the
+// TestClose_DeletesRecordAndPidFile pins the Close contract:
+// removes the session record (CAS-gated), removes the host-local
+// pid file, and stops the leaf. After Close, AcquireFresh on the
 // same slot must succeed without --force.
-func TestClose_DeletesRecord(t *testing.T) {
+func TestClose_DeletesRecordAndPidFile(t *testing.T) {
 	f := newLeaseFixture(t)
 	holdPath := filepath.Join(f.dir, "audio", "hello.txt")
 	taskID := string(f.createTask(t, "audio-task-1", holdPath))
@@ -280,8 +280,15 @@ func TestClose_DeletesRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first AcquireFresh: %v", err)
 	}
-	if err := first.Close(ctx); err != nil {
+	pidPath := SlotPidFile(f.dir, "audio")
+	if _, err := os.Stat(pidPath); err != nil {
+		t.Fatalf("pre-Close pid file missing: %v", err)
+	}
+	if err := first.Close(ctx, CloseOpts{CloseTaskOnSuccess: true}); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+	if _, err := os.Stat(pidPath); !os.IsNotExist(err) {
+		t.Errorf("pid file should be gone after Close: err=%v", err)
 	}
 
 	// Second acquire on same slot without --force should now succeed.
@@ -292,4 +299,118 @@ func TestClose_DeletesRecord(t *testing.T) {
 		t.Fatalf("post-Close AcquireFresh: %v", err)
 	}
 	t.Cleanup(func() { _ = second.Release(ctx) })
+}
+
+// TestCommit_SuccessUpdatesTrunkAndRenewsSession covers the happy
+// path: claim → AnnounceHolds → Leaf.Commit → release → leaf stop
+// → push to hub → renew session. UUID is non-empty, push result
+// is set (in-process hub accepts the HTTP /xfer push), the
+// session record's LastRenewed bumps.
+func TestCommit_SuccessUpdatesTrunkAndRenewsSession(t *testing.T) {
+	f := newLeaseFixture(t)
+	holdPath := filepath.Join(f.dir, "render", "hello.txt")
+	taskID := string(f.createTask(t, "render-commit-1", holdPath))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	lease, err := AcquireFresh(ctx, f.info, "render", taskID, AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("AcquireFresh: %v", err)
+	}
+	if err := lease.Release(ctx); err != nil {
+		t.Fatalf("Release after AcquireFresh: %v", err)
+	}
+
+	// Capture the pre-commit LastRenewed so we can compare.
+	verifyMgr := openVerifyManager(t, f)
+	preSess, _, err := verifyMgr.Get(ctx, "render")
+	if err != nil {
+		t.Fatalf("pre-commit Get: %v", err)
+	}
+	preRenewed := preSess.LastRenewed
+
+	// Sleep a single tick so LastRenewed is observably newer.
+	time.Sleep(10 * time.Millisecond)
+
+	resumed, err := Resume(ctx, f.info, "render", AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	wt := resumed.WT()
+	if err := os.WriteFile(filepath.Join(wt, "hello.txt"), []byte("world"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	files := []coord.File{{
+		Path:    holdPath,
+		Name:    "hello.txt",
+		Content: []byte("world"),
+	}}
+	res, err := resumed.Commit(ctx, "test commit", files)
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if res.UUID == "" {
+		t.Errorf("Commit: empty UUID")
+	}
+	if res.PushErr != nil {
+		t.Errorf("Commit: PushErr=%v (in-process hub should accept push)", res.PushErr)
+	}
+	if res.PushResult == nil {
+		t.Errorf("Commit: PushResult nil")
+	}
+	if res.RenewErr != nil {
+		t.Errorf("Commit: RenewErr=%v", res.RenewErr)
+	}
+
+	// Verify session record's LastRenewed bumped.
+	postSess, _, err := verifyMgr.Get(ctx, "render")
+	if err != nil {
+		t.Fatalf("post-commit Get: %v", err)
+	}
+	if !postSess.LastRenewed.After(preRenewed) {
+		t.Errorf("LastRenewed did not advance: pre=%v post=%v", preRenewed, postSess.LastRenewed)
+	}
+
+	if err := resumed.Release(ctx); err != nil {
+		t.Errorf("Release: %v", err)
+	}
+}
+
+// TestResume_RefusesCrossHost pins the new Resume cross-host
+// guard. A session whose Host field doesn't match this machine
+// must be rejected with ErrCrossHostOperation rather than
+// reconstructing a leaf the caller can't actually drive.
+func TestResume_RefusesCrossHost(t *testing.T) {
+	f := newLeaseFixture(t)
+	holdPath := filepath.Join(f.dir, "ghosthost", "hello.txt")
+	taskID := string(f.createTask(t, "ghosthost-task-1", holdPath))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// AcquireFresh writes the session record stamped with the local
+	// host. Manually rewrite Host to a foreign hostname to simulate
+	// the cross-host case without standing up a second machine.
+	first, err := AcquireFresh(ctx, f.info, "ghosthost", taskID, AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("AcquireFresh: %v", err)
+	}
+	if err := first.Release(ctx); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	verifyMgr := openVerifyManager(t, f)
+	sess, rev, err := verifyMgr.Get(ctx, "ghosthost")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	sess.Host = "definitely-not-this-machine.invalid"
+	if err := verifyMgr.Update(ctx, sess, rev); err != nil {
+		t.Fatalf("Update with foreign host: %v", err)
+	}
+
+	_, err = Resume(ctx, f.info, "ghosthost", AcquireOpts{Hub: f.hub})
+	if !errors.Is(err, ErrCrossHostOperation) {
+		t.Fatalf("Resume: want ErrCrossHostOperation, got %v", err)
+	}
 }
