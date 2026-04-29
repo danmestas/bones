@@ -1,6 +1,7 @@
 # ADR 0028 — Bones swarm: verbs and lease
 
 **Status:** Accepted (2026-04-28, lease merge 2026-04-29)
+**Refined by:** ADR 0033 — Lease lifecycle encoded in two compile-time-distinct types (`FreshLease`, `ResumedLease`); `coord.Path` newtype
 
 ## Context
 

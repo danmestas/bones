@@ -61,7 +61,12 @@ claim hold, and the session record. Acquired fresh by `swarm join`
 (creates the session record), resumed by `swarm commit` and
 `swarm close` (read existing record). One lease per CLI invocation;
 the persistent state across invocations is the session record in
-`bones-swarm-sessions[slot]`, not the lease itself. See ADR 0028.
+`bones-swarm-sessions[slot]`, not the lease itself. The lifecycle is
+encoded in two compile-time-distinct types: **`FreshLease`** (returned
+by `swarm.Acquire`, used by `swarm join`) and **`ResumedLease`**
+(returned by `swarm.Resume`, used by every other verb). Each lifecycle
+transition consumes the receiver; double-acquire, post-close use, and
+`Close`-without-`Resume` are compile errors. See ADRs 0028 and 0033.
 
 **Claim.** An exclusive bind between an agent and a task. Backed by
 a fossil-recorded ownership marker plus a hold. Released when the
@@ -70,6 +75,15 @@ task is closed or the lease ends. See ADR 0007.
 **Hold.** A scoped exclusive resource lock with a TTL, used to gate
 claim handoff and reclamation. Lives in `bones-holds` (NATS
 JetStream KV). See ADR 0007 (claim lifecycle).
+
+**Path.** A typed coordination key for a workspace file
+(`coord.Path`). A newtype around `string`, constructed via
+`Path.FromRelative(workspaceDir, rel)` or `Path.FromAbsolute(abs)`,
+validated at construction (must resolve inside the workspace's
+working tree; trailing slashes stripped). `Holds` and `coord`
+interfaces accept `Path` instead of `string`; `coord.File.Path` is a
+`Path`. The newtype owns absolute-vs-relative-vs-key conversion so
+no caller hand-rolls normalization. See ADR 0033.
 
 **Session record.** The per-slot row in
 `bones-swarm-sessions[slot]` (`swarm.Session` type) that ties a
