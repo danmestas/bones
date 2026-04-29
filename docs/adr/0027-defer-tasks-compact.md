@@ -1,8 +1,6 @@
 # ADR 0027: Defer `bones tasks compact`
 
-**Status:** accepted
-
-**Date:** 2026-04-28
+**Status:** Accepted (2026-04-28)
 
 ## Context
 
@@ -89,3 +87,10 @@ Specifically kept:
 - ADR 0016: closed-task compaction (substrate decisions still apply)
 - ADR 0024: orchestrator fossil checkout — fresh-start wipe
 - Memory: `feedback_no-bones-memory-system`
+
+## Review trigger
+
+- **Review date:** 2026-09-30 (six months from acceptance).
+- **Delete condition:** if no consumer for `coord.Compact` materializes by the review date, delete the substrate code (`internal/coord/compact.go`, the `Summarizer` interface) entirely. ADR 0027 then closes ADR 0016's compaction substrate.
+- **Owner:** repo maintainer
+- **Re-bind condition:** if a TUI, scheduled job, or external service emerges that needs compaction, re-bind via a new ADR rather than reviving the deleted CLI verb.

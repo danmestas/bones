@@ -1,8 +1,7 @@
 # ADR 0035: Inline `internal/autoclaim` into `cli/tasks_autoclaim.go`
 
-**Status:** accepted
-
-**Date:** 2026-04-29
+**Status:** Accepted (2026-04-29)
+**Supersedes (in part):** ADR 0021 (autoclaim half) — `internal/autoclaim` failed the deletion test and was inlined into `cli/tasks_autoclaim.go`. The dispatch half of ADR 0021 remains in force.
 
 ## Context
 

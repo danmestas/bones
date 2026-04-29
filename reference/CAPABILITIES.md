@@ -52,7 +52,7 @@ Per ADR 0005, task records live in a NATS JetStream KV bucket
 (`bones-tasks`), not in YAML files on disk. That changes the
 storage substrate for every row below; task state is CAS-gated and
 conflict resolution is one round trip with a deterministic winner
-(ADR 0006: fossil fork-as-merge is narrowed to code artifacts only).
+(ADR 0004 §Scope amendments: fossil fork-as-merge is narrowed to code artifacts only).
 
 | Beads | bones equivalent | Status | Notes |
 |---|---|---|---|

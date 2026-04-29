@@ -235,6 +235,29 @@ a future phase is source-compatible: existing records decode, existing
 Ready filtering ignores unknown types (invariant 26). The only breaking
 direction is *removing* a type, which we don't plan to do.
 
+## Accepted trade-offs
+
+**Cascade semantics for `supersedes` are intentionally non-transitive.**
+If A supersedes B and B supersedes C, A is *not* treated as superseding
+C. Each edge is one hop. A Ready filter on C fires only if B has a
+`supersedes C` edge and B is non-closed; if B closes, C unhides
+regardless of A's existence. We accept the missing transitive
+supersession in exchange for an O(1)-per-target Ready scan — the
+filter checks one set membership rather than walking a graph. Adding
+transitive cascade would force `Ready()` into a transitive-closure
+computation on every call, with no concrete use case proving the
+correctness payoff is worth the cost. Operators who need transitive
+supersession can mark the chain explicitly (A supersedes B *and* A
+supersedes C) at write time; the storage cost is one extra edge per
+hop and the read path stays cheap.
+
+**`discovered-from` edges do not auto-close with the discovering task.**
+Edges are independent of task lifecycle. Closing the discovering
+task leaves the `discovered-from` edge in place as audit data on the
+discovered task's record. Matches the "fossil timeline is the audit
+trail" posture from ADR 0010 — historical relationships are
+preserved, not garbage-collected.
+
 ## Open Questions
 
 1. **Should `Link` require `from` to not be closed?** Linking from a closed
@@ -243,21 +266,7 @@ direction is *removing* a type, which we don't plan to do.
    with a new sentinel. Scoped out for now; the honest story is "edges on
    closed tasks are historical record, not active constraint."
 
-2. **Cascade semantics for `supersedes`.** If A supersedes B and B
-   supersedes C, should A also be treated as superseding C? The ADR does
-   not chain — each edge is one hop. A Ready filter on C only fires if B
-   has a `supersedes C` edge and B is non-closed. If B is closed, C
-   unhides regardless of A's existence. This keeps the filter O(1) per
-   target at the cost of missing chained-supersession. Deferred; likely
-   not worth the complexity.
-
-3. **Should `discovered-from` edges auto-close with the discovering
-   task?** No — edges are independent of task lifecycle. If you close the
-   discovering task, the `discovered-from` edge remains as audit data on
-   its record. Matches the "fossil timeline is the audit trail" posture
-   from ADR 0010.
-
-4. **Reverse-lookup helper.** Today there's no public API to ask "what
+2. **Reverse-lookup helper.** Today there's no public API to ask "what
    edges point at task T?" — outgoing-only storage means callers would
    scan all tasks. `Ready()` and the future `Blocked()` build the
    reverse index internally. If an external consumer needs reverse

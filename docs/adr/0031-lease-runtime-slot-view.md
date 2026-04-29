@@ -1,8 +1,6 @@
 # ADR 0031: Lease as the runtime view of a slot
 
-**Status:** accepted
-
-**Date:** 2026-04-29
+**Status:** Accepted (2026-04-29)
 
 ## Context
 

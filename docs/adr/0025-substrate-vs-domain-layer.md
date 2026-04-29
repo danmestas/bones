@@ -1,8 +1,6 @@
 # ADR 0025: Substrate vs. domain layering
 
-**Status:** accepted
-
-**Date:** 2026-04-28
+**Status:** Accepted (2026-04-28)
 
 ## Context
 
@@ -37,7 +35,7 @@ a path-and-lint contract.
 This ADR documents the layering and locks it via lint. It does **not**
 redraw which symbols belong on which side. A follow-up review of the
 public API of `internal/coord/` is needed to identify domain-leaked
-symbols (tracked separately).
+symbols — see `docs/architecture-backlog.md` candidate 4.
 
 ## Known exceptions
 
@@ -56,9 +54,9 @@ relocation. They are **omitted** from the depguard `deny` list in
 `.golangci.yml` rather than skipped per-file, so the rule remains a
 hard build break for any *new* substrate→domain import. Addressing
 the existing inversion (likely by moving the impacted types into
-`internal/coord/` or extracting a third "core" package) is tracked as
-follow-up work; redrawing those boundaries is explicitly out of scope
-for this phase.
+`internal/coord/` or extracting a third "core" package) is the work
+named in `docs/architecture-backlog.md` candidate 4; redrawing those
+boundaries is explicitly out of scope for this phase.
 
 The remaining three domain packages — `internal/dispatch`,
 `internal/autoclaim`, `internal/compactanthropic` — are clean today
@@ -81,3 +79,10 @@ and the depguard rule keeps them that way.
 - ADR 0008 (substrate/transport)
 - ADR 0009 (coord package shape)
 - ADR 0010 (NATS subject layout)
+
+## Review trigger
+
+- **Review date:** 2026-09-30
+- **Delete condition:** if the substrate→domain inversions in `tasks` and `holds` are resolved (architecture-backlog candidate 4), this ADR's exception list closes; the ADR's body remains as the layering principle. If the inversions are NOT resolved by 2026-09-30, re-examine whether the layering rule itself needs to change.
+- **Owner:** repo maintainer
+- **Closes:** the deferred follow-up named in this ADR's Decision section.

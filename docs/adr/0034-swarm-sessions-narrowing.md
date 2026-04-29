@@ -1,6 +1,6 @@
 # ADR 0034: Narrow swarm.Manager to swarm.Sessions
 
-**Status:** accepted
+**Status:** Accepted (2026-04-29) — partial. Same-package callers (notably swarm.Lease) can still reach the unexported surface; full encapsulation requires the package split planned in docs/architecture-backlog.md §3.
 
 **Date:** 2026-04-29
 
@@ -93,6 +93,10 @@ hypothetical `Lease.ResolveActiveSlot(ctx, info, host)` static-style
 helper was rejected — it forces caller code to call a method on a
 type that hasn't been instantiated yet. Sessions keeps its own
 identity: the read view across all session records.
+
+## Known limitation
+
+The narrowing is performed via Go visibility within a single package. swarm.Lease (same package) continues to call put/update/delete directly. This makes the invariant a convention, not a compile-time guarantee. The completion path is `architecture-backlog.md` candidate 3 (define a `sessionStore` adapter interface, or move Lease into its own package).
 
 ## Consequences
 

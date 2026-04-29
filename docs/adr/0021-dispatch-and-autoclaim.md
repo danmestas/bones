@@ -1,8 +1,8 @@
 # ADR 0021: Dispatch and auto-claim — orchestration above coord
 
-## Status
+**Status:** Accepted (2026-04-26) — autoclaim half **superseded by ADR 0035** (2026-04-29); dispatch half remains in force.
 
-Accepted 2026-04-22. Phase 6 orchestration layer. Builds on ADR 0007
+Phase 6 orchestration layer. Builds on ADR 0007
 (claim semantics), ADR 0010 (commit semantics, fork branches), and ADR
 0013 (Reclaim + claim epoch). Compressed from four plans
 (`harness-autoclaim-loop`, `harness-subagent-dispatch`,
@@ -38,6 +38,8 @@ The four questions:
 ## Decision
 
 ### 1. Auto-claim — single-tick package above coord
+
+**Superseded note (2026-04-29):** ADR 0035 inlined `internal/autoclaim` into `cli/tasks_autoclaim.go` after the deletion-test re-evaluation. The text below describes the original split; read ADR 0035 for the current shape.
 
 Policy lives in `internal/autoclaim`, not in `coord`. coord stays a
 primitive package; orchestration is a separate layer.

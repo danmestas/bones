@@ -182,6 +182,20 @@ agent-B can Reclaim after the presence TTL window elapses. That harness
 retires the remaining chaos bullet in README Phase 5 and closes the la2
 ticket at the same time.
 
+## Accepted trade-offs
+
+**Reclaim stays an explicit verb; it does not auto-path into Claim.** We
+expose Reclaim as an explicit verb so liveness-failure decisions are
+auditable; auto-pathing into Claim would hide the recovery point. The
+caller is asserting "I believe the previous claimer is dead, and I accept
+responsibility for the task's work-in-progress state" — that assertion
+deserves to be visible at the call site and in code review. Cost:
+callers must check explicitly (a Claim on a claimed-but-dead task
+returns `ErrTaskAlreadyClaimed`; the caller switches to Reclaim). We
+take that cost on purpose: the wrong-decision failure mode of an
+invisible takeover is silent corruption, which is harder to diagnose
+than a loud "you used the wrong verb."
+
 ## Open Questions
 
 1. **What if A is actually dead but its presence entry is still within the
@@ -197,9 +211,3 @@ ticket at the same time.
    because the state machine is uniform: a claim is a claim regardless of
    in-flight commits. The cost is one extra CAS cycle for a case that
    could short-circuit — not worth the code-path divergence.
-
-3. **Should Reclaim be pushed down into `Claim` as an auto-path later?**
-   Deferred. The explicit-API posture lets callers and reviewers see
-   takeover sites; if operational experience shows callers always want
-   the auto-path, we can add it. Going the other direction (removing
-   auto-takeover after it ships) is harder.

@@ -1,7 +1,7 @@
 # ADR 0018: EdgeSync refactor — coord wraps leaf.Agent, not libfossil directly
 
 **Status:** Accepted (2026-04-26)
-**Supersedes:** None
+**Supersedes (in part):** ADR 0023 (hub-leaf orchestrator) — replaces the original "coord wraps libfossil directly" wiring with EdgeSync (`leaf.Agent`).
 **Related:** ADR 0008 (chat substrate), trial reports
 `docs/trials/2026-04-25/trial-report.md` (pre-refactor, trials #1–15)
 and `docs/trials/2026-04-26/trial-report.md` (post-refactor, Phase 2)
@@ -98,21 +98,7 @@ benefit.
 - **Phase 2 → Phase 3 gate (N=4 at human cadence, P99 < 5s, zero
   unrecoverable forks):** PASSED with massive margin.
 
-### Negative / known limitations
-
-- **EdgeSync coupling:** bones now depends on
-  `github.com/danmestas/EdgeSync/leaf`. Any sync-protocol change
-  upstream may require coord changes. Trade-off: we get EdgeSync's
-  NATS mesh, iroh peer-to-peer support, telemetry plumbing for free.
-- **NATS server data race under -race:** the in-process trial harness
-  hits a real data race inside `nats-server/v2` (server/stream.go vs
-  jetstream_api.go) when multiple agents create JetStream streams
-  concurrently. Worked around with a 10ms stagger in
-  `examples/hub-leaf-e2e/main.go`. Race is upstream, not in coord.
-- **N=100 hub-side serve-nats backlog:** 2% commit propagation gap at
-  the 30s waitHubCommits deadline. Not a fork or correctness issue;
-  hub-side throughput ceiling. Production cadence (1 commit/min/agent)
-  doesn't approach this.
+**Known limitations:** moved to docs/architecture-backlog.md §7 (date 2026-04-29).
 
 ## Implementation
 

@@ -350,8 +350,8 @@ are ignored by Ready's reverse-index pass. ADR 0014.
 Invariants 6 and 7 are the load-bearing guarantees of ADR 0002 (scoped holds via
 closure/return-release). Invariant 10 is the no-error-swallowing corollary to ADR 0003
 (substrate hiding). Invariants 11-16 are entailed by ADRs 0005 (tasks in NATS KV)
-and 0007 (Claim task-CAS ordering); ADR 0006 is the narrowing that made those
-invariants the task-conflict contract rather than fork-merge policy. Invariant 17
+and 0007 (Claim task-CAS ordering); ADR 0004 §Scope amendments is the narrowing
+that made those invariants the task-conflict contract rather than fork-merge policy. Invariant 17
 is entailed by ADR 0008 (chat substrate). Invariants 18-19 are entailed by ADR 0009
 (presence substrate). Invariants 20-23 are entailed by ADR 0010 (code artifacts:
 hold-gated commits, fork-on-conflict, unique fork branch names, merge-to-single-commit).

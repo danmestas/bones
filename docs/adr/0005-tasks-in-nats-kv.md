@@ -4,7 +4,7 @@
 
 Accepted 2026-04-19. Supersedes the README "tasks-as-files-in-fossil" plan
 (Phase 2, §Initial plan). ADR 0004's task-state language is narrowed to
-code artifacts only by ADR 0006.
+code artifacts only by ADR 0004 §Scope amendments.
 
 ## Context
 
@@ -41,8 +41,8 @@ is a direct template for the Phase 2 tasks package.
 Fossil remains the right substrate for **code**. Code is commit-shaped —
 developers and agents both benefit from timeline, blame, and merge. The
 fork-and-notify posture of ADR 0004 still applies to code artifacts when
-fossil lands in Phase 5+. It just no longer describes task state; ADR 0006
-records that narrowing.
+fossil lands in Phase 5+. It just no longer describes task state; ADR 0004
+§Scope amendments records that narrowing.
 
 ## Decision
 
@@ -127,8 +127,8 @@ error with no intermediate fork state to reconcile. That is what Phase 2's
 `ErrTaskAlreadyClaimed` sentinel is for.
 
 Task-state conflict is no longer a resolution surface. ADR 0004's
-fork-plus-notify model narrows to code artifacts. ADR 0006 records that
-narrowing and puts the superseding note at the top of 0004.md.
+fork-plus-notify model narrows to code artifacts; the §Scope amendments
+section in 0004 records that narrowing.
 
 Ready-scan cost scales with the total number of task entries in the
 bucket, including closed ones, because JetStream KV does not natively
@@ -148,7 +148,7 @@ TaskID format is fixed by this ADR. Changing the alphabet, length, or
 shape later would be an API break per invariant 15 and would require a
 new ADR plus a migration story for existing bucket contents.
 
-Invariants 11–16 (documented in docs/invariants.md per ADR 0006 /
+Invariants 11–16 (documented in docs/invariants.md per ADR 0004 §Scope amendments /
 issue agent-infra-gi7, with invariant 16 added by ADR 0007) are the
 contract surface of this decision. Every `coord` method that touches
 task state asserts against them at entry or exit: claimed_by/status

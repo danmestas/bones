@@ -1,8 +1,6 @@
 # ADR 0030: Real-substrate tests over mocks for substrate behavior
 
-**Status:** accepted
-
-**Date:** 2026-04-29
+**Status:** Accepted (2026-04-29)
 
 ## Context
 

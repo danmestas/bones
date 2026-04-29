@@ -5,7 +5,7 @@
 Accepted 2026-04-19. Drives Phase 5 implementation of `coord.Commit`,
 `coord.Checkout`, `coord.Open` (file read), `coord.Diff`, and
 `coord.Merge`. Operationalizes ADR 0004 (fork plus chat-notify) for
-code artifacts per the narrowing in ADR 0006.
+code artifacts per the narrowing in ADR 0004 §Scope amendments.
 
 ## Context
 
@@ -181,7 +181,7 @@ thin-wrapping coord) may call `Merge`; Phase 5 does not introduce a
 supervisor role. Role-based authorization is a Phase 8+ concern,
 matching ADR 0009's deferral of the admin role.
 
-This is consistent with ADR 0004 as narrowed by ADR 0006: fork plus
+This is consistent with ADR 0004 as narrowed by its Scope amendments: fork plus
 chat-notify is the resolution posture for code artifacts, the chat
 thread is where humans or supervisor agents converge on the resolving
 merge, and the merge itself is the next commit referencing both
@@ -375,8 +375,6 @@ is considered concretized by this landing; no further follow-up.
   Fossil UUIDs in signatures.
 - **ADR 0004** — fork-plus-chat-notify for conflicts; this ADR is
   the code-artifact operationalization.
-- **ADR 0006** — narrows ADR 0004 to code only; this ADR is the
-  code-substrate landing of that narrowing.
 - **ADR 0007** — Claim orders task-CAS before holds; a `Claim`
   followed by `Commit` and then release is the canonical write path.
 - **ADR 0008** — chat as notify-backed substrate; the conflict
