@@ -1,9 +1,11 @@
 package dispatch
 
-import "github.com/danmestas/bones/internal/coord"
-
+// Spec is the parent-resolved description of a task ready to dispatch
+// to a worker process. Pure data; no substrate references. The CLI
+// adapter that produced the Task value is the only thing that knows
+// about coord.
 type Spec struct {
-	TaskID        coord.TaskID
+	TaskID        string
 	Title         string
 	Files         []string
 	Thread        string
@@ -12,14 +14,21 @@ type Spec struct {
 	WorkspaceDir  string
 }
 
-func BuildSpec(parentAgentID, workspaceDir string, task coord.Task) (Spec, error) {
+// BuildSpec materializes a Spec from a parent agent's view of a
+// dispatchable task. The Task interface keeps dispatch coord-free;
+// CLI callers pass a small adapter wrapping coord.Task.
+func BuildSpec(parentAgentID, workspaceDir string, task Task) (Spec, error) {
+	taskID := task.ID()
+	srcFiles := task.Files()
+	files := make([]string, len(srcFiles))
+	copy(files, srcFiles)
 	return Spec{
-		TaskID:        task.ID(),
+		TaskID:        taskID,
 		Title:         task.Title(),
-		Files:         task.Files(),
-		Thread:        string(task.ID()),
+		Files:         files,
+		Thread:        taskID,
 		ParentAgentID: parentAgentID,
-		WorkerAgentID: parentAgentID + "/" + string(task.ID()),
+		WorkerAgentID: parentAgentID + "/" + taskID,
 		WorkspaceDir:  workspaceDir,
 	}, nil
 }

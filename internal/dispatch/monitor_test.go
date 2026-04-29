@@ -60,7 +60,7 @@ func TestWaitWorkerAbsent_ReturnsWhenWorkerDropsFromPresence(t *testing.T) {
 
 	killAgentHeartbeat(t, worker)
 	if err := WaitWorkerAbsent(
-		ctx, parent, "parent-agent/task-1", 3*time.Second,
+		ctx, parent.PresentAgentIDs, "parent-agent/task-1", 3*time.Second,
 	); err != nil {
 		t.Fatalf("WaitWorkerAbsent: %v", err)
 	}
@@ -87,13 +87,13 @@ func TestReclaimClaimedTaskAfterWorkerDeath(t *testing.T) {
 	_ = rel
 	killAgentHeartbeat(t, worker)
 	if err := WaitWorkerAbsent(
-		ctx, parent, "parent-agent/task-1", 3*time.Second,
+		ctx, parent.PresentAgentIDs, "parent-agent/task-1", 3*time.Second,
 	); err != nil {
 		t.Fatalf("WaitWorkerAbsent: %v", err)
 	}
-	relParent, err := ReclaimClaim(ctx, parent, id, time.Minute)
+	relParent, err := parent.Reclaim(ctx, id, time.Minute)
 	if err != nil {
-		t.Fatalf("ReclaimClaim: %v", err)
+		t.Fatalf("Reclaim: %v", err)
 	}
 	defer func() { _ = relParent() }()
 }

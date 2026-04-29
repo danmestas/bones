@@ -1,75 +1,48 @@
 package dispatch
 
 import (
-	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/danmestas/bones/internal/coord"
-	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
-func newTestCoord(t *testing.T, agentID string) *coord.Coord {
-	t.Helper()
-	nc, _ := natstest.NewJetStreamServer(t)
-	cfg := coord.Config{
-		AgentID:            agentID,
-		NATSURL:            nc.ConnectedUrl(),
-		ChatFossilRepoPath: filepath.Join(t.TempDir(), agentID+"-chat.fossil"),
-		CheckoutRoot:       filepath.Join(t.TempDir(), agentID+"-checkouts"),
-	}
-	c, err := coord.Open(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("Open(%s): %v", agentID, err)
-	}
-	t.Cleanup(func() { _ = c.Close() })
-	return c
+// fakeTask is the in-memory Task used by spec tests. No coord
+// dependency — proves dispatch can be exercised through its
+// interfaces without spinning up a substrate.
+type fakeTask struct {
+	id    string
+	title string
+	files []string
 }
 
-func openTaskView(t *testing.T, c *coord.Coord, title string, files []string) coord.Task {
-	t.Helper()
-	ctx := context.Background()
-	id, err := c.OpenTask(ctx, title, files)
-	if err != nil {
-		t.Fatalf("OpenTask: %v", err)
-	}
-	prime, err := c.Prime(ctx)
-	if err != nil {
-		t.Fatalf("Prime: %v", err)
-	}
-	for _, task := range prime.OpenTasks {
-		if task.ID() == id {
-			return task
-		}
-	}
-	t.Fatalf("task %s not found in Prime open tasks", id)
-	return coord.Task{}
-}
+func (f fakeTask) ID() string      { return f.id }
+func (f fakeTask) Title() string   { return f.title }
+func (f fakeTask) Files() []string { return f.files }
 
 func TestBuildSpec_DerivesWorkerAgentID(t *testing.T) {
-	c := newTestCoord(t, "parent-agent")
-	task := openTaskView(t, c, "dispatch me", []string{"/repo/a.go"})
+	task := fakeTask{id: "t-1", title: "dispatch me", files: []string{"/repo/a.go"}}
 	spec, err := BuildSpec("parent-agent", "/workspace", task)
 	if err != nil {
 		t.Fatalf("BuildSpec: %v", err)
 	}
-	want := "parent-agent/" + string(task.ID())
+	want := "parent-agent/t-1"
 	if spec.WorkerAgentID != want {
 		t.Fatalf("WorkerAgentID=%q, want %q", spec.WorkerAgentID, want)
 	}
 }
 
 func TestBuildSpec_UsesTaskIDAsThreadAndCopiesTaskContext(t *testing.T) {
-	c := newTestCoord(t, "parent-agent")
-	task := openTaskView(t, c, "dispatch me", []string{"/repo/a.go", "/repo/b.go"})
+	task := fakeTask{
+		id:    "t-2",
+		title: "dispatch me",
+		files: []string{"/repo/a.go", "/repo/b.go"},
+	}
 	spec, err := BuildSpec("parent-agent", "/workspace", task)
 	if err != nil {
 		t.Fatalf("BuildSpec: %v", err)
 	}
-	if spec.Thread != string(task.ID()) {
-		t.Fatalf("Thread=%q, want task id %q", spec.Thread, task.ID())
+	if spec.Thread != "t-2" {
+		t.Fatalf("Thread=%q, want %q", spec.Thread, "t-2")
 	}
 	if spec.Title != "dispatch me" {
 		t.Fatalf("Title=%q", spec.Title)
@@ -83,8 +56,7 @@ func TestBuildSpec_UsesTaskIDAsThreadAndCopiesTaskContext(t *testing.T) {
 }
 
 func TestBuildSpec_CopiesFilesSlice(t *testing.T) {
-	c := newTestCoord(t, "parent-agent")
-	task := openTaskView(t, c, "dispatch me", []string{"/repo/a.go"})
+	task := fakeTask{id: "t-3", title: "dispatch me", files: []string{"/repo/a.go"}}
 	spec, err := BuildSpec("parent-agent", "/workspace", task)
 	if err != nil {
 		t.Fatalf("BuildSpec: %v", err)

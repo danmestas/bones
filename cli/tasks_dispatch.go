@@ -249,11 +249,22 @@ func claimedDispatchSpec(
 	}
 	for _, candidate := range prime.ClaimedTasks {
 		if candidate.ID() == coord.TaskID(taskID) {
-			return dispatch.BuildSpec(info.AgentID, info.WorkspaceDir, candidate)
+			adapted := dispatchTaskFromCoord(candidate)
+			return dispatch.BuildSpec(info.AgentID, info.WorkspaceDir, adapted)
 		}
 	}
 	return dispatch.Spec{}, fmt.Errorf("claimed task %q not found", taskID)
 }
+
+// dispatchTaskFromCoord adapts a coord.Task into a dispatch.Task.
+// Lives at the CLI layer so neither dispatch nor coord depend on
+// each other for task-shape conversions; both packages stay
+// substrate-only / dispatch-only respectively.
+type dispatchTaskFromCoord coord.Task
+
+func (d dispatchTaskFromCoord) ID() string      { return string(coord.Task(d).ID()) }
+func (d dispatchTaskFromCoord) Title() string   { return coord.Task(d).Title() }
+func (d dispatchTaskFromCoord) Files() []string { return coord.Task(d).Files() }
 
 func handleDispatchResult(
 	ctx context.Context,
@@ -283,7 +294,7 @@ func handleDispatchSuccess(
 		fmt.Printf("worker-closed task=%s worker=%s\n", spec.TaskID, spec.WorkerAgentID)
 		return nil
 	}
-	if err := c.CloseTask(ctx, spec.TaskID, result.Summary); err != nil {
+	if err := c.CloseTask(ctx, coord.TaskID(spec.TaskID), result.Summary); err != nil {
 		return err
 	}
 	if err := c.Post(ctx, spec.Thread, []byte("parent closed: "+result.Summary)); err != nil {
