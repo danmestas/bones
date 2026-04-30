@@ -298,7 +298,14 @@ func TestClose_DeletesRecordAndPidFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
-	if err := resumed.Close(ctx, CloseOpts{CloseTaskOnSuccess: true}); err != nil {
+	// This test pins the cleanup contract (record + pid file removed,
+	// slot reusable), not the artifact contract — bypass the
+	// "no commit since join" precondition with NoArtifact so the
+	// cleanup path is what's exercised.
+	if err := resumed.Close(ctx, CloseOpts{
+		CloseTaskOnSuccess: true,
+		NoArtifact:         "test: covers cleanup path",
+	}); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if _, err := os.Stat(pidPath); !os.IsNotExist(err) {
@@ -388,6 +395,75 @@ func TestCommit_SuccessUpdatesTrunkAndRenewsSession(t *testing.T) {
 
 	if err := resumed.Release(ctx); err != nil {
 		t.Errorf("Release: %v", err)
+	}
+}
+
+// TestClose_RefusesSuccessWithoutCommit pins the artifact-contract
+// precondition: a slot that was joined but never committed must not
+// be allowed to close --result=success silently. The substrate
+// refuses the silent-bypass shape so the audit trail bones promises
+// (every successful slot leaves a commit) holds structurally rather
+// than by agent politeness.
+func TestClose_RefusesSuccessWithoutCommit(t *testing.T) {
+	f := newLeaseFixture(t)
+	holdPath := filepath.Join(f.dir, "noartifact", "hello.txt")
+	taskID := string(f.createTask(t, "noartifact-task-1", holdPath))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	first, err := Acquire(ctx, f.info, "noartifact", taskID, AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if err := first.Release(ctx); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+
+	resumed, err := Resume(ctx, f.info, "noartifact", AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	closeErr := resumed.Close(ctx, CloseOpts{CloseTaskOnSuccess: true})
+	if !errors.Is(closeErr, ErrCloseRequiresArtifact) {
+		t.Fatalf("Close: want ErrCloseRequiresArtifact, got %v", closeErr)
+	}
+
+	// The lease should still be usable after a refused close — the
+	// caller's recovery path is to commit, then retry close.
+	if err := resumed.Close(ctx, CloseOpts{
+		CloseTaskOnSuccess: true,
+		NoArtifact:         "test-bypass",
+	}); err != nil {
+		t.Fatalf("Close with NoArtifact bypass: %v", err)
+	}
+}
+
+// TestClose_AllowsFailWithoutCommit covers the asymmetry: the
+// precondition gates only --result=success. A failed or forked
+// close has no artifact contract — the slot didn't claim to have
+// produced something — so the precondition must not engage.
+func TestClose_AllowsFailWithoutCommit(t *testing.T) {
+	f := newLeaseFixture(t)
+	holdPath := filepath.Join(f.dir, "failclose", "hello.txt")
+	taskID := string(f.createTask(t, "failclose-task-1", holdPath))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	first, err := Acquire(ctx, f.info, "failclose", taskID, AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if err := first.Release(ctx); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	resumed, err := Resume(ctx, f.info, "failclose", AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if err := resumed.Close(ctx, CloseOpts{CloseTaskOnSuccess: false}); err != nil {
+		t.Fatalf("Close fail: %v", err)
 	}
 }
 

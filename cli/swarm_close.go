@@ -23,12 +23,13 @@ import (
 // record (already closed) is not an error so re-running close
 // after a crash converges.
 type SwarmCloseCmd struct {
-	Slot    string `name:"slot" help:"slot name (defaults to single active slot on this host)"`
-	Result  string `name:"result" default:"success" help:"success|fail|fork"`
-	Summary string `name:"summary" default:"swarm close" help:"final summary posted to task thread"`
-	Branch  string `name:"branch" help:"only with --result=fork: branch name"`
-	Rev     string `name:"rev" help:"only with --result=fork: rev"`
-	HubURL  string `name:"hub-url" help:"override hub fossil HTTP URL"`
+	Slot       string `name:"slot" help:"slot (defaults to single active slot on host)"`
+	Result     string `name:"result" default:"success" help:"success|fail|fork"`
+	Summary    string `name:"summary" default:"swarm close" help:"final summary"`
+	Branch     string `name:"branch" help:"only with --result=fork: branch name"`
+	Rev        string `name:"rev" help:"only with --result=fork: rev"`
+	HubURL     string `name:"hub-url" help:"override hub fossil HTTP URL"`
+	NoArtifact string `name:"no-artifact" help:"reason for closing success without a commit"`
 }
 
 func (c *SwarmCloseCmd) Run(g *libfossilcli.Globals) error {
@@ -62,6 +63,7 @@ func (c *SwarmCloseCmd) Run(g *libfossilcli.Globals) error {
 
 	closeOpts := swarm.CloseOpts{
 		CloseTaskOnSuccess: c.Result == string(dispatch.ResultSuccess),
+		NoArtifact:         c.NoArtifact,
 	}
 	if err := lease.Close(ctx, closeOpts); err != nil {
 		return fmt.Errorf("swarm close: %w", err)

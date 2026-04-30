@@ -23,28 +23,94 @@ import (
 //  2. Slots are directory-disjoint (no two slots share a directory prefix).
 //  3. Each task's Files: paths begin with the slot's owned directory.
 //
-// Exits 0 if valid, 1 if violations are reported. With --list-slots,
-// also emits a JSON slot→task mapping to stdout on success.
+// Output contract (deliberately strict so orchestrator scripts can
+// pipe stdout through `jq` / `python -c json.load` without
+// stripping prose first):
+//
+//	stdout : always a single JSON object {errors, slots} — empty
+//	         arrays on a clean validation, non-empty Errors on a
+//	         violation. Even parse failures emit a JSON object so
+//	         consumers don't have to special-case stdout shape.
+//	stderr : human-readable prose, one violation per line, on
+//	         failures. Empty on a clean run.
+//	exit   : 0 = valid, 1 = plan-level violations, 2 = parse / IO error.
+//
+// --list-slots is retained as a no-op flag for backwards compatibility
+// with orchestrator scripts authored against the older "JSON only on
+// success when --list-slots set" shape. It emits a one-line stderr
+// hint the first time it's used so callers know the flag is
+// deprecated; behavior is identical with or without it.
 type ValidatePlanCmd struct {
 	Path      string `arg:"" type:"existingfile" help:"Markdown plan path"`
-	ListSlots bool   `name:"list-slots" help:"emit JSON slot→task list (still runs validation)"`
+	ListSlots bool   `name:"list-slots" help:"deprecated no-op (JSON is always emitted on stdout)"`
+}
+
+// ValidateResult is the on-stdout JSON shape emitted by every
+// invocation of ValidatePlanCmd. Fields are always present; Errors
+// is non-empty iff exit is non-zero. Slots is best-effort: even on
+// validation failure we still emit whatever slot annotations the
+// parser saw, so an orchestrator that wants to dispatch the valid
+// slots alongside reporting the failures has the data without
+// re-parsing.
+type ValidateResult struct {
+	Errors []string    `json:"errors"`
+	Slots  []slotEntry `json:"slots"`
 }
 
 func (c *ValidatePlanCmd) Run(g *libfossilcli.Globals) error {
-	tasks, violations, err := validatePlan(c.Path)
-	if err != nil {
+	if c.ListSlots {
+		fmt.Fprintln(os.Stderr,
+			"validate-plan: --list-slots is a no-op; JSON is now always emitted on stdout")
+	}
+	res, exitCode := runValidatePlan(c.Path)
+	if err := emitValidateResult(os.Stdout, res); err != nil {
 		return err
 	}
-	if len(violations) > 0 {
-		for _, v := range violations {
-			fmt.Fprintln(os.Stderr, v)
-		}
-		os.Exit(1)
+	for _, e := range res.Errors {
+		fmt.Fprintln(os.Stderr, e)
 	}
-	if c.ListSlots {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		return enc.Encode(buildSlotList(tasks))
+	if exitCode != 0 {
+		os.Exit(exitCode)
+	}
+	return nil
+}
+
+// runValidatePlan opens the plan, runs the structural checks, and
+// returns the ValidateResult plus an exit code. Pulled out of Run
+// so tests can drive the validation surface without forking
+// processes; the os.Exit is the only side effect Run adds.
+func runValidatePlan(path string) (ValidateResult, int) {
+	tasks, violations, err := validatePlan(path)
+	if err != nil {
+		return ValidateResult{
+			Errors: []string{err.Error()},
+			Slots:  []slotEntry{},
+		}, 2
+	}
+	list := buildSlotList(tasks)
+	if list.Slots == nil {
+		list.Slots = []slotEntry{}
+	}
+	res := ValidateResult{
+		Errors: violations,
+		Slots:  list.Slots,
+	}
+	if res.Errors == nil {
+		res.Errors = []string{}
+	}
+	if len(violations) > 0 {
+		return res, 1
+	}
+	return res, 0
+}
+
+// emitValidateResult writes the canonical indented-JSON form of res.
+// Pulled out so tests can assert on the on-the-wire bytes.
+func emitValidateResult(w *os.File, res ValidateResult) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(res); err != nil {
+		return fmt.Errorf("validate-plan: encode result: %w", err)
 	}
 	return nil
 }

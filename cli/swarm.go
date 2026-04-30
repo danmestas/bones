@@ -28,6 +28,7 @@ type SwarmCmd struct {
 	Cwd    SwarmCwdCmd    `cmd:"" help:"Print the slot's worktree path"`
 	Tasks  SwarmTasksCmd  `cmd:"" help:"List ready tasks matching slot"`
 	FanIn  SwarmFanInCmd  `cmd:"" name:"fan-in" help:"Merge open hub leaves into trunk"`
+	Reap   SwarmReapCmd   `cmd:"" help:"Force-close stale same-host sessions as result=fail"`
 }
 
 // openSwarmSessions dials NATS for the workspace and opens a swarm
