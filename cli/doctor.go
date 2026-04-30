@@ -56,10 +56,34 @@ func (c *DoctorCmd) Run(g *libfossilcli.Globals) (err error) {
 	swarmErr := c.runSwarmReport()
 	swarmFailed = swarmErr != nil
 	c.runBypassReport()
+	c.runTelemetryReport()
 	if baseErr != nil {
 		return baseErr
 	}
 	return swarmErr
+}
+
+// runTelemetryReport prints the current opt-in telemetry status so the
+// operator can verify what (if anything) is leaving their machine.
+// Per ADR 0039, telemetry is fully opt-in via BONES_TELEMETRY=1 +
+// BONES_OTEL_ENDPOINT; this surface is the on-demand verifier.
+func (c *DoctorCmd) runTelemetryReport() {
+	fmt.Println()
+	fmt.Println("=== telemetry (ADR 0039) ===")
+	if !telemetry.IsEnabled() {
+		switch {
+		case os.Getenv("BONES_TELEMETRY") != "1":
+			fmt.Println("  off — set BONES_TELEMETRY=1 + BONES_OTEL_ENDPOINT to enable")
+		case os.Getenv("BONES_OTEL_ENDPOINT") == "":
+			fmt.Println("  WARN  BONES_TELEMETRY=1 but BONES_OTEL_ENDPOINT empty — no export")
+		default:
+			// Default build: env vars set but no exporter compiled.
+			fmt.Println("  off — built without -tags=otel (no exporter compiled in)")
+		}
+		return
+	}
+	fmt.Printf("  on  endpoint=%s install_id=%s\n",
+		os.Getenv("BONES_OTEL_ENDPOINT"), telemetry.InstallID())
 }
 
 // runBypassReport prints the ADR-0034 bypass-prevention checks: is
