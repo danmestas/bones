@@ -13,6 +13,18 @@ const markerDirName = ".bones"
 // a runtime or filesystem anomaly.
 const maxWalkUpDepth = 64
 
+// FindRoot is the unauthenticated workspace lookup: walks up from start
+// until it finds a directory containing the .bones marker dir, returns
+// that directory, or ErrNoWorkspace if the filesystem root is reached.
+//
+// Unlike Join, FindRoot does not load config.json or contact the leaf
+// daemon — useful for commands that only need the workspace path
+// (e.g. bones apply, which materializes from the hub fossil and never
+// talks to the leaf).
+func FindRoot(start string) (string, error) {
+	return walkUp(start)
+}
+
 // walkUp searches from start upward for a directory containing markerDirName.
 // Returns the path of the directory containing it, or ErrNoWorkspace if the
 // filesystem root is reached without finding one.
