@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
@@ -67,3 +68,56 @@ func runApplyPreflight(cwd string) (*applyPreflight, error) {
 		FossilBin:    fossilBin,
 	}, nil
 }
+
+// trunkManifest returns the list of files tracked at the hub fossil's
+// trunk tip and the tip's hex rev. Shells to the system fossil binary,
+// matching the pattern in cli/swarm_fanin.go.
+func trunkManifest(hubFossil, fossilBin string) ([]string, string, error) {
+	paths, err := manifestAtRev(hubFossil, fossilBin, "trunk")
+	if err != nil {
+		return nil, "", err
+	}
+	rev, err := trunkRev(hubFossil, fossilBin)
+	if err != nil {
+		return paths, "", err
+	}
+	return paths, rev, nil
+}
+
+// manifestAtRev lists files at a specific rev (hex UUID or symbolic
+// name like "trunk"). `-r` is required so `fossil ls` runs against the
+// repo without a live checkout — without `-r`, fossil ls expects to be
+// run inside a fossil working directory.
+func manifestAtRev(hubFossil, fossilBin, rev string) ([]string, error) {
+	out, err := exec.Command(fossilBin, "ls", "-R", hubFossil, "-r", rev).Output()
+	if err != nil {
+		return nil, fmt.Errorf("fossil ls @ %s: %w", rev, err)
+	}
+	var paths []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			paths = append(paths, line)
+		}
+	}
+	return paths, nil
+}
+
+// trunkRev returns the trunk tip's hex UUID via `fossil info`.
+// Accepts both legacy (`uuid:`) and current (`hash:`) labels.
+func trunkRev(hubFossil, fossilBin string) (string, error) {
+	out, err := exec.Command(fossilBin, "info", "-R", hubFossil, "trunk").Output()
+	if err != nil {
+		return "", fmt.Errorf("fossil info trunk: %w", err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		for _, prefix := range []string{"uuid:", "hash:"} {
+			if strings.HasPrefix(line, prefix) {
+				return strings.TrimSpace(strings.TrimPrefix(line, prefix)), nil
+			}
+		}
+	}
+	return "", errors.New("could not parse trunk rev from `fossil info`")
+}
+

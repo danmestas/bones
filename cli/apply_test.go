@@ -71,6 +71,82 @@ func TestApplyPreflight_HappyPath(t *testing.T) {
 	}
 }
 
+func TestTrunkManifest_RealFossilRepo(t *testing.T) {
+	if _, err := exec.LookPath("fossil"); err != nil {
+		t.Skip("fossil not on PATH")
+	}
+	dir := t.TempDir()
+	hubFossil := filepath.Join(dir, "hub.fossil")
+	wt := filepath.Join(dir, "wt")
+
+	mustRun(t, "fossil", "new", "--admin-user", "u", hubFossil)
+	mustRun(t, "fossil", "open", "--force", hubFossil, "--workdir", wt)
+	defer mustRunIn(t, wt, "fossil", "close", "--force")
+
+	if err := os.WriteFile(filepath.Join(wt, "a.txt"), []byte("alpha\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(wt, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, "sub", "b.txt"), []byte("beta\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRunIn(t, wt, "fossil", "add", "a.txt", "sub/b.txt")
+	mustRunIn(t, wt, "fossil", "commit", "--no-warnings", "--user-override", "u", "-m", "init")
+
+	paths, rev, err := trunkManifest(hubFossil, "fossil")
+	if err != nil {
+		t.Fatalf("trunkManifest: %v", err)
+	}
+	if !equalStringSets(paths, []string{"a.txt", "sub/b.txt"}) {
+		t.Errorf("manifest = %v, want [a.txt sub/b.txt]", paths)
+	}
+	if len(rev) < 12 {
+		t.Errorf("expected hex rev, got %q", rev)
+	}
+}
+
+func mustRun(t *testing.T, name string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Env = append(os.Environ(), "USER=u")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %v: %v\n%s", name, args, err, out)
+	}
+}
+
+func mustRunIn(t *testing.T, dir, name string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "USER=u")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %v in %s: %v\n%s", name, args, dir, err, out)
+	}
+}
+
+func equalStringSets(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, s := range a {
+		seen[s]++
+	}
+	for _, s := range b {
+		seen[s]--
+	}
+	for _, n := range seen {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // setupApplyFixture creates a tmpdir containing a bones workspace
 // marker, an empty hub.fossil placeholder file, and a .git/ directory.
 // Sufficient for preflight checks; tests that exercise actual fossil
