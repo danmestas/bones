@@ -27,16 +27,21 @@ type opts struct {
 	detach     bool
 }
 
-// defaults returns the production defaults: fossil on 8765, NATS on 4222,
-// foreground (Start blocks on ctx.Done()).
+// defaults returns the production defaults: ports left zero so
+// resolvePorts allocates per-workspace, foreground (Start blocks on
+// ctx.Done()). A zero port means "look up the workspace's recorded URL
+// or pick a free port"; passing WithFossilPort(N) or WithNATSPort(N)
+// pins to N.
 func defaults() opts {
-	return opts{fossilPort: 8765, natsPort: 4222}
+	return opts{fossilPort: 0, natsPort: 0}
 }
 
-// WithFossilPort overrides the Fossil HTTP port. The default is 8765.
+// WithFossilPort pins the Fossil HTTP port. Zero means "let the hub
+// allocate per-workspace" (default behavior).
 func WithFossilPort(p int) Option { return func(o *opts) { o.fossilPort = p } }
 
-// WithNATSPort overrides the NATS client port. The default is 4222.
+// WithNATSPort pins the NATS client port. Zero means "let the hub
+// allocate per-workspace" (default behavior).
 func WithNATSPort(p int) Option { return func(o *opts) { o.natsPort = p } }
 
 // WithDetach controls Start's blocking behavior. When true, Start returns
