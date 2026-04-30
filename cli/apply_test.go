@@ -310,6 +310,57 @@ func TestLastAppliedMarker_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestApplyPlan_WritesAndDeletesAndStages(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := t.TempDir()
+	root := dir
+	temp := filepath.Join(dir, "tmp-checkout")
+	must(t, os.MkdirAll(temp, 0o755))
+
+	mustRunIn(t, root, "git", "init", "-q")
+	must(t, os.WriteFile(filepath.Join(root, "keep.txt"), []byte("same"), 0o644))
+	must(t, os.WriteFile(filepath.Join(root, "delete.txt"), []byte("gone"), 0o644))
+	mustRunIn(t, root, "git", "add", ".")
+	mustRunIn(t, root, "git", "-c", "user.name=t", "-c", "user.email=t@t",
+		"commit", "-q", "-m", "init")
+
+	must(t, os.WriteFile(filepath.Join(temp, "keep.txt"), []byte("same"), 0o644))
+	must(t, os.WriteFile(filepath.Join(temp, "add.txt"), []byte("new"), 0o644))
+
+	plan := &applyPlan{
+		Added:   []string{"add.txt"},
+		Deleted: []string{"delete.txt"},
+	}
+	if err := applyPlanToTree(temp, root, plan); err != nil {
+		t.Fatalf("applyPlanToTree: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "add.txt")); err != nil {
+		t.Errorf("add.txt should exist: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "delete.txt")); !os.IsNotExist(err) {
+		t.Errorf("delete.txt should be gone, got err=%v", err)
+	}
+	out, err := exec.Command("git", "-C", root, "diff", "--staged", "--name-only").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged := strings.Fields(string(out))
+	if !contains(staged, "add.txt") || !contains(staged, "delete.txt") {
+		t.Errorf("expected add.txt and delete.txt staged; got %v", staged)
+	}
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, h := range haystack {
+		if h == needle {
+			return true
+		}
+	}
+	return false
+}
+
 // setupApplyFixture creates a tmpdir containing a bones workspace
 // marker, an empty hub.fossil placeholder file, and a .git/ directory.
 // Sufficient for preflight checks; tests that exercise actual fossil

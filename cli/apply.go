@@ -183,6 +183,50 @@ func bytesEqual(a, b []byte) bool {
 	return true
 }
 
+// applyPlanToTree writes adds/modifies from tempCheckout into projectRoot,
+// removes deleted paths, and stages everything that changed via
+// `git add -A -- <paths>`. Source-of-truth file modes are preserved
+// from tempCheckout (which fossil populated honoring its tracked mode).
+func applyPlanToTree(tempCheckout, projectRoot string, plan *applyPlan) error {
+	staging := append([]string(nil), plan.Added...)
+	staging = append(staging, plan.Modified...)
+	for _, p := range append(plan.Added, plan.Modified...) {
+		src := filepath.Join(tempCheckout, p)
+		dst := filepath.Join(projectRoot, p)
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", p, err)
+		}
+		info, err := os.Stat(src)
+		if err != nil {
+			return fmt.Errorf("stat %s: %w", p, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return fmt.Errorf("mkdir for %s: %w", p, err)
+		}
+		if err := os.WriteFile(dst, data, info.Mode().Perm()); err != nil {
+			return fmt.Errorf("write %s: %w", p, err)
+		}
+	}
+	for _, p := range plan.Deleted {
+		dst := filepath.Join(projectRoot, p)
+		if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove %s: %w", p, err)
+		}
+		staging = append(staging, p)
+	}
+	if len(staging) == 0 {
+		return nil
+	}
+	args := append([]string{"add", "-A", "--"}, staging...)
+	cmd := exec.Command("git", args...)
+	cmd.Dir = projectRoot
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git add: %w\n%s", err, out)
+	}
+	return nil
+}
+
 // lastAppliedFile is the path (relative to the workspace dir) where
 // bones apply records the most recently applied trunk rev.
 const lastAppliedFile = ".bones/last-applied"
