@@ -110,6 +110,7 @@ func mergeSettings(path string) error {
 	// rather than bypassing the tracker with freeform docs.
 	addHook(hooks, "SessionStart", "bones tasks prime --json")
 	addHook(hooks, "SessionStart", "bash .orchestrator/scripts/hub-bootstrap.sh")
+	addHook(hooks, "PreCompact", "bones tasks prime --json")
 	migrateStopToSessionEnd(hooks)
 	addHook(hooks, "SessionEnd", "bash .orchestrator/scripts/hub-shutdown.sh")
 

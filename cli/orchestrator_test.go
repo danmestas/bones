@@ -262,6 +262,25 @@ func TestScaffoldOrchestrator_SessionStartIncludesPrime(t *testing.T) {
 	t.Fatalf("SessionStart hooks missing %q; got %v", want, cmds)
 }
 
+// TestScaffoldOrchestrator_PreCompactIncludesPrime asserts the
+// PreCompact event runs `bones tasks prime --json`. Compaction is the
+// longer-horizon failure mode for narrative drift — wiring SessionStart
+// alone leaves a multi-hour window where freeform context can win.
+func TestScaffoldOrchestrator_PreCompactIncludesPrime(t *testing.T) {
+	dir := t.TempDir()
+	if err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatalf("scaffoldOrchestrator: %v", err)
+	}
+	cmds := hookCommandsFor(readSettings(t, dir), "PreCompact")
+	want := "bones tasks prime --json"
+	for _, c := range cmds {
+		if c == want {
+			return
+		}
+	}
+	t.Fatalf("PreCompact hooks missing %q; got %v", want, cmds)
+}
+
 func verifyHooks(t *testing.T, path string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
