@@ -88,9 +88,12 @@ func instrumented(
 	op, cwd string,
 	fn func(context.Context) (Info, error),
 ) (Info, error) {
+	// workspace_hash is a sha256 prefix of the resolved cwd. Same
+	// workspace produces the same hash; the literal path never reaches
+	// a telemetry exporter.
 	ctx, end := telemetry.RecordCommand(ctx, "agent_init."+op,
 		telemetry.String("op", op),
-		telemetry.String("cwd", cwd),
+		telemetry.String("workspace_hash", telemetry.WorkspaceHash(cwd)),
 	)
 	start := time.Now()
 	slog.DebugContext(ctx, op+" start", "cwd", cwd)
