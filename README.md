@@ -89,6 +89,20 @@ The hub fossil holds durable state (commits, tasks, presence, chat). Each leaf i
 
 Add `-v` to any command for DEBUG-level slog output. Default is silent.
 
+## Telemetry
+
+Release binaries (Homebrew + GitHub releases) ship anonymous usage telemetry **on by default** — boolean outcomes, durations, and a 12-char `workspace_hash` go to a private Axiom dataset so the maintainer can see real-world failure modes. Source builds (`go install`) are zero-egress.
+
+No paths, hostnames, error strings, or repo content are ever collected. See [docs/TELEMETRY.md](./docs/TELEMETRY.md) for the full data shape.
+
+```bash
+bones telemetry status      # see what's happening
+bones telemetry disable     # opt out (writes ~/.bones/no-telemetry, persists across upgrades)
+bones telemetry enable      # opt back in
+```
+
+Env-var kill switch for CI / sandboxed runs: `BONES_TELEMETRY=0`.
+
 ## Uninstall
 
 ```bash
