@@ -183,6 +183,33 @@ func bytesEqual(a, b []byte) bool {
 	return true
 }
 
+// lastAppliedFile is the path (relative to the workspace dir) where
+// bones apply records the most recently applied trunk rev.
+const lastAppliedFile = ".bones/last-applied"
+
+// readLastAppliedMarker returns the rev recorded at .bones/last-applied,
+// or "" if the marker is absent. Other I/O errors are returned as-is.
+func readLastAppliedMarker(workspaceDir string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(workspaceDir, lastAppliedFile))
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// writeLastAppliedMarker writes the rev to .bones/last-applied,
+// creating .bones/ if needed.
+func writeLastAppliedMarker(workspaceDir, rev string) error {
+	dir := filepath.Join(workspaceDir, ".bones")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "last-applied"), []byte(rev+"\n"), 0o644)
+}
+
 // manifestAtRev lists files at a specific rev (hex UUID or symbolic
 // name like "trunk"). `-r` is required so `fossil ls` runs against the
 // repo without a live checkout — without `-r`, fossil ls expects to be

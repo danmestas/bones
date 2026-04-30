@@ -284,6 +284,32 @@ func must(t *testing.T, err error) {
 	}
 }
 
+func TestLastAppliedMarker_AbsentReturnsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	rev, err := readLastAppliedMarker(dir)
+	if err != nil {
+		t.Fatalf("absent should not error: %v", err)
+	}
+	if rev != "" {
+		t.Errorf("expected empty rev, got %q", rev)
+	}
+}
+
+func TestLastAppliedMarker_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	want := "abcdef0123456789"
+	if err := writeLastAppliedMarker(dir, want); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got, err := readLastAppliedMarker(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Errorf("rev = %q, want %q", got, want)
+	}
+}
+
 // setupApplyFixture creates a tmpdir containing a bones workspace
 // marker, an empty hub.fossil placeholder file, and a .git/ directory.
 // Sufficient for preflight checks; tests that exercise actual fossil
