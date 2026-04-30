@@ -95,3 +95,17 @@ bin:
 
 bones: bin
 	go build -o bin/bones ./cmd/bones
+
+# CI mirror — runs make check + otel lanes from .github/workflows/ci.yml.
+# Cross-repo leaf-binary integration is CI-only.
+.PHONY: ci ci-fast
+ci:
+	$(MAKE) check
+	go build -tags=otel ./...
+	go test -tags=otel -short ./... -count=1
+
+# Fast subset for pre-push hook (~30-60s; no -tags=otel, no -race).
+ci-fast:
+	go vet ./...
+	go build ./...
+	go test -short -count=1 -timeout=30s ./...
