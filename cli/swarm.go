@@ -8,6 +8,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/workspace"
 )
@@ -89,10 +90,7 @@ func bootstrapResume(
 		return nil, workspace.Info{}, nil, nil, err
 	}
 
-	if hubURL == "" {
-		hubURL = swarm.DefaultHubFossilURL
-	}
-	opts.HubURL = hubURL
+	opts.HubURL = resolveHubURL(hubURL)
 	lease, err := swarm.Resume(ctx, info, slot, opts)
 	if err != nil {
 		stop()
@@ -102,6 +100,34 @@ func bootstrapResume(
 		return nil, workspace.Info{}, nil, nil, fmt.Errorf("%s: %w", verbName, err)
 	}
 	return ctx, info, lease, stop, nil
+}
+
+// resolveHubURL returns the hub fossil HTTP URL for swarm operations,
+// in priority order:
+//  1. override (an explicit `--hub-url=...` flag) wins
+//  2. the workspace's recorded URL at .orchestrator/hub-fossil-url
+//  3. swarm.DefaultHubFossilURL as a legacy fallback for workspaces
+//     scaffolded before per-workspace ports landed
+//
+// The legacy fallback exists so a never-rescaffolded workspace still
+// works; new workspaces always have a recorded URL because the hub
+// writes one on every Start.
+func resolveHubURL(override string) string {
+	if override != "" {
+		return override
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return swarm.DefaultHubFossilURL
+	}
+	root, err := workspace.FindRoot(cwd)
+	if err != nil {
+		return swarm.DefaultHubFossilURL
+	}
+	if url := hub.FossilURL(root); url != "" {
+		return url
+	}
+	return swarm.DefaultHubFossilURL
 }
 
 // resolveSlot picks the slot to operate on for verbs that allow

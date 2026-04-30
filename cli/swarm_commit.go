@@ -51,11 +51,7 @@ func (c *SwarmCommitCmd) Run(g *libfossilcli.Globals) error {
 	if err != nil {
 		return fmt.Errorf("swarm commit: %w", err)
 	}
-	hubURL := c.HubURL
-	if hubURL == "" {
-		hubURL = swarm.DefaultHubFossilURL
-	}
-	c.emitCommitReport(lease.Slot(), lease.TaskID(), files, res, hubURL)
+	c.emitCommitReport(lease.Slot(), lease.TaskID(), files, res, resolveHubURL(c.HubURL))
 	return nil
 }
 

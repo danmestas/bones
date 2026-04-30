@@ -111,8 +111,15 @@ func mergeSettings(path string) error {
 	addHook(hooks, "SessionStart", "bones tasks prime --json")
 	addHook(hooks, "SessionStart", "bash .orchestrator/scripts/hub-bootstrap.sh")
 	addHook(hooks, "PreCompact", "bones tasks prime --json")
+
+	// The hub is a workspace-scoped daemon (per-workspace pid files +
+	// per-workspace ports). Tying its teardown to SessionEnd was a bug:
+	// closing one Claude session would kill a hub another workspace, or
+	// even another concurrent session in the same workspace, may still
+	// be using. `bones down` is the explicit teardown; SessionEnd no
+	// longer carries hub-shutdown.
 	migrateStopToSessionEnd(hooks)
-	addHook(hooks, "SessionEnd", "bash .orchestrator/scripts/hub-shutdown.sh")
+	migrateSessionEndShutdown(hooks)
 
 	root["hooks"] = hooks
 
@@ -127,11 +134,29 @@ func mergeSettings(path string) error {
 }
 
 // migrateStopToSessionEnd removes any hub-shutdown entry under the
-// legacy "Stop" event so it can be re-added under "SessionEnd". The
-// scan is shim-specific (matches the hub-shutdown.sh command) so
-// unrelated Stop hooks the user has installed are preserved.
+// legacy "Stop" event. Originally this freed the entry to be re-added
+// under SessionEnd, but per ADR 0038 we no longer add it there either —
+// the migration now just prunes the legacy entry. The scan is
+// shim-specific (matches the hub-shutdown.sh command) so unrelated Stop
+// hooks the user has installed are preserved.
 func migrateStopToSessionEnd(hooks map[string]any) {
-	groups, _ := hooks["Stop"].([]any)
+	pruneHubShutdown(hooks, "Stop")
+}
+
+// migrateSessionEndShutdown drops the bones-managed hub-shutdown entry
+// from the SessionEnd event for workspaces scaffolded before ADR 0038.
+// The hub is workspace-scoped now and only torn down by `bones down`;
+// SessionEnd should not stop it.
+func migrateSessionEndShutdown(hooks map[string]any) {
+	pruneHubShutdown(hooks, "SessionEnd")
+}
+
+// pruneHubShutdown is the shared body of the two hub-shutdown migrations.
+// It walks hooks[event] and drops any entry whose command contains
+// "hub-shutdown.sh", removing empty groups and the event key itself if
+// nothing else lives under it. Unrelated entries are preserved verbatim.
+func pruneHubShutdown(hooks map[string]any, event string) {
+	groups, _ := hooks[event].([]any)
 	if groups == nil {
 		return
 	}
@@ -163,10 +188,10 @@ func migrateStopToSessionEnd(hooks map[string]any) {
 		keep = append(keep, gm)
 	}
 	if len(keep) == 0 {
-		delete(hooks, "Stop")
+		delete(hooks, event)
 		return
 	}
-	hooks["Stop"] = keep
+	hooks[event] = keep
 }
 
 func addHook(hooks map[string]any, event, cmd string) {

@@ -87,6 +87,14 @@ func Start(ctx context.Context, root string, options ...Option) error {
 		return nil
 	}
 
+	// Resolve any zero-valued port to the workspace's recorded port
+	// (recovery / restart) or a fresh free one (first run, or after
+	// `bones down`). Writes the URL files so consumers can discover the
+	// live hub.
+	if err := resolvePorts(p, &o); err != nil {
+		return err
+	}
+
 	if o.detach {
 		return spawnDetachedChild(p, o)
 	}
@@ -227,6 +235,10 @@ func Stop(root string) error {
 		}
 		_ = os.Remove(pidFile)
 	}
+	// Clear the recorded URL files so subsequent FossilURL/NATSURL
+	// callers see the hub as down.
+	_ = os.Remove(p.fossilURL)
+	_ = os.Remove(p.natsURL)
 	return nil
 }
 
@@ -241,6 +253,8 @@ type paths struct {
 	hubRepo     string
 	fossilPid   string
 	natsPid     string
+	fossilURL   string
+	natsURL     string
 	fossilLog   string
 	natsLog     string
 	natsStore   string
@@ -269,6 +283,8 @@ func newPaths(root string) (paths, error) {
 		hubRepo:     filepath.Join(orch, "hub.fossil"),
 		fossilPid:   filepath.Join(orch, "pids", "fossil.pid"),
 		natsPid:     filepath.Join(orch, "pids", "nats.pid"),
+		fossilURL:   filepath.Join(orch, "hub-fossil-url"),
+		natsURL:     filepath.Join(orch, "hub-nats-url"),
 		fossilLog:   filepath.Join(orch, "fossil.log"),
 		natsLog:     filepath.Join(orch, "nats.log"),
 		natsStore:   filepath.Join(orch, "nats-store"),
