@@ -20,6 +20,9 @@ func TestFirstRunNotice_PrintsOnceThenSilent(t *testing.T) {
 	if !strings.Contains(first, "https://signoz.example.com/v1/traces") {
 		t.Errorf("notice missing endpoint: %q", first)
 	}
+	if !strings.Contains(first, "bones telemetry disable") {
+		t.Errorf("notice missing opt-out command: %q", first)
+	}
 
 	// Second call: ack file exists, notice is silent.
 	buf.Reset()

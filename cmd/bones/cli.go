@@ -32,6 +32,7 @@ type CLI struct {
 	ValidatePlan bonescli.ValidatePlanCmd `cmd:"" group:"tooling" help:"Validate plan"`
 	Orchestrator bonescli.OrchestratorCmd `cmd:"" group:"tooling" help:"Install orchestrator"`
 	Peek         bonescli.PeekCmd         `cmd:"" group:"tooling" help:"Browse hub via fossil ui"`
+	Telemetry    bonescli.TelemetryCmd    `cmd:"" group:"tooling" help:"Manage usage telemetry"`
 
 	// Plumbing — rarely invoked directly.
 	Init bonescli.InitCmd `cmd:"" group:"plumbing" help:"Create a workspace"`

@@ -24,3 +24,26 @@ func Init(ctx context.Context, version, commit string) func(context.Context) {
 func IsEnabled() bool {
 	return isEnabledImpl()
 }
+
+// StatusReason returns a human-readable explanation of the resolved
+// on/off state. Used by `bones telemetry status` and `bones doctor`
+// so operators see exactly why telemetry is on or off, not just the
+// boolean.
+func StatusReason() string {
+	return statusReasonImpl()
+}
+
+// Endpoint returns the OTLP URL the resolved config exports to, or
+// "" when telemetry is off. Lets the doctor surface print the
+// concrete URL without re-deriving the resolution.
+func Endpoint() string {
+	return endpointImpl()
+}
+
+// Dataset returns the Axiom dataset baked into this build, or "" on
+// source builds (or self-host overrides where the dataset concept
+// doesn't apply). Surfaces in `bones doctor` so an operator can
+// confirm which Axiom dataset their spans land in.
+func Dataset() string {
+	return datasetImpl()
+}

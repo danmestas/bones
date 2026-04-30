@@ -40,6 +40,7 @@ func FirstRunNotice(w io.Writer, endpoint string) {
 
 func writeNotice(w io.Writer, endpoint string) {
 	_, _ = fmt.Fprintf(w,
-		"bones: telemetry enabled — exporting to %s. Disable with BONES_TELEMETRY=0.\n",
+		"bones: anonymous usage telemetry enabled — exporting to %s. "+
+			"Opt out: bones telemetry disable\n",
 		endpoint)
 }

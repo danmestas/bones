@@ -90,4 +90,4 @@ This is the operator's on-demand verifier for what (if anything) is leaving thei
 
 ## Status
 
-Accepted, 2026-04-30.
+Superseded by [ADR 0040](./0040-telemetry-default-on-axiom.md), 2026-04-30. Span-attribute policy and PII surface remain authoritative; the activation contract (env-var-only, default-off for release builds) is replaced.

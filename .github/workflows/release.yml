@@ -31,3 +31,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_PAT_TOKEN: ${{ secrets.HOMEBREW_PAT_TOKEN }}
+          # AXIOM_INGEST_TOKEN feeds the goreleaser ldflag that bakes
+          # the Axiom write token into release binaries (ADR 0040).
+          # Empty value still produces a valid binary — the runtime
+          # resolver lands at "off — release misconfigured" so the
+          # failure mode is loud, not silent. Sourced from Doppler
+          # via the GitHub secret of the same name.
+          AXIOM_INGEST_TOKEN: ${{ secrets.AXIOM_INGEST_TOKEN }}

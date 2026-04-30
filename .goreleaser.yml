@@ -17,14 +17,29 @@ builds:
     binary: bones
     env:
       - CGO_ENABLED=0
+    # -tags=otel compiles in the OTLP exporter so release binaries
+    # can phone home per ADR 0040. Source builds (`go install`)
+    # without this tag remain zero-egress; the build-tag gate is
+    # the structural guarantee that source-built binaries don't
+    # surprise their builders.
+    tags:
+      - otel
     flags:
       - -trimpath
       - -buildvcs=false
+    # AXIOM_INGEST_TOKEN is read from the build environment at
+    # release time. Locally: `doppler run -- goreleaser release`.
+    # CI: GitHub Actions secret (synced from Doppler or pasted).
+    # An empty token compiles successfully but the runtime resolver
+    # lands at "off — release misconfigured" — surfaces the missing
+    # secret in `bones doctor` instead of silently shipping a dead
+    # exporter (ADR 0040 §"Build-time gating").
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
       - -X main.commit={{.ShortCommit}}
       - -X main.date={{.CommitDate}}
+      - -X github.com/danmestas/bones/internal/telemetry.axiomToken={{ .Env.AXIOM_INGEST_TOKEN }}
     goos:
       - linux
       - darwin
