@@ -13,11 +13,12 @@ type CLI struct {
 	libfossilcli.Globals
 
 	// Daily.
-	Up    bonescli.UpCmd    `cmd:"" group:"daily" help:"Bootstrap workspace, scaffold, leaf, hub"`
-	Down  bonescli.DownCmd  `cmd:"" group:"daily" help:"Reverse up: stop hub + clean scaffold"`
-	Tasks bonescli.TasksCmd `cmd:"" group:"daily" help:"Inspect and mutate runtime agent tasks"`
-	Swarm bonescli.SwarmCmd `cmd:"" group:"daily" help:"Run as a slot-shaped swarm participant"`
-	Apply bonescli.ApplyCmd `cmd:"" group:"daily" help:"Materialize hub fossil trunk into git tree"`
+	Up     bonescli.UpCmd     `cmd:"" group:"daily" help:"Bootstrap workspace, scaffold, leaf, hub"`
+	Down   bonescli.DownCmd   `cmd:"" group:"daily" help:"Reverse up: stop hub + clean scaffold"`
+	Status bonescli.StatusCmd `cmd:"" group:"daily" help:"Snapshot tasks, sessions, hub activity"`
+	Tasks  bonescli.TasksCmd  `cmd:"" group:"daily" help:"Inspect and mutate runtime agent tasks"`
+	Swarm  bonescli.SwarmCmd  `cmd:"" group:"daily" help:"Run as a slot-shaped swarm participant"`
+	Apply  bonescli.ApplyCmd  `cmd:"" group:"daily" help:"Materialize hub trunk into git tree"`
 
 	// Repository.
 	Repo libfossilcli.RepoCmd `cmd:"" group:"repo" help:"Fossil repository operations"`
