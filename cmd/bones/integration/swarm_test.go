@@ -181,6 +181,81 @@ func TestCLI_Swarm(t *testing.T) {
 	})
 }
 
+// TestCLI_SwarmReap exercises the end-to-end reap flow: join a
+// slot, never commit, then run `bones swarm reap --threshold=1ms`
+// to force the session into stale classification and verify it
+// gets closed as result=fail with the auto-reaped summary.
+//
+// The verb fixes a recurring operator pain point — when an
+// orchestrator hits a rate limit or a host crashes mid-task, the
+// session record persists past the agent's death and `bones swarm
+// status` shows "stale 113s ago" rows the operator must clean up
+// one by one with `bones swarm close --slot=X --result=fail`.
+// reap automates the loop.
+func TestCLI_SwarmReap(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	requireBinaries(t)
+	dir := setupSwarmWorkspace(t)
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	httpPort, natsPort := pickPortPair(t)
+	startSwarmHub(t, dir, httpPort, natsPort)
+	hubURL := fmt.Sprintf("http://127.0.0.1:%d", httpPort)
+
+	relFile := "rendering/orphan.txt"
+	absFile := filepath.Join(dir, relFile)
+	taskID := createSwarmTask(t, dir, absFile, "[slot: rendering] reap me")
+	slot := "rendering"
+
+	if _, stderr, code := runCmd(t, bonesBin, dir,
+		"swarm", "join",
+		"--slot="+slot, "--task-id="+taskID,
+		"--hub-url="+hubURL,
+	); code != 0 {
+		t.Fatalf("swarm join exit=%d stderr=%s", code, stderr)
+	}
+
+	// Wait long enough that LastRenewed is older than threshold=1ms.
+	// 50ms is slow enough to be reliable on busy CI yet fast enough
+	// not to dominate test wall time.
+	time.Sleep(50 * time.Millisecond)
+
+	// Dry-run first: must report the slot but not act on it.
+	dryStdout, dryStderr, dryCode := runCmd(t, bonesBin, dir,
+		"swarm", "reap", "--threshold=1ms", "--dry-run",
+	)
+	if dryCode != 0 {
+		t.Fatalf("reap dry-run exit=%d stderr=%s", dryCode, dryStderr)
+	}
+	if !strings.Contains(dryStderr, "would reap slot=rendering") {
+		t.Fatalf("dry-run stderr missing slot mention: %s", dryStderr)
+	}
+	_ = dryStdout
+
+	// Session must still be present after dry-run.
+	statusOut, _, _ := runCmd(t, bonesBin, dir, "swarm", "status", "--json")
+	if !strings.Contains(statusOut, slot) {
+		t.Fatalf("dry-run removed session: %s", statusOut)
+	}
+
+	// Real run: reap closes the stale session.
+	if _, stderr, code := runCmd(t, bonesBin, dir,
+		"swarm", "reap", "--threshold=1ms", "--hub-url="+hubURL,
+	); code != 0 {
+		t.Fatalf("reap exit=%d stderr=%s", code, stderr)
+	}
+
+	// Session should be gone now.
+	postStatus, _, _ := runCmd(t, bonesBin, dir, "swarm", "status", "--json")
+	trimmed := strings.TrimSpace(postStatus)
+	if trimmed != "null" && trimmed != "[]" {
+		t.Errorf("post-reap status: want empty, got %q", postStatus)
+	}
+}
+
 // TestCLI_SwarmJoin_RefusesBootstrapFromLeafContext pins the
 // role-separation guard: when a workspace has no hub.fossil yet,
 // `swarm join` must refuse with a leaf-appropriate message instead

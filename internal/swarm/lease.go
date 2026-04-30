@@ -88,6 +88,21 @@ var ErrCrossHostOperation = errors.New(
 	"swarm: cross-host operation refused — run the verb on the slot's owning host",
 )
 
+// ErrCloseRequiresArtifact is returned by ResumedLease.Close when the
+// caller asked for CloseTaskOnSuccess but no commit has landed on the
+// slot since join (LastRenewed == StartedAt on the session record).
+// The substrate refuses the silent-bypass shape — closing success
+// without producing an artifact severs the audit trail bones is
+// supposed to preserve. Callers that have a legitimate reason to
+// close success without a commit (e.g. a research subagent that
+// returned findings inline) must pass CloseOpts.NoArtifact with an
+// explicit reason; the reason is recorded so the post-mortem question
+// "why did this slot leave no commit?" has a documented answer.
+var ErrCloseRequiresArtifact = errors.New(
+	"swarm: close --result=success refused — no commit landed since join; " +
+		"either commit the slot's artifact first or pass --no-artifact=<reason>",
+)
+
 // AcquireOpts tunes Acquire and Resume. Zero-value defaults are
 // production-correct: HubURL → DefaultHubFossilURL, Caps →
 // DefaultCaps, NATSConn dialed from info.NATSURL, Now →
@@ -164,6 +179,23 @@ type CloseOpts struct {
 	// dispatch. swarm close --result=success sets this true; fail
 	// and fork leave it false.
 	CloseTaskOnSuccess bool
+
+	// NoArtifact, when non-empty, bypasses the
+	// "success requires a commit since join" precondition. The
+	// string is the operator's reason (e.g. "inline-only research
+	// findings") and is recorded in the lifecycle event log so the
+	// audit trail has a documented explanation for the missing
+	// artifact. Ignored when CloseTaskOnSuccess is false (fail and
+	// fork results have no artifact requirement).
+	NoArtifact string
+
+	// Reaped, when true, tags the emitted lifecycle event as
+	// EventSlotReap rather than EventSlotClose. Set by the
+	// `bones swarm reap` verb so post-mortem analysis can tell
+	// substrate-driven cleanup ("agent went silent") apart from
+	// operator-driven close ("subagent reported done"). No effect
+	// on the cleanup mechanics.
+	Reaped bool
 }
 
 // leaseBase holds the fields shared by FreshLease and ResumedLease.
@@ -330,6 +362,8 @@ func Acquire(
 		cleanupConn()
 		return nil, err
 	}
+
+	emitJoinEvent(info.WorkspaceDir, slot, taskID, fossilUser, now())
 
 	return &FreshLease{
 		leaseBase: leaseBase{
@@ -523,6 +557,15 @@ func (l *ResumedLease) Commit(
 	pushRes, pushErr := pushLeafFossil(ctx, l.info.WorkspaceDir, l.slot, l.fossilUser, l.hubURL)
 	renewErr := l.bumpLastRenewed(ctx)
 
+	appendEvent(l.info.WorkspaceDir, Event{
+		TS:         l.now(),
+		Kind:       EventSlotCommit,
+		Slot:       l.slot,
+		TaskID:     l.taskID,
+		AgentID:    l.fossilUser,
+		CommitUUID: uuid,
+	})
+
 	return CommitResult{
 		UUID:       uuid,
 		PushResult: pushRes,
@@ -593,6 +636,14 @@ func (l *ResumedLease) Close(ctx context.Context, opts CloseOpts) error {
 	if !l.released.CompareAndSwap(false, true) {
 		return nil
 	}
+	if err := l.checkArtifactPrecondition(ctx, opts); err != nil {
+		// Precondition failed BEFORE any state mutation. Reset the
+		// released flag so the caller can retry (e.g. after running
+		// `swarm commit`). teardown stays unrun — the lease is still
+		// usable.
+		l.released.Store(false)
+		return err
+	}
 	if err := l.closeTaskAndReleaseClaim(ctx, opts.CloseTaskOnSuccess); err != nil {
 		l.teardown()
 		return err
@@ -611,7 +662,52 @@ func (l *ResumedLease) Close(ctx context.Context, opts CloseOpts) error {
 		return err
 	}
 	l.teardown()
+	result := "fail"
+	if opts.CloseTaskOnSuccess {
+		result = "success"
+	}
+	kind := EventSlotClose
+	if opts.Reaped {
+		kind = EventSlotReap
+	}
+	appendEvent(l.info.WorkspaceDir, Event{
+		TS:         l.now(),
+		Kind:       kind,
+		Slot:       l.slot,
+		TaskID:     l.taskID,
+		AgentID:    l.fossilUser,
+		Result:     result,
+		NoArtifact: opts.NoArtifact,
+	})
 	return nil
+}
+
+// checkArtifactPrecondition refuses CloseTaskOnSuccess when no commit
+// has bumped LastRenewed since join (i.e. LastRenewed equals
+// StartedAt on the session record). NoArtifact bypasses the check;
+// CloseTaskOnSuccess=false skips it entirely (fail and fork close
+// shapes carry no artifact contract). Returns nil on bypass, on
+// successful precondition, or when the session record is gone (close
+// converges idempotently — the missing record itself implies the
+// caller already closed and we have nothing to refuse).
+func (l *ResumedLease) checkArtifactPrecondition(ctx context.Context, opts CloseOpts) error {
+	if !opts.CloseTaskOnSuccess || opts.NoArtifact != "" {
+		return nil
+	}
+	if l.sessions == nil {
+		return nil
+	}
+	sess, _, err := l.sessions.Get(ctx, l.slot)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("swarm.ResumedLease.Close: read session: %w", err)
+	}
+	if sess.LastRenewed.After(sess.StartedAt) {
+		return nil
+	}
+	return ErrCloseRequiresArtifact
 }
 
 // deleteSessionRecord CAS-deletes the session record, retrying on
