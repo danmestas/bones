@@ -103,6 +103,12 @@ func mergeSettings(path string) error {
 		hooks = map[string]any{}
 	}
 
+	// Prime first so task context lands in the agent's window before any
+	// other hook output. coord.Prime is the only thing that survives
+	// session boundaries — specs written outside `bones tasks` evaporate
+	// at the next compaction, which keeps planners filing atomic work
+	// rather than bypassing the tracker with freeform docs.
+	addHook(hooks, "SessionStart", "bones tasks prime --json")
 	addHook(hooks, "SessionStart", "bash .orchestrator/scripts/hub-bootstrap.sh")
 	migrateStopToSessionEnd(hooks)
 	addHook(hooks, "SessionEnd", "bash .orchestrator/scripts/hub-shutdown.sh")

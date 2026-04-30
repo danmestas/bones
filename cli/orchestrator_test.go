@@ -193,6 +193,75 @@ func TestScaffoldOrchestrator_PreservesUnrelatedStopHook(t *testing.T) {
 	}
 }
 
+// readSettings parses .claude/settings.json from the workspace root.
+func readSettings(t *testing.T, root string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, ".claude", "settings.json"))
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("parse settings: %v\n%s", err, data)
+	}
+	return parsed
+}
+
+// hookCommandsFor returns every "command" string in settings.hooks[event].
+func hookCommandsFor(settings map[string]any, event string) []string {
+	hooks, _ := settings["hooks"].(map[string]any)
+	groups, _ := hooks[event].([]any)
+	var out []string
+	for _, g := range groups {
+		gm, ok := g.(map[string]any)
+		if !ok {
+			continue
+		}
+		entries, _ := gm["hooks"].([]any)
+		for _, e := range entries {
+			em, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			if c, _ := em["command"].(string); c != "" {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
+}
+
+func countHookCommand(settings map[string]any, event, cmd string) int {
+	n := 0
+	for _, c := range hookCommandsFor(settings, event) {
+		if c == cmd {
+			n++
+		}
+	}
+	return n
+}
+
+// TestScaffoldOrchestrator_SessionStartIncludesPrime asserts that the
+// scaffold injects `bones tasks prime --json` into SessionStart so a
+// fresh agent's context boots from the tasks substrate. Without this,
+// freeform specs written outside `bones tasks` survive session
+// boundaries on equal footing with filed tasks, which removes the
+// "tasks-as-survivor" pressure that keeps planners filing atomic work.
+func TestScaffoldOrchestrator_SessionStartIncludesPrime(t *testing.T) {
+	dir := t.TempDir()
+	if err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatalf("scaffoldOrchestrator: %v", err)
+	}
+	cmds := hookCommandsFor(readSettings(t, dir), "SessionStart")
+	want := "bones tasks prime --json"
+	for _, c := range cmds {
+		if c == want {
+			return
+		}
+	}
+	t.Fatalf("SessionStart hooks missing %q; got %v", want, cmds)
+}
+
 func verifyHooks(t *testing.T, path string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
