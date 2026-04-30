@@ -49,12 +49,8 @@ func (c *SwarmJoinCmd) Run(g *libfossilcli.Globals) error {
 }
 
 func (c *SwarmJoinCmd) run(ctx context.Context, info workspace.Info) error {
-	hubURL := c.HubURL
-	if hubURL == "" {
-		hubURL = swarm.DefaultHubFossilURL
-	}
 	lease, err := swarm.Acquire(ctx, info, c.Slot, c.TaskID, swarm.AcquireOpts{
-		HubURL:        hubURL,
+		HubURL:        resolveHubURL(c.HubURL),
 		Caps:          c.Caps,
 		ForceTakeover: c.ForceTakeover,
 		NoAutosync:    c.NoAutosync,
