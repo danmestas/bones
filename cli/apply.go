@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
+	"github.com/danmestas/bones/internal/telemetry"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
@@ -27,7 +29,13 @@ type ApplyCmd struct {
 	DryRun bool `name:"dry-run" help:"show planned changes without writing or staging"`
 }
 
-func (c *ApplyCmd) Run(g *libfossilcli.Globals) error {
+func (c *ApplyCmd) Run(g *libfossilcli.Globals) (err error) {
+	outcome := &applyOutcome{DryRun: c.DryRun}
+	_, end := telemetry.RecordCommand(context.Background(), "apply",
+		telemetry.Bool("dry_run", c.DryRun),
+	)
+	defer func() { end(err, outcome.attrs()...) }()
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("cwd: %w", err)
@@ -41,18 +49,46 @@ func (c *ApplyCmd) Run(g *libfossilcli.Globals) error {
 		return err
 	}
 	defer cleanup()
-	return c.applyFromCheckout(pre, tempDir)
+	return c.applyFromCheckout(pre, tempDir, outcome)
+}
+
+// applyOutcome carries the post-hoc attributes the telemetry span needs,
+// populated as applyFromCheckout walks its pipeline. The span is opened
+// in Run before the outcome is known (so duration covers preconditions
+// + work) and the attrs are attached at end.
+type applyOutcome struct {
+	DryRun          bool
+	AlreadyUpToDate bool
+	DirtyRefused    bool
+	Added           int
+	Modified        int
+	Deleted         int
+}
+
+func (o *applyOutcome) attrs() []telemetry.Attr {
+	return []telemetry.Attr{
+		telemetry.Bool("dry_run", o.DryRun),
+		telemetry.Bool("already_up_to_date", o.AlreadyUpToDate),
+		telemetry.Bool("dirty_refused", o.DirtyRefused),
+		telemetry.Int("added", int64(o.Added)),
+		telemetry.Int("modified", int64(o.Modified)),
+		telemetry.Int("deleted", int64(o.Deleted)),
+	}
 }
 
 // applyFromCheckout executes the apply pipeline once preconditions and
 // the temp checkout are in place. Split out of Run to keep each below
-// the funlen limit while preserving the linear flow.
-func (c *ApplyCmd) applyFromCheckout(pre *applyPreflight, tempDir string) error {
+// the funlen limit while preserving the linear flow. outcome is
+// populated as we go so Run's deferred span end has the post-hoc attrs.
+func (c *ApplyCmd) applyFromCheckout(
+	pre *applyPreflight, tempDir string, outcome *applyOutcome,
+) error {
 	manifest, rev, err := trunkManifest(pre.HubFossil, pre.FossilBin)
 	if err != nil {
 		return err
 	}
 	if err := refuseIfDirty(pre.WorkspaceDir, manifest); err != nil {
+		outcome.DirtyRefused = true
 		return err
 	}
 	prevManifest, err := loadPrevManifest(pre)
@@ -63,8 +99,12 @@ func (c *ApplyCmd) applyFromCheckout(pre *applyPreflight, tempDir string) error 
 	if err != nil {
 		return err
 	}
+	outcome.Added = len(plan.Added)
+	outcome.Modified = len(plan.Modified)
+	outcome.Deleted = len(plan.Deleted)
 	total := len(plan.Added) + len(plan.Modified) + len(plan.Deleted)
 	if total == 0 {
+		outcome.AlreadyUpToDate = true
 		fmt.Printf("bones apply: already up to date at %s\n", shortRev(rev))
 		return writeLastAppliedMarker(pre.WorkspaceDir, rev)
 	}

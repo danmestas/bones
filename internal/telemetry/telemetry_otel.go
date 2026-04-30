@@ -34,7 +34,21 @@ func RecordCommand(
 		}
 	}
 	ctx, span := tracer.Start(ctx, name, trace.WithAttributes(kv...))
-	return ctx, func(err error) {
+	return ctx, func(err error, outcome ...Attr) {
+		if len(outcome) > 0 {
+			out := make([]attribute.KeyValue, 0, len(outcome))
+			for _, a := range outcome {
+				switch v := a.value.(type) {
+				case string:
+					out = append(out, attribute.String(a.key, v))
+				case int64:
+					out = append(out, attribute.Int64(a.key, v))
+				case bool:
+					out = append(out, attribute.Bool(a.key, v))
+				}
+			}
+			span.SetAttributes(out...)
+		}
 		if err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())

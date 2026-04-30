@@ -12,6 +12,7 @@ import (
 
 	"github.com/danmestas/bones/internal/githook"
 	"github.com/danmestas/bones/internal/hub"
+	"github.com/danmestas/bones/internal/telemetry"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
@@ -20,8 +21,13 @@ import (
 //  2. orchestrator scaffold (scripts, skills, hooks)
 //  3. build bin/leaf if missing
 //  4. run hub-bootstrap.sh and verify the hub is up
-func runUp(cwd string) error {
-	info, err := initOrJoinWorkspace(context.Background(), cwd)
+func runUp(cwd string) (err error) {
+	ctx, end := telemetry.RecordCommand(context.Background(), "bones.up",
+		telemetry.String("workspace_hash", telemetry.WorkspaceHash(cwd)),
+	)
+	defer func() { end(err) }()
+
+	info, err := initOrJoinWorkspace(ctx, cwd)
 	if err != nil {
 		return fmt.Errorf("workspace: %w", err)
 	}

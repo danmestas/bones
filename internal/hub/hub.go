@@ -16,6 +16,8 @@ import (
 	"github.com/danmestas/libfossil"
 	_ "github.com/danmestas/libfossil/db/driver/modernc"
 	natsserver "github.com/nats-io/nats-server/v2/server"
+
+	"github.com/danmestas/bones/internal/telemetry"
 )
 
 // detachEnv, when set, signals to a fork-exec'd child process that it
@@ -59,7 +61,7 @@ const natsBootstrapBackoff = 1 * time.Second
 // Without detach, Start blocks on ctx.Done(): the calling process is
 // the hub. Pid files reference the calling process. On cancellation,
 // both servers shut down cleanly and pid files are removed.
-func Start(ctx context.Context, root string, options ...Option) error {
+func Start(ctx context.Context, root string, options ...Option) (err error) {
 	o := defaults()
 	for _, fn := range options {
 		fn(&o)
@@ -67,7 +69,8 @@ func Start(ctx context.Context, root string, options ...Option) error {
 	// Re-entry from the fork-exec'd child: even if the user passed
 	// WithDetach(true), the BONES_HUB_FOREGROUND env var (set by our
 	// fork) forces foreground so we don't recurse.
-	if os.Getenv(detachEnv) == "1" {
+	isDetachChild := os.Getenv(detachEnv) == "1"
+	if isDetachChild {
 		o.detach = false
 	}
 
@@ -75,6 +78,20 @@ func Start(ctx context.Context, root string, options ...Option) error {
 	if err != nil {
 		return err
 	}
+
+	// Telemetry: record only the parent's Start. The detached child
+	// re-enters Start with BONES_HUB_FOREGROUND=1 and would otherwise
+	// emit a daemon-lifetime span the parent already covered.
+	if !isDetachChild {
+		urlRecorded := readURLFile(p.fossilURL) != ""
+		var end telemetry.EndFunc
+		ctx, end = telemetry.RecordCommand(ctx, "hub.start",
+			telemetry.Bool("detach", o.detach),
+			telemetry.Bool("url_recorded", urlRecorded),
+		)
+		defer func() { end(err) }()
+	}
+
 	if err := os.MkdirAll(p.pidDir, 0o755); err != nil {
 		return fmt.Errorf("hub: pids dir: %w", err)
 	}
@@ -212,11 +229,14 @@ func spawnDetachedChild(p paths, o opts) error {
 // pid is the same as os.Getpid(), Stop only removes the pid file. The
 // foreground Start has its own ctx-cancellation path; signaling self
 // would terminate the caller before it could clean up.
-func Stop(root string) error {
+func Stop(root string) (err error) {
 	p, err := newPaths(root)
 	if err != nil {
 		return err
 	}
+
+	_, end := telemetry.RecordCommand(context.Background(), "hub.stop")
+	defer func() { end(err) }()
 
 	self := os.Getpid()
 	// Both servers share a single child process in the detached model,
