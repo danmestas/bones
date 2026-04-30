@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -190,6 +191,109 @@ func TestScaffoldOrchestrator_PreservesUnrelatedStopHook(t *testing.T) {
 	got, _ := os.ReadFile(settingsPath)
 	if !strings.Contains(string(got), "echo bye") {
 		t.Errorf("unrelated Stop hook lost:\n%s", got)
+	}
+}
+
+// readSettings parses .claude/settings.json from the workspace root.
+func readSettings(t *testing.T, root string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, ".claude", "settings.json"))
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("parse settings: %v\n%s", err, data)
+	}
+	return parsed
+}
+
+// hookCommandsFor returns every "command" string in settings.hooks[event].
+func hookCommandsFor(settings map[string]any, event string) []string {
+	hooks, _ := settings["hooks"].(map[string]any)
+	groups, _ := hooks[event].([]any)
+	var out []string
+	for _, g := range groups {
+		gm, ok := g.(map[string]any)
+		if !ok {
+			continue
+		}
+		entries, _ := gm["hooks"].([]any)
+		for _, e := range entries {
+			em, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			if c, _ := em["command"].(string); c != "" {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
+}
+
+func countHookCommand(settings map[string]any, event, cmd string) int {
+	n := 0
+	for _, c := range hookCommandsFor(settings, event) {
+		if c == cmd {
+			n++
+		}
+	}
+	return n
+}
+
+// TestScaffoldOrchestrator_SessionStartIncludesPrime asserts that the
+// scaffold injects `bones tasks prime --json` into SessionStart so a
+// fresh agent's context boots from the tasks substrate. Without this,
+// freeform specs written outside `bones tasks` survive session
+// boundaries on equal footing with filed tasks, which removes the
+// "tasks-as-survivor" pressure that keeps planners filing atomic work.
+func TestScaffoldOrchestrator_SessionStartIncludesPrime(t *testing.T) {
+	dir := t.TempDir()
+	if err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatalf("scaffoldOrchestrator: %v", err)
+	}
+	cmds := hookCommandsFor(readSettings(t, dir), "SessionStart")
+	want := "bones tasks prime --json"
+	if !slices.Contains(cmds, want) {
+		t.Fatalf("SessionStart hooks missing %q; got %v", want, cmds)
+	}
+}
+
+// TestScaffoldOrchestrator_PreCompactIncludesPrime asserts the
+// PreCompact event runs `bones tasks prime --json`. Compaction is the
+// longer-horizon failure mode for narrative drift — wiring SessionStart
+// alone leaves a multi-hour window where freeform context can win.
+func TestScaffoldOrchestrator_PreCompactIncludesPrime(t *testing.T) {
+	dir := t.TempDir()
+	if err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatalf("scaffoldOrchestrator: %v", err)
+	}
+	cmds := hookCommandsFor(readSettings(t, dir), "PreCompact")
+	want := "bones tasks prime --json"
+	if !slices.Contains(cmds, want) {
+		t.Fatalf("PreCompact hooks missing %q; got %v", want, cmds)
+	}
+}
+
+// TestScaffoldOrchestrator_PrimeHookIdempotent asserts that re-running
+// `bones up` does not duplicate the prime entries. Locks in the
+// addHook dedup contract — without it, a downstream user who runs
+// `bones up --reinstall-hooks` repeatedly would accumulate multiple
+// prime calls per event.
+func TestScaffoldOrchestrator_PrimeHookIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	for i := range 3 {
+		if err := scaffoldOrchestrator(dir); err != nil {
+			t.Fatalf("scaffold pass %d: %v", i+1, err)
+		}
+	}
+	settings := readSettings(t, dir)
+	const cmd = "bones tasks prime --json"
+	for _, event := range []string{"SessionStart", "PreCompact"} {
+		if got := countHookCommand(settings, event, cmd); got != 1 {
+			t.Errorf("%s prime entry count = %d, want 1", event, got)
+		}
 	}
 }
 
