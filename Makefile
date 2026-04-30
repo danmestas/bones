@@ -95,3 +95,15 @@ bin:
 
 bones: bin
 	go build -o bin/bones ./cmd/bones
+
+# CI mirror — must match .github/workflows/ci.yml verbatim.
+.PHONY: ci ci-fast
+ci:
+	go build -tags=otel ./...
+	go test -tags=otel -short ./... -count=1
+
+# Fast subset for pre-push hook (~30-60s; no -tags=otel, no -race).
+ci-fast:
+	go vet ./...
+	go build ./...
+	go test -short -count=1 -timeout=30s ./...
