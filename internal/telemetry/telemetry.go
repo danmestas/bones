@@ -30,7 +30,9 @@ func Int(key string, value int64) Attr { return Attr{key: key, value: value} }
 func Bool(key string, value bool) Attr { return Attr{key: key, value: value} }
 
 // EndFunc finalizes a span started by RecordCommand. Pass the operation's
-// terminal error (or nil on success); the OTel branch records the error and
-// closes the span. Always call exactly once — typically via `defer end(err)`
-// against a named-return `err`.
-type EndFunc func(err error)
+// terminal error (or nil on success) and any outcome attributes computed
+// during the call (counts, refusal flags, etc.) — the OTel branch attaches
+// the attrs and records the error before closing the span. Always call
+// exactly once — typically via `defer func(){ end(err) }()` against a
+// named-return `err`.
+type EndFunc func(err error, attrs ...Attr)

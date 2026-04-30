@@ -11,5 +11,5 @@ import "context"
 func RecordCommand(
 	ctx context.Context, _ string, _ ...Attr,
 ) (context.Context, EndFunc) {
-	return ctx, func(error) {}
+	return ctx, func(error, ...Attr) {}
 }
