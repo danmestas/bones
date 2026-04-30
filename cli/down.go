@@ -266,6 +266,10 @@ func removeBonesHooks(path string) error {
 		return nil
 	}
 	pruneHookEvent(hooks, "SessionStart", "hub-bootstrap.sh")
+	// Current installs land under SessionEnd; the legacy Stop event
+	// is also pruned so workspaces installed before the migration
+	// are still cleaned up by `bones down`.
+	pruneHookEvent(hooks, "SessionEnd", "hub-shutdown.sh")
 	pruneHookEvent(hooks, "Stop", "hub-shutdown.sh")
 	if len(hooks) == 0 {
 		delete(rootObj, "hooks")

@@ -101,6 +101,98 @@ func TestScaffoldOrchestrator_PreservesExistingHooks(t *testing.T) {
 	}
 }
 
+// TestScaffoldOrchestrator_MigrateLegacyStopHook verifies that running
+// scaffoldOrchestrator on a workspace whose settings.json has the
+// hub-shutdown shim under the legacy Stop event migrates it to
+// SessionEnd. Older bones (≤ v0.3.0) installed under Stop, which
+// fired after every assistant turn instead of on session end.
+func TestScaffoldOrchestrator_MigrateLegacyStopHook(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := map[string]any{
+		"hooks": map[string]any{
+			"Stop": []any{
+				map[string]any{
+					"matcher": "",
+					"hooks": []any{
+						map[string]any{
+							"command": "bash .orchestrator/scripts/hub-shutdown.sh",
+							"type":    "command",
+							"timeout": float64(10),
+						},
+					},
+				},
+			},
+		},
+	}
+	data, _ := json.MarshalIndent(legacy, "", "  ")
+	if err := os.WriteFile(settingsPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatalf("scaffoldOrchestrator: %v", err)
+	}
+
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	hooks := parsed["hooks"].(map[string]any)
+	if _, ok := hooks["Stop"]; ok {
+		t.Errorf("legacy Stop hook not migrated:\n%s", got)
+	}
+	if _, ok := hooks["SessionEnd"]; !ok {
+		t.Errorf("hub-shutdown not added under SessionEnd:\n%s", got)
+	}
+}
+
+// TestScaffoldOrchestrator_PreservesUnrelatedStopHook ensures the
+// migration only removes our shim, not other Stop hooks the user
+// installed.
+func TestScaffoldOrchestrator_PreservesUnrelatedStopHook(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	other := map[string]any{
+		"hooks": map[string]any{
+			"Stop": []any{
+				map[string]any{
+					"matcher": "",
+					"hooks": []any{
+						map[string]any{
+							"command": "echo bye",
+							"type":    "command",
+						},
+					},
+				},
+			},
+		},
+	}
+	data, _ := json.MarshalIndent(other, "", "  ")
+	if err := os.WriteFile(settingsPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatalf("scaffoldOrchestrator: %v", err)
+	}
+
+	got, _ := os.ReadFile(settingsPath)
+	if !strings.Contains(string(got), "echo bye") {
+		t.Errorf("unrelated Stop hook lost:\n%s", got)
+	}
+}
+
 func verifyHooks(t *testing.T, path string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -117,7 +209,14 @@ func verifyHooks(t *testing.T, path string) {
 		t.Errorf("SessionStart hub-bootstrap missing:\n%s", out)
 	}
 	if !strings.Contains(out, "hub-shutdown.sh") {
-		t.Errorf("Stop hub-shutdown missing:\n%s", out)
+		t.Errorf("SessionEnd hub-shutdown missing:\n%s", out)
+	}
+	hooks := parsed["hooks"].(map[string]any)
+	if _, ok := hooks["SessionEnd"]; !ok {
+		t.Errorf("hub-shutdown not under SessionEnd:\n%s", out)
+	}
+	if _, ok := hooks["Stop"]; ok {
+		t.Errorf("hub-shutdown leaked into Stop:\n%s", out)
 	}
 }
 

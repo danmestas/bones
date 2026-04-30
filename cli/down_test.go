@@ -10,8 +10,8 @@ import (
 
 // TestRemoveBonesHooks_RemovesScaffoldedHooks pins the surgical-edit
 // behavior: only hooks whose command references hub-bootstrap.sh
-// (SessionStart) or hub-shutdown.sh (Stop) are removed. Other hooks
-// in the same event groups stay.
+// (SessionStart) or hub-shutdown.sh (SessionEnd) are removed. Other
+// hooks in the same event groups stay.
 func TestRemoveBonesHooks_RemovesScaffoldedHooks(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
@@ -35,7 +35,7 @@ func TestRemoveBonesHooks_RemovesScaffoldedHooks(t *testing.T) {
 					},
 				},
 			},
-			"Stop": []any{
+			"SessionEnd": []any{
 				map[string]any{
 					"matcher": "",
 					"hooks": []any{
@@ -81,10 +81,10 @@ func TestRemoveBonesHooks_RemovesScaffoldedHooks(t *testing.T) {
 		t.Errorf("surviving SessionStart command: got %q, want echo other-hook", cmd)
 	}
 
-	// Stop had only the bones entry; its group should be gone.
-	if _, ok := hooks["Stop"]; ok {
-		t.Errorf("Stop event should be removed (was empty after prune); still present: %+v",
-			hooks["Stop"])
+	// SessionEnd had only the bones entry; its group should be gone.
+	if _, ok := hooks["SessionEnd"]; ok {
+		t.Errorf("SessionEnd event should be removed (was empty after prune); still present: %+v",
+			hooks["SessionEnd"])
 	}
 
 	// PreToolUse must be untouched.
@@ -134,7 +134,7 @@ func TestRemoveBonesHooks_OnlyBonesHooks(t *testing.T) {
 					},
 				},
 			},
-			"Stop": []any{
+			"SessionEnd": []any{
 				map[string]any{
 					"matcher": "",
 					"hooks": []any{
@@ -154,6 +154,37 @@ func TestRemoveBonesHooks_OnlyBonesHooks(t *testing.T) {
 	got := readJSON(t, path)
 	if _, ok := got["hooks"]; ok {
 		t.Errorf("hooks key should be removed; got %+v", got)
+	}
+}
+
+// TestRemoveBonesHooks_LegacyStopHook: bones down on a workspace
+// installed before the SessionEnd migration must still clean up the
+// shim that lives under the old "Stop" event.
+func TestRemoveBonesHooks_LegacyStopHook(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	writeJSON(t, path, map[string]any{
+		"hooks": map[string]any{
+			"Stop": []any{
+				map[string]any{
+					"matcher": "",
+					"hooks": []any{
+						map[string]any{
+							"command": "bash .orchestrator/scripts/hub-shutdown.sh",
+							"type":    "command",
+						},
+					},
+				},
+			},
+		},
+	})
+
+	if err := removeBonesHooks(path); err != nil {
+		t.Fatalf("removeBonesHooks: %v", err)
+	}
+	got := readJSON(t, path)
+	if _, ok := got["hooks"]; ok {
+		t.Errorf("legacy Stop hook should be cleaned up; got %+v", got)
 	}
 }
 
