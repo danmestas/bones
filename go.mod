@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/alecthomas/kong v1.15.0
-	github.com/danmestas/EdgeSync v0.0.5
+	github.com/danmestas/EdgeSync v0.0.7
 	github.com/danmestas/EdgeSync/leaf v0.0.3
 	github.com/danmestas/libfossil v0.4.5
 	github.com/danmestas/libfossil/db/driver/modernc v0.1.0
