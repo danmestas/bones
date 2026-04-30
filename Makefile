@@ -131,3 +131,9 @@ release:
 	@echo ""
 	@echo "Tag $(VERSION) created locally. To publish:"
 	@echo "  git push origin $(VERSION)"
+
+.PHONY: setup-hooks
+setup-hooks:
+	git config core.hooksPath .githooks
+	@echo "Git hooks configured to use .githooks/ directory."
+	@echo "Pre-push runs make ci-fast (~60s). Skip with: git push --no-verify"
