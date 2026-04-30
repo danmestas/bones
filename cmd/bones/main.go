@@ -9,6 +9,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/alecthomas/kong"
 	_ "github.com/danmestas/libfossil/db/driver/modernc"
 
+	"github.com/danmestas/bones/internal/telemetry"
 	"github.com/danmestas/bones/internal/updatecheck"
 	bversion "github.com/danmestas/bones/internal/version"
 )
@@ -38,6 +40,12 @@ func main() {
 	// cached state. Suppressed by BONES_UPDATE_CHECK=0 and skipped on
 	// "dev" builds (i.e. anything not built by GoReleaser).
 	updatecheck.Check(version)
+
+	// Opt-in telemetry: reads BONES_TELEMETRY + BONES_OTEL_ENDPOINT
+	// per ADR 0039. No-op in default builds (no exporter compiled in)
+	// and no-op when env vars are absent (zero network egress).
+	shutdown := telemetry.Init(context.Background(), version, commit)
+	defer shutdown(context.Background())
 
 	// Handle --version / -V at the top level. Done before Kong.Parse so
 	// it doesn't collide with sub-flags like `bones repo extract --version`.
