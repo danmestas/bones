@@ -46,7 +46,8 @@ func TestApplyRun_DryRunDoesNotStage(t *testing.T) {
 	mustRun(t, "fossil", "open", "--force", hubFossil, "--workdir", wt)
 	must(t, os.WriteFile(filepath.Join(wt, "newfile.txt"), []byte("added\n"), 0o644))
 	mustRunIn(t, wt, "fossil", "add", "newfile.txt")
-	mustRunIn(t, wt, "fossil", "commit", "--no-warnings", "--user-override", "u", "-m", "add newfile")
+	mustRunIn(t, wt, "fossil", "commit", "--no-warnings",
+		"--user-override", "u", "-m", "add newfile")
 	mustRunIn(t, wt, "fossil", "close", "--force")
 
 	t.Chdir(dir)

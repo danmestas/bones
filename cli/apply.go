@@ -35,86 +35,122 @@ func (c *ApplyCmd) Run(g *libfossilcli.Globals) error {
 	if err != nil {
 		return err
 	}
-
-	tempDir := filepath.Join(pre.WorkspaceDir, ".bones",
-		fmt.Sprintf("apply-%d", time.Now().UnixNano()))
-	if err := os.MkdirAll(tempDir, 0o755); err != nil {
-		return fmt.Errorf("mkdir temp checkout: %w", err)
+	tempDir, cleanup, err := openTempCheckout(pre)
+	if err != nil {
+		return err
 	}
-	defer func() { _ = os.RemoveAll(tempDir) }()
+	defer cleanup()
+	return c.applyFromCheckout(pre, tempDir)
+}
 
-	checkoutCmd := exec.Command(pre.FossilBin, "open", "--force",
-		pre.HubFossil, "--workdir", tempDir)
-	checkoutCmd.Stdout = os.Stderr
-	checkoutCmd.Stderr = os.Stderr
-	if err := checkoutCmd.Run(); err != nil {
-		return fmt.Errorf("fossil open temp checkout: %w", err)
-	}
-	defer func() {
-		closeCmd := exec.Command(pre.FossilBin, "close", "--force")
-		closeCmd.Dir = tempDir
-		_ = closeCmd.Run()
-	}()
-
+// applyFromCheckout executes the apply pipeline once preconditions and
+// the temp checkout are in place. Split out of Run to keep each below
+// the funlen limit while preserving the linear flow.
+func (c *ApplyCmd) applyFromCheckout(pre *applyPreflight, tempDir string) error {
 	manifest, rev, err := trunkManifest(pre.HubFossil, pre.FossilBin)
 	if err != nil {
 		return err
 	}
-
-	dirty, err := dirtyTrackedPaths(pre.WorkspaceDir, manifest)
+	if err := refuseIfDirty(pre.WorkspaceDir, manifest); err != nil {
+		return err
+	}
+	prevManifest, err := loadPrevManifest(pre)
 	if err != nil {
 		return err
 	}
-	if len(dirty) > 0 {
-		preview := dirty
-		if len(preview) > 3 {
-			preview = preview[:3]
-		}
-		return fmt.Errorf(
-			"uncommitted changes in fossil-tracked files: %s — git stash or commit before applying",
-			strings.Join(preview, ", "))
-	}
-
-	prevRev, err := readLastAppliedMarker(pre.WorkspaceDir)
-	if err != nil {
-		return fmt.Errorf("read last-applied marker: %w", err)
-	}
-	var prevManifest []string
-	if prevRev != "" {
-		prevManifest, err = manifestAtRev(pre.HubFossil, pre.FossilBin, prevRev)
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"bones apply: previous rev %s not found in hub fossil; suppressing deletions\n",
-				prevRev)
-			prevManifest = nil
-		}
-	}
-
 	plan, err := classifyDiff(tempDir, pre.WorkspaceDir, manifest, prevManifest)
 	if err != nil {
 		return err
 	}
-
 	total := len(plan.Added) + len(plan.Modified) + len(plan.Deleted)
 	if total == 0 {
 		fmt.Printf("bones apply: already up to date at %s\n", shortRev(rev))
 		return writeLastAppliedMarker(pre.WorkspaceDir, rev)
 	}
-
 	if c.DryRun {
 		printApplyDryRun(plan, rev)
 		return nil
 	}
-
 	if err := applyPlanToTree(tempDir, pre.WorkspaceDir, plan); err != nil {
 		return err
 	}
 	if err := writeLastAppliedMarker(pre.WorkspaceDir, rev); err != nil {
 		return fmt.Errorf("write last-applied marker: %w", err)
 	}
-	fmt.Printf("applied %d changes from trunk @ %s. review with `git diff --staged`. commit when ready.\n",
-		total, shortRev(rev))
+	fmt.Printf(
+		"applied %d changes from trunk @ %s. review with `git diff --staged`. commit when ready.\n",
+		total, shortRev(rev),
+	)
 	return nil
+}
+
+// openTempCheckout opens a fresh fossil checkout of the hub repo at trunk
+// tip in <workspace>/.bones/apply-<unix-nano>/. Returns the temp dir and
+// a cleanup function the caller must defer.
+func openTempCheckout(pre *applyPreflight) (string, func(), error) {
+	tempDir := filepath.Join(pre.WorkspaceDir, ".bones",
+		fmt.Sprintf("apply-%d", time.Now().UnixNano()))
+	if err := os.MkdirAll(tempDir, 0o755); err != nil {
+		return "", nil, fmt.Errorf("mkdir temp checkout: %w", err)
+	}
+	checkoutCmd := exec.Command(pre.FossilBin, "open", "--force",
+		pre.HubFossil, "--workdir", tempDir)
+	checkoutCmd.Stdout = os.Stderr
+	checkoutCmd.Stderr = os.Stderr
+	if err := checkoutCmd.Run(); err != nil {
+		_ = os.RemoveAll(tempDir)
+		return "", nil, fmt.Errorf("fossil open temp checkout: %w", err)
+	}
+	cleanup := func() {
+		closeCmd := exec.Command(pre.FossilBin, "close", "--force")
+		closeCmd.Dir = tempDir
+		_ = closeCmd.Run()
+		_ = os.RemoveAll(tempDir)
+	}
+	return tempDir, cleanup, nil
+}
+
+// refuseIfDirty wraps dirtyTrackedPaths in the user-facing refusal
+// message produced when any fossil-tracked path has uncommitted git
+// changes.
+func refuseIfDirty(workspaceDir string, manifest []string) error {
+	dirty, err := dirtyTrackedPaths(workspaceDir, manifest)
+	if err != nil {
+		return err
+	}
+	if len(dirty) == 0 {
+		return nil
+	}
+	preview := dirty
+	if len(preview) > 3 {
+		preview = preview[:3]
+	}
+	return fmt.Errorf(
+		"uncommitted changes in fossil-tracked files: %s — git stash or commit before applying",
+		strings.Join(preview, ", "),
+	)
+}
+
+// loadPrevManifest reads the last-applied marker and looks up the
+// manifest at that rev. A missing marker returns (nil, nil) — first
+// apply is additive-only. A marker pointing at an unknown rev logs a
+// warning and returns (nil, nil) so deletions are suppressed.
+func loadPrevManifest(pre *applyPreflight) ([]string, error) {
+	prevRev, err := readLastAppliedMarker(pre.WorkspaceDir)
+	if err != nil {
+		return nil, fmt.Errorf("read last-applied marker: %w", err)
+	}
+	if prevRev == "" {
+		return nil, nil
+	}
+	prevManifest, err := manifestAtRev(pre.HubFossil, pre.FossilBin, prevRev)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"bones apply: previous rev %s not found in hub fossil; "+
+				"suppressing deletions\n", prevRev)
+		return nil, nil
+	}
+	return prevManifest, nil
 }
 
 func shortRev(rev string) string {
@@ -156,7 +192,8 @@ type applyPreflight struct {
 func runApplyPreflight(cwd string) (*applyPreflight, error) {
 	root, err := workspace.FindRoot(cwd)
 	if err != nil {
-		return nil, fmt.Errorf("workspace not found: run `bones init` or `bones up` first (%w)", err)
+		return nil, fmt.Errorf(
+			"workspace not found: run `bones init` or `bones up` first (%w)", err)
 	}
 	hubRepo := filepath.Join(root, ".orchestrator", "hub.fossil")
 	if _, err := os.Stat(hubRepo); err != nil {
@@ -243,7 +280,10 @@ type applyPlan struct {
 // projectRoot (the live working tree). manifest is the trunk-tip path
 // list; prevManifest is the previously-applied path list (nil/empty
 // means "no marker yet, suppress deletions").
-func classifyDiff(tempCheckout, projectRoot string, manifest, prevManifest []string) (*applyPlan, error) {
+func classifyDiff(
+	tempCheckout, projectRoot string,
+	manifest, prevManifest []string,
+) (*applyPlan, error) {
 	plan := &applyPlan{}
 	for _, p := range manifest {
 		src := filepath.Join(tempCheckout, p)
@@ -400,4 +440,3 @@ func trunkRev(hubFossil, fossilBin string) (string, error) {
 	}
 	return "", errors.New("could not parse trunk rev from `fossil info`")
 }
-
