@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -126,7 +127,8 @@ func refuseIfDirty(workspaceDir string, manifest []string) error {
 		preview = preview[:3]
 	}
 	return fmt.Errorf(
-		"uncommitted changes in fossil-tracked files: %s — git stash or commit before applying",
+		"bones apply: uncommitted changes in fossil-tracked files: %s — "+
+			"git stash or commit before applying",
 		strings.Join(preview, ", "),
 	)
 }
@@ -153,9 +155,13 @@ func loadPrevManifest(pre *applyPreflight) ([]string, error) {
 	return prevManifest, nil
 }
 
+// shortRev abbreviates a fossil hex UUID to 12 characters — fossil's
+// own UI convention for displaying revs, mirrored here so apply's
+// "trunk @ <rev>" matches what `fossil info` and `fossil timeline` print.
 func shortRev(rev string) string {
-	if len(rev) >= 12 {
-		return rev[:12]
+	const fossilShortLen = 12
+	if len(rev) >= fossilShortLen {
+		return rev[:fossilShortLen]
 	}
 	return rev
 }
@@ -193,20 +199,22 @@ func runApplyPreflight(cwd string) (*applyPreflight, error) {
 	root, err := workspace.FindRoot(cwd)
 	if err != nil {
 		return nil, fmt.Errorf(
-			"workspace not found: run `bones init` or `bones up` first (%w)", err)
+			"bones apply: workspace not found — run `bones init` or `bones up` first (%w)", err)
 	}
 	hubRepo := filepath.Join(root, ".orchestrator", "hub.fossil")
 	if _, err := os.Stat(hubRepo); err != nil {
-		return nil, fmt.Errorf("hub repo not found at %s — run `bones up` first", hubRepo)
+		return nil, fmt.Errorf(
+			"bones apply: hub repo not found at %s — run `bones up` first", hubRepo)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".git")); err != nil {
-		return nil, fmt.Errorf("no git repo at %s — bones apply requires git for staging", root)
+		return nil, fmt.Errorf(
+			"bones apply: no git repo at %s — apply requires git for staging", root)
 	}
 	fossilBin, err := exec.LookPath("fossil")
 	if err != nil {
 		return nil, errors.New(
-			"bones apply requires the system `fossil` binary; install via " +
-				"`brew install fossil` (or apt) and re-run",
+			"bones apply: requires the system `fossil` binary; " +
+				"install via `brew install fossil` (or apt) and re-run",
 		)
 	}
 	return &applyPreflight{
@@ -300,7 +308,7 @@ func classifyDiff(
 		if err != nil {
 			return nil, fmt.Errorf("read dest %s: %w", p, err)
 		}
-		if !bytesEqual(srcBytes, dstBytes) {
+		if !bytes.Equal(srcBytes, dstBytes) {
 			plan.Modified = append(plan.Modified, p)
 		}
 	}
@@ -321,26 +329,15 @@ func classifyDiff(
 	return plan, nil
 }
 
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // applyPlanToTree writes adds/modifies from tempCheckout into projectRoot,
 // removes deleted paths, and stages everything that changed via
 // `git add -A -- <paths>`. Source-of-truth file modes are preserved
 // from tempCheckout (which fossil populated honoring its tracked mode).
 func applyPlanToTree(tempCheckout, projectRoot string, plan *applyPlan) error {
-	staging := append([]string(nil), plan.Added...)
+	staging := make([]string, 0, len(plan.Added)+len(plan.Modified)+len(plan.Deleted))
+	staging = append(staging, plan.Added...)
 	staging = append(staging, plan.Modified...)
-	for _, p := range append(plan.Added, plan.Modified...) {
+	for _, p := range staging {
 		src := filepath.Join(tempCheckout, p)
 		dst := filepath.Join(projectRoot, p)
 		data, err := os.ReadFile(src)

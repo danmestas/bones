@@ -77,7 +77,7 @@ func TestApplyRun_DirtyTreeRefuses(t *testing.T) {
 	t.Chdir(dir)
 	cmd := &ApplyCmd{}
 	err := cmd.Run(&libfossilcli.Globals{})
-	if err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
+	if err == nil || !strings.Contains(err.Error(), "bones apply: uncommitted changes") {
 		t.Fatalf("expected uncommitted-changes refusal, got %v", err)
 	}
 }
