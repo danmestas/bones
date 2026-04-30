@@ -147,6 +147,80 @@ func equalStringSets(a, b []string) bool {
 	return true
 }
 
+func TestDirtyTracked_ClearTree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := t.TempDir()
+	mustRunIn(t, dir, "git", "init", "-q")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("clean\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRunIn(t, dir, "git", "add", ".")
+	mustRunIn(t, dir, "git", "-c", "user.name=t", "-c", "user.email=t@t",
+		"commit", "-q", "-m", "init")
+
+	dirty, err := dirtyTrackedPaths(dir, []string{"a.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dirty) != 0 {
+		t.Errorf("expected clean, got %v", dirty)
+	}
+}
+
+func TestDirtyTracked_ModifiedFossilPath(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := t.TempDir()
+	mustRunIn(t, dir, "git", "init", "-q")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRunIn(t, dir, "git", "add", ".")
+	mustRunIn(t, dir, "git", "-c", "user.name=t", "-c", "user.email=t@t",
+		"commit", "-q", "-m", "init")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dirty, err := dirtyTrackedPaths(dir, []string{"a.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dirty) != 1 || dirty[0] != "a.txt" {
+		t.Errorf("expected [a.txt], got %v", dirty)
+	}
+}
+
+func TestDirtyTracked_UntrackedFileIgnored(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := t.TempDir()
+	mustRunIn(t, dir, "git", "init", "-q")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRunIn(t, dir, "git", "add", "a.txt")
+	mustRunIn(t, dir, "git", "-c", "user.name=t", "-c", "user.email=t@t",
+		"commit", "-q", "-m", "init")
+	// Untracked scratch file outside the manifest. dirtyTrackedPaths
+	// must ignore it; it's not fossil's concern.
+	if err := os.WriteFile(filepath.Join(dir, "scratch.tmp"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dirty, err := dirtyTrackedPaths(dir, []string{"a.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dirty) != 0 {
+		t.Errorf("untracked scratch.tmp should not count; got %v", dirty)
+	}
+}
+
 // setupApplyFixture creates a tmpdir containing a bones workspace
 // marker, an empty hub.fossil placeholder file, and a .git/ directory.
 // Sufficient for preflight checks; tests that exercise actual fossil

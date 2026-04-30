@@ -84,6 +84,43 @@ func trunkManifest(hubFossil, fossilBin string) ([]string, string, error) {
 	return paths, rev, nil
 }
 
+// dirtyTrackedPaths returns the subset of fossil-manifest paths that
+// have staged or unstaged modifications in the workspace's git tree.
+// Untracked-by-fossil files are not consulted regardless of their git
+// state — the apply contract is "refuse if fossil would clobber the
+// user's work," not "refuse if anything is dirty."
+func dirtyTrackedPaths(workspaceDir string, manifest []string) ([]string, error) {
+	if len(manifest) == 0 {
+		return nil, nil
+	}
+	manifestSet := make(map[string]struct{}, len(manifest))
+	for _, p := range manifest {
+		manifestSet[p] = struct{}{}
+	}
+	cmd := exec.Command("git", "status", "--porcelain", "--untracked-files=no")
+	cmd.Dir = workspaceDir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git status: %w", err)
+	}
+	var dirty []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		// Porcelain v1: "XY <path>" where X = index status, Y = worktree status.
+		path := strings.TrimSpace(line[3:])
+		// Rename lines have "old -> new"; take the new name.
+		if idx := strings.LastIndex(path, " -> "); idx >= 0 {
+			path = path[idx+4:]
+		}
+		if _, ok := manifestSet[path]; ok {
+			dirty = append(dirty, path)
+		}
+	}
+	return dirty, nil
+}
+
 // manifestAtRev lists files at a specific rev (hex UUID or symbolic
 // name like "trunk"). `-r` is required so `fossil ls` runs against the
 // repo without a live checkout — without `-r`, fossil ls expects to be
