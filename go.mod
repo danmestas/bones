@@ -6,7 +6,7 @@ require (
 	github.com/alecthomas/kong v1.15.0
 	github.com/danmestas/EdgeSync v0.0.5
 	github.com/danmestas/EdgeSync/leaf v0.0.3
-	github.com/danmestas/libfossil v0.4.4
+	github.com/danmestas/libfossil v0.4.5
 	github.com/danmestas/libfossil/db/driver/modernc v0.1.0
 	github.com/google/uuid v1.6.0
 	github.com/nats-io/nats-server/v2 v2.12.8
