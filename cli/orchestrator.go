@@ -74,6 +74,12 @@ func copyFile(fsys embed.FS, src, dst string, mode fs.FileMode) error {
 // mergeSettings idempotently adds hub-bootstrap and hub-shutdown hooks
 // to the consumer's .claude/settings.json. Creates the file if absent.
 // Preserves all existing top-level keys, hook events, and entries.
+//
+// Hub teardown is wired to SessionEnd, not Stop. Stop fires after every
+// assistant turn and was tearing the hub down constantly; SessionEnd
+// fires only when the actual session terminates. Legacy installs that
+// have the shim under "Stop" are migrated by removing the old entry
+// before the SessionEnd entry is added.
 func mergeSettings(path string) error {
 	root := map[string]any{}
 	if data, err := os.ReadFile(path); err == nil {
@@ -92,7 +98,8 @@ func mergeSettings(path string) error {
 	}
 
 	addHook(hooks, "SessionStart", "bash .orchestrator/scripts/hub-bootstrap.sh")
-	addHook(hooks, "Stop", "bash .orchestrator/scripts/hub-shutdown.sh")
+	migrateStopToSessionEnd(hooks)
+	addHook(hooks, "SessionEnd", "bash .orchestrator/scripts/hub-shutdown.sh")
 
 	root["hooks"] = hooks
 
@@ -104,6 +111,49 @@ func mergeSettings(path string) error {
 		return err
 	}
 	return os.WriteFile(path, append(out, '\n'), 0o644)
+}
+
+// migrateStopToSessionEnd removes any hub-shutdown entry under the
+// legacy "Stop" event so it can be re-added under "SessionEnd". The
+// scan is shim-specific (matches the hub-shutdown.sh command) so
+// unrelated Stop hooks the user has installed are preserved.
+func migrateStopToSessionEnd(hooks map[string]any) {
+	groups, _ := hooks["Stop"].([]any)
+	if groups == nil {
+		return
+	}
+	const needle = "hub-shutdown.sh"
+	var keep []any
+	for _, g := range groups {
+		gm, ok := g.(map[string]any)
+		if !ok {
+			keep = append(keep, g)
+			continue
+		}
+		entries, _ := gm["hooks"].([]any)
+		var keepEntries []any
+		for _, e := range entries {
+			em, ok := e.(map[string]any)
+			if !ok {
+				keepEntries = append(keepEntries, e)
+				continue
+			}
+			cmd, _ := em["command"].(string)
+			if !strings.Contains(cmd, needle) {
+				keepEntries = append(keepEntries, e)
+			}
+		}
+		if len(keepEntries) == 0 {
+			continue
+		}
+		gm["hooks"] = keepEntries
+		keep = append(keep, gm)
+	}
+	if len(keep) == 0 {
+		delete(hooks, "Stop")
+		return
+	}
+	hooks["Stop"] = keep
 }
 
 func addHook(hooks map[string]any, event, cmd string) {
@@ -167,6 +217,7 @@ func ensureGitignoreEntries(dir string) error {
 		".fslckout",
 		".fossil-settings/",
 		".orchestrator/",
+		".bones/",
 	}
 
 	existing := map[string]bool{}

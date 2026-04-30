@@ -34,6 +34,7 @@ go.work.sum
 .fslckout
 .fossil-settings/
 .orchestrator/
+.bones/
 
 # Local scratch — code reviews and implementation plans (ephemeral, per-session)
 docs/code-review/
