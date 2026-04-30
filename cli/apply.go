@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
@@ -26,7 +27,116 @@ type ApplyCmd struct {
 }
 
 func (c *ApplyCmd) Run(g *libfossilcli.Globals) error {
-	return errors.New("bones apply: not yet implemented")
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("cwd: %w", err)
+	}
+	pre, err := runApplyPreflight(cwd)
+	if err != nil {
+		return err
+	}
+
+	tempDir := filepath.Join(pre.WorkspaceDir, ".bones",
+		fmt.Sprintf("apply-%d", time.Now().UnixNano()))
+	if err := os.MkdirAll(tempDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir temp checkout: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(tempDir) }()
+
+	checkoutCmd := exec.Command(pre.FossilBin, "open", "--force",
+		pre.HubFossil, "--workdir", tempDir)
+	checkoutCmd.Stdout = os.Stderr
+	checkoutCmd.Stderr = os.Stderr
+	if err := checkoutCmd.Run(); err != nil {
+		return fmt.Errorf("fossil open temp checkout: %w", err)
+	}
+	defer func() {
+		closeCmd := exec.Command(pre.FossilBin, "close", "--force")
+		closeCmd.Dir = tempDir
+		_ = closeCmd.Run()
+	}()
+
+	manifest, rev, err := trunkManifest(pre.HubFossil, pre.FossilBin)
+	if err != nil {
+		return err
+	}
+
+	dirty, err := dirtyTrackedPaths(pre.WorkspaceDir, manifest)
+	if err != nil {
+		return err
+	}
+	if len(dirty) > 0 {
+		preview := dirty
+		if len(preview) > 3 {
+			preview = preview[:3]
+		}
+		return fmt.Errorf(
+			"uncommitted changes in fossil-tracked files: %s — git stash or commit before applying",
+			strings.Join(preview, ", "))
+	}
+
+	prevRev, err := readLastAppliedMarker(pre.WorkspaceDir)
+	if err != nil {
+		return fmt.Errorf("read last-applied marker: %w", err)
+	}
+	var prevManifest []string
+	if prevRev != "" {
+		prevManifest, err = manifestAtRev(pre.HubFossil, pre.FossilBin, prevRev)
+		if err != nil {
+			fmt.Fprintf(os.Stderr,
+				"bones apply: previous rev %s not found in hub fossil; suppressing deletions\n",
+				prevRev)
+			prevManifest = nil
+		}
+	}
+
+	plan, err := classifyDiff(tempDir, pre.WorkspaceDir, manifest, prevManifest)
+	if err != nil {
+		return err
+	}
+
+	total := len(plan.Added) + len(plan.Modified) + len(plan.Deleted)
+	if total == 0 {
+		fmt.Printf("bones apply: already up to date at %s\n", shortRev(rev))
+		return writeLastAppliedMarker(pre.WorkspaceDir, rev)
+	}
+
+	if c.DryRun {
+		printApplyDryRun(plan, rev)
+		return nil
+	}
+
+	if err := applyPlanToTree(tempDir, pre.WorkspaceDir, plan); err != nil {
+		return err
+	}
+	if err := writeLastAppliedMarker(pre.WorkspaceDir, rev); err != nil {
+		return fmt.Errorf("write last-applied marker: %w", err)
+	}
+	fmt.Printf("applied %d changes from trunk @ %s. review with `git diff --staged`. commit when ready.\n",
+		total, shortRev(rev))
+	return nil
+}
+
+func shortRev(rev string) string {
+	if len(rev) >= 12 {
+		return rev[:12]
+	}
+	return rev
+}
+
+func printApplyDryRun(plan *applyPlan, rev string) {
+	total := len(plan.Added) + len(plan.Modified) + len(plan.Deleted)
+	fmt.Printf("bones apply (dry-run): would apply %d changes from trunk @ %s:\n",
+		total, shortRev(rev))
+	for _, p := range plan.Added {
+		fmt.Printf("  A  %s\n", p)
+	}
+	for _, p := range plan.Modified {
+		fmt.Printf("  M  %s\n", p)
+	}
+	for _, p := range plan.Deleted {
+		fmt.Printf("  D  %s\n", p)
+	}
 }
 
 // applyPreflight is the resolved precondition state, returned by

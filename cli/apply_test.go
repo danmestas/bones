@@ -10,15 +10,102 @@ import (
 	libfossilcli "github.com/danmestas/libfossil/cli"
 )
 
-func TestApplyCmd_StubReturnsNotImplemented(t *testing.T) {
+func TestApplyRun_AlreadyUpToDate(t *testing.T) {
+	if _, err := exec.LookPath("fossil"); err != nil {
+		t.Skip("fossil not on PATH")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := buildLiveFixture(t)
+	t.Chdir(dir)
+	cmd := &ApplyCmd{}
+	if err := cmd.Run(&libfossilcli.Globals{}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	rev, err := readLastAppliedMarker(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rev == "" {
+		t.Errorf("expected marker to be written on no-op, got empty")
+	}
+}
+
+func TestApplyRun_DryRunDoesNotStage(t *testing.T) {
+	if _, err := exec.LookPath("fossil"); err != nil {
+		t.Skip("fossil not on PATH")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := buildLiveFixture(t)
+	// Add a new fossil commit so there's something to apply.
+	hubFossil := filepath.Join(dir, ".orchestrator", "hub.fossil")
+	wt := filepath.Join(dir, ".bones", "fixture-wt2")
+	mustRun(t, "fossil", "open", "--force", hubFossil, "--workdir", wt)
+	must(t, os.WriteFile(filepath.Join(wt, "newfile.txt"), []byte("added\n"), 0o644))
+	mustRunIn(t, wt, "fossil", "add", "newfile.txt")
+	mustRunIn(t, wt, "fossil", "commit", "--no-warnings", "--user-override", "u", "-m", "add newfile")
+	mustRunIn(t, wt, "fossil", "close", "--force")
+
+	t.Chdir(dir)
+	cmd := &ApplyCmd{DryRun: true}
+	if err := cmd.Run(&libfossilcli.Globals{}); err != nil {
+		t.Fatalf("Run dry-run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "newfile.txt")); !os.IsNotExist(err) {
+		t.Errorf("dry-run wrote the file: %v", err)
+	}
+	rev, _ := readLastAppliedMarker(dir)
+	if rev != "" {
+		t.Errorf("dry-run should not update marker, got %q", rev)
+	}
+}
+
+func TestApplyRun_DirtyTreeRefuses(t *testing.T) {
+	if _, err := exec.LookPath("fossil"); err != nil {
+		t.Skip("fossil not on PATH")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := buildLiveFixture(t)
+	// Modify the fossil-tracked file to make git dirty on a tracked path.
+	must(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("locally edited\n"), 0o644))
+	t.Chdir(dir)
 	cmd := &ApplyCmd{}
 	err := cmd.Run(&libfossilcli.Globals{})
-	if err == nil {
-		t.Fatal("expected an error from stub Run, got nil")
+	if err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Fatalf("expected uncommitted-changes refusal, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "not yet implemented") {
-		t.Fatalf("expected 'not yet implemented' in error, got: %v", err)
-	}
+}
+
+// buildLiveFixture creates a tmpdir containing a fossil hub repo with
+// one commit and a git repo whose working tree matches the fossil tip.
+// Used by Run-level tests.
+func buildLiveFixture(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(dir, ".bones"), 0o755))
+	must(t, os.MkdirAll(filepath.Join(dir, ".orchestrator"), 0o755))
+
+	hubFossil := filepath.Join(dir, ".orchestrator", "hub.fossil")
+	mustRun(t, "fossil", "new", "--admin-user", "u", hubFossil)
+	wt := filepath.Join(dir, ".bones", "fixture-wt")
+	mustRun(t, "fossil", "open", "--force", hubFossil, "--workdir", wt)
+	must(t, os.WriteFile(filepath.Join(wt, "a.txt"), []byte("alpha\n"), 0o644))
+	mustRunIn(t, wt, "fossil", "add", "a.txt")
+	mustRunIn(t, wt, "fossil", "commit", "--no-warnings", "--user-override", "u", "-m", "init")
+	mustRunIn(t, wt, "fossil", "close", "--force")
+	must(t, os.RemoveAll(wt))
+
+	mustRunIn(t, dir, "git", "init", "-q")
+	must(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha\n"), 0o644))
+	mustRunIn(t, dir, "git", "add", "a.txt")
+	mustRunIn(t, dir, "git", "-c", "user.name=t", "-c", "user.email=t@t",
+		"commit", "-q", "-m", "init")
+	return dir
 }
 
 func TestApplyPreflight_NoWorkspace(t *testing.T) {
