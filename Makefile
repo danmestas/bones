@@ -95,3 +95,45 @@ bin:
 
 bones: bin
 	go build -o bin/bones ./cmd/bones
+
+# CI mirror — runs make check + otel lanes from .github/workflows/ci.yml.
+# Cross-repo leaf-binary integration is CI-only.
+.PHONY: ci ci-fast
+ci:
+	$(MAKE) check
+	go build -tags=otel ./...
+	go test -tags=otel -short ./... -count=1
+
+# Fast subset for pre-push hook (~30-60s; no -tags=otel, no -race).
+ci-fast:
+	go vet ./...
+	go build ./...
+	go test -short -count=1 -timeout=30s ./...
+
+.PHONY: release
+release:
+	@test -n "$(VERSION)" || { echo "VERSION=vX.Y.Z required"; exit 1; }
+	@echo "$(VERSION)" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-.+)?$$' || { echo "bad version format: $(VERSION)"; exit 1; }
+	@git diff --quiet || { echo "tree dirty; commit or stash first"; exit 1; }
+	@git fetch origin --tags
+	@if git rev-parse "$(VERSION)" >/dev/null 2>&1; then echo "tag $(VERSION) already exists"; exit 1; fi
+	@$(MAKE) ci
+	@PREV=$$(git describe --tags --abbrev=0 2>/dev/null || echo ""); \
+	  TMPL=.github/RELEASE_TEMPLATE.md; \
+	  TMP=$$(mktemp); \
+	  { echo "Release $(VERSION)"; echo; \
+	    [ -f $$TMPL ] && { cat $$TMPL; echo; }; \
+	    echo "## Changes"; \
+	    if [ -n "$$PREV" ]; then git log --oneline $$PREV..HEAD; else git log --oneline; fi; } > $$TMP; \
+	  $${EDITOR:-vi} $$TMP; \
+	  git tag -a "$(VERSION)" -F $$TMP; \
+	  rm $$TMP
+	@echo ""
+	@echo "Tag $(VERSION) created locally. To publish:"
+	@echo "  git push origin $(VERSION)"
+
+.PHONY: setup-hooks
+setup-hooks:
+	git config core.hooksPath .githooks
+	@echo "Git hooks configured to use .githooks/ directory."
+	@echo "Pre-push runs make ci-fast (~60s). Skip with: git push --no-verify"
