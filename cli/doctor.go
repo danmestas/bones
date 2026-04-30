@@ -13,7 +13,9 @@ import (
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
 	"github.com/danmestas/bones/internal/githook"
+	"github.com/danmestas/bones/internal/scaffoldver"
 	"github.com/danmestas/bones/internal/swarm"
+	"github.com/danmestas/bones/internal/version"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
@@ -73,6 +75,19 @@ func (c *DoctorCmd) runBypassReport() {
 		default:
 			fmt.Println("  OK    pre-commit hook installed")
 		}
+	}
+
+	stamp, err := scaffoldver.Read(cwd)
+	switch {
+	case err != nil:
+		fmt.Printf("  WARN  scaffold stamp read: %v\n", err)
+	case stamp == "":
+		fmt.Println("  INFO  no scaffold version stamp — `bones up` to write one")
+	case scaffoldver.Drifted(stamp, version.Get()):
+		fmt.Printf("  WARN  scaffold v%s, binary v%s — run `bones up` to refresh skills/hooks\n",
+			stamp, version.Get())
+	default:
+		fmt.Printf("  OK    scaffold version v%s matches binary\n", stamp)
 	}
 
 	switch tip, head, drifted := fossilDrift(cwd); {

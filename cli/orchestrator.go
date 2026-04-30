@@ -9,6 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/danmestas/bones/internal/scaffoldver"
+	"github.com/danmestas/bones/internal/version"
 )
 
 //go:embed all:templates/orchestrator
@@ -35,6 +38,9 @@ func scaffoldOrchestrator(root string) error {
 	}
 	if err := ensureGitignoreEntries(root); err != nil {
 		return fmt.Errorf("root gitignore: %w", err)
+	}
+	if err := scaffoldver.Write(root, version.Get()); err != nil {
+		return fmt.Errorf("scaffold version stamp: %w", err)
 	}
 	return nil
 }

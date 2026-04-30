@@ -17,6 +17,7 @@ import (
 	_ "github.com/danmestas/libfossil/db/driver/modernc"
 
 	"github.com/danmestas/bones/internal/updatecheck"
+	bversion "github.com/danmestas/bones/internal/version"
 )
 
 // Build-time variables, populated via -ldflags by GoReleaser.
@@ -27,6 +28,11 @@ var (
 )
 
 func main() {
+	// Plumb the running binary's version into the internal/version
+	// package so cli/orchestrator can stamp it onto fresh workspaces
+	// and cli/doctor can compare against the workspace stamp.
+	bversion.Set(version)
+
 	// Once-per-day update check. Best-effort; runs the network refresh
 	// in a goroutine and prints a one-line stderr notice based on
 	// cached state. Suppressed by BONES_UPDATE_CHECK=0 and skipped on

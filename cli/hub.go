@@ -10,6 +10,8 @@ import (
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
 	"github.com/danmestas/bones/internal/hub"
+	"github.com/danmestas/bones/internal/scaffoldver"
+	"github.com/danmestas/bones/internal/version"
 )
 
 // HubCmd is the umbrella command for the embedded Fossil + NATS hub.
@@ -49,6 +51,8 @@ func (c *HubStartCmd) Run(g *libfossilcli.Globals) error {
 		return fmt.Errorf("cwd: %w", err)
 	}
 
+	warnScaffoldDrift(cwd)
+
 	ctx, stop := signal.NotifyContext(context.Background(),
 		syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -58,6 +62,22 @@ func (c *HubStartCmd) Run(g *libfossilcli.Globals) error {
 		hub.WithNATSPort(c.NATSPort),
 		hub.WithDetach(c.Detach),
 	)
+}
+
+// warnScaffoldDrift prints a single-line stderr notice when the
+// workspace scaffold version disagrees with the running binary's
+// version. Best-effort: any read error is silent. Fires on every
+// `bones hub start`, which the SessionStart hook runs at the
+// beginning of each Claude Code session — so the operator sees it
+// the moment they start working in a stale workspace.
+func warnScaffoldDrift(cwd string) {
+	stamp, err := scaffoldver.Read(cwd)
+	if err != nil || !scaffoldver.Drifted(stamp, version.Get()) {
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"bones: scaffold v%s, binary v%s — run `bones up` to refresh skills/hooks\n",
+		stamp, version.Get())
 }
 
 // HubStopCmd wires `bones hub stop` to hub.Stop. Idempotent.
