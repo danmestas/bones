@@ -221,6 +221,69 @@ func TestDirtyTracked_UntrackedFileIgnored(t *testing.T) {
 	}
 }
 
+func TestClassifyDiff_AddModifyDeleteNoOp(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "root")
+	temp := filepath.Join(dir, "temp")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(temp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	must(t, os.WriteFile(filepath.Join(root, "keep.txt"), []byte("same"), 0o644))
+	must(t, os.WriteFile(filepath.Join(temp, "keep.txt"), []byte("same"), 0o644))
+
+	must(t, os.WriteFile(filepath.Join(root, "modify.txt"), []byte("v1"), 0o644))
+	must(t, os.WriteFile(filepath.Join(temp, "modify.txt"), []byte("v2"), 0o644))
+
+	must(t, os.WriteFile(filepath.Join(temp, "add.txt"), []byte("new"), 0o644))
+
+	must(t, os.WriteFile(filepath.Join(root, "delete.txt"), []byte("gone"), 0o644))
+
+	manifest := []string{"keep.txt", "modify.txt", "add.txt"}
+	prev := []string{"keep.txt", "modify.txt", "delete.txt"}
+
+	plan, err := classifyDiff(temp, root, manifest, prev)
+	if err != nil {
+		t.Fatalf("classifyDiff: %v", err)
+	}
+	if !equalStringSets(plan.Added, []string{"add.txt"}) {
+		t.Errorf("Added = %v, want [add.txt]", plan.Added)
+	}
+	if !equalStringSets(plan.Modified, []string{"modify.txt"}) {
+		t.Errorf("Modified = %v, want [modify.txt]", plan.Modified)
+	}
+	if !equalStringSets(plan.Deleted, []string{"delete.txt"}) {
+		t.Errorf("Deleted = %v, want [delete.txt]", plan.Deleted)
+	}
+}
+
+func TestClassifyDiff_NoPrevManifestSuppressesDeletes(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "root")
+	temp := filepath.Join(dir, "temp")
+	must(t, os.MkdirAll(root, 0o755))
+	must(t, os.MkdirAll(temp, 0o755))
+	must(t, os.WriteFile(filepath.Join(root, "stray.txt"), []byte("user-added"), 0o644))
+
+	plan, err := classifyDiff(temp, root, []string{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Deleted) != 0 {
+		t.Errorf("first apply must not delete; got %v", plan.Deleted)
+	}
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 // setupApplyFixture creates a tmpdir containing a bones workspace
 // marker, an empty hub.fossil placeholder file, and a .git/ directory.
 // Sufficient for preflight checks; tests that exercise actual fossil

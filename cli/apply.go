@@ -121,6 +121,68 @@ func dirtyTrackedPaths(workspaceDir string, manifest []string) ([]string, error)
 	return dirty, nil
 }
 
+// applyPlan describes the file ops bones apply will perform.
+type applyPlan struct {
+	Added    []string // in current manifest, missing in root
+	Modified []string // in current manifest, present in root, bytes differ
+	Deleted  []string // in prev manifest, NOT in current manifest, present in root
+}
+
+// classifyDiff computes the apply plan by comparing files in tempCheckout
+// (the source of truth — fossil's checkout at trunk tip) against
+// projectRoot (the live working tree). manifest is the trunk-tip path
+// list; prevManifest is the previously-applied path list (nil/empty
+// means "no marker yet, suppress deletions").
+func classifyDiff(tempCheckout, projectRoot string, manifest, prevManifest []string) (*applyPlan, error) {
+	plan := &applyPlan{}
+	for _, p := range manifest {
+		src := filepath.Join(tempCheckout, p)
+		dst := filepath.Join(projectRoot, p)
+		srcBytes, err := os.ReadFile(src)
+		if err != nil {
+			return nil, fmt.Errorf("read source %s: %w", p, err)
+		}
+		dstBytes, err := os.ReadFile(dst)
+		if os.IsNotExist(err) {
+			plan.Added = append(plan.Added, p)
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read dest %s: %w", p, err)
+		}
+		if !bytesEqual(srcBytes, dstBytes) {
+			plan.Modified = append(plan.Modified, p)
+		}
+	}
+	if len(prevManifest) > 0 {
+		current := make(map[string]struct{}, len(manifest))
+		for _, p := range manifest {
+			current[p] = struct{}{}
+		}
+		for _, p := range prevManifest {
+			if _, stillThere := current[p]; stillThere {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(projectRoot, p)); err == nil {
+				plan.Deleted = append(plan.Deleted, p)
+			}
+		}
+	}
+	return plan, nil
+}
+
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // manifestAtRev lists files at a specific rev (hex UUID or symbolic
 // name like "trunk"). `-r` is required so `fossil ls` runs against the
 // repo without a live checkout — without `-r`, fossil ls expects to be
