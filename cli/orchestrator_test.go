@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -254,12 +255,9 @@ func TestScaffoldOrchestrator_SessionStartIncludesPrime(t *testing.T) {
 	}
 	cmds := hookCommandsFor(readSettings(t, dir), "SessionStart")
 	want := "bones tasks prime --json"
-	for _, c := range cmds {
-		if c == want {
-			return
-		}
+	if !slices.Contains(cmds, want) {
+		t.Fatalf("SessionStart hooks missing %q; got %v", want, cmds)
 	}
-	t.Fatalf("SessionStart hooks missing %q; got %v", want, cmds)
 }
 
 // TestScaffoldOrchestrator_PreCompactIncludesPrime asserts the
@@ -273,12 +271,30 @@ func TestScaffoldOrchestrator_PreCompactIncludesPrime(t *testing.T) {
 	}
 	cmds := hookCommandsFor(readSettings(t, dir), "PreCompact")
 	want := "bones tasks prime --json"
-	for _, c := range cmds {
-		if c == want {
-			return
+	if !slices.Contains(cmds, want) {
+		t.Fatalf("PreCompact hooks missing %q; got %v", want, cmds)
+	}
+}
+
+// TestScaffoldOrchestrator_PrimeHookIdempotent asserts that re-running
+// `bones up` does not duplicate the prime entries. Locks in the
+// addHook dedup contract — without it, a downstream user who runs
+// `bones up --reinstall-hooks` repeatedly would accumulate multiple
+// prime calls per event.
+func TestScaffoldOrchestrator_PrimeHookIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	for i := range 3 {
+		if err := scaffoldOrchestrator(dir); err != nil {
+			t.Fatalf("scaffold pass %d: %v", i+1, err)
 		}
 	}
-	t.Fatalf("PreCompact hooks missing %q; got %v", want, cmds)
+	settings := readSettings(t, dir)
+	const cmd = "bones tasks prime --json"
+	for _, event := range []string{"SessionStart", "PreCompact"} {
+		if got := countHookCommand(settings, event, cmd); got != 1 {
+			t.Errorf("%s prime entry count = %d, want 1", event, got)
+		}
+	}
 }
 
 func verifyHooks(t *testing.T, path string) {
