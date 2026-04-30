@@ -370,6 +370,89 @@ func TestJoin_StaleLeaf(t *testing.T) {
 	if !errors.Is(err, ErrLeafUnreachable) {
 		t.Fatalf("Join: got %v, want ErrLeafUnreachable", err)
 	}
+	msg := err.Error()
+	for _, want := range []string{"leaf.pid", "bones up"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("Join error %q missing %q", msg, want)
+		}
+	}
+}
+
+// TestJoin_DeadPID_Message exercises the wrapped error without spawning a
+// real leaf. The marker is hand-built and points at a PID that is not a
+// running process; Join must wrap ErrLeafUnreachable with actionable detail.
+func TestJoin_DeadPID_Message(t *testing.T) {
+	dir := t.TempDir()
+	markerDir := filepath.Join(dir, markerDirName)
+	if err := os.MkdirAll(markerDir, 0o755); err != nil {
+		t.Fatalf("mkdir marker: %v", err)
+	}
+	cfg := config{
+		Version: configVersion, AgentID: "agent-x",
+		NATSURL: "nats://127.0.0.1:1", LeafHTTPURL: "http://127.0.0.1:1",
+		RepoPath: "repo.fossil", CreatedAt: "2026-04-30T00:00:00Z",
+	}
+	if err := saveConfig(filepath.Join(markerDir, "config.json"), cfg); err != nil {
+		t.Fatalf("saveConfig: %v", err)
+	}
+	// PID 1 exists but is init/launchd; pidAlive returns true. Use a high
+	// PID very unlikely to be in use so pidAlive returns false.
+	pidPath := filepath.Join(markerDir, "leaf.pid")
+	if err := os.WriteFile(pidPath, []byte("99999999"), 0o644); err != nil {
+		t.Fatalf("write pid: %v", err)
+	}
+
+	_, err := Join(context.Background(), dir)
+	if !errors.Is(err, ErrLeafUnreachable) {
+		t.Fatalf("Join: got %v, want ErrLeafUnreachable", err)
+	}
+	msg := err.Error()
+	for _, want := range []string{"99999999", "leaf.pid", "bones up"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q missing %q", msg, want)
+		}
+	}
+}
+
+// TestJoin_HealthzFail_Message: PID is live (this test process), but the
+// recorded LeafHTTPURL points at a closed port — Join should report the
+// healthz-timeout branch with the URL in the message.
+func TestJoin_HealthzFail_Message(t *testing.T) {
+	dir := t.TempDir()
+	markerDir := filepath.Join(dir, markerDirName)
+	if err := os.MkdirAll(markerDir, 0o755); err != nil {
+		t.Fatalf("mkdir marker: %v", err)
+	}
+	// Bind-then-close to grab a port that's almost certainly free.
+	port, err := pickFreePort()
+	if err != nil {
+		t.Fatalf("pickFreePort: %v", err)
+	}
+	closedURL := "http://127.0.0.1:" + strconv.Itoa(port)
+	cfg := config{
+		Version: configVersion, AgentID: "agent-x",
+		NATSURL: "nats://127.0.0.1:1", LeafHTTPURL: closedURL,
+		RepoPath: "repo.fossil", CreatedAt: "2026-04-30T00:00:00Z",
+	}
+	if err := saveConfig(filepath.Join(markerDir, "config.json"), cfg); err != nil {
+		t.Fatalf("saveConfig: %v", err)
+	}
+	livePID := strconv.Itoa(os.Getpid())
+	pidPath := filepath.Join(markerDir, "leaf.pid")
+	if err := os.WriteFile(pidPath, []byte(livePID), 0o644); err != nil {
+		t.Fatalf("write pid: %v", err)
+	}
+
+	_, err = Join(context.Background(), dir)
+	if !errors.Is(err, ErrLeafUnreachable) {
+		t.Fatalf("Join: got %v, want ErrLeafUnreachable", err)
+	}
+	msg := err.Error()
+	for _, want := range []string{closedURL, "healthz", "bones down"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q missing %q", msg, want)
+		}
+	}
 }
 
 func TestInit_EmitsSlogEvents(t *testing.T) {
