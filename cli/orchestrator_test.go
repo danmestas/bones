@@ -279,6 +279,25 @@ func TestScaffoldOrchestrator_SkillHasADR0023Completion(t *testing.T) {
 	}
 }
 
+// TestScaffoldOrchestrator_StampsScaffoldVersion verifies that
+// scaffolding writes .bones/scaffold_version with the current
+// binary version, so drift detection on subsequent invocations has
+// a value to compare against.
+func TestScaffoldOrchestrator_StampsScaffoldVersion(t *testing.T) {
+	dir := t.TempDir()
+	if err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatalf("scaffoldOrchestrator: %v", err)
+	}
+	stamp, err := os.ReadFile(filepath.Join(dir, ".bones", "scaffold_version"))
+	if err != nil {
+		t.Fatalf("read stamp: %v", err)
+	}
+	got := strings.TrimSpace(string(stamp))
+	if got == "" {
+		t.Errorf("stamp is empty; want a version (default \"dev\" in tests)")
+	}
+}
+
 func TestEnsureGitignoreEntries_FreshFile(t *testing.T) {
 	dir := t.TempDir()
 	if err := ensureGitignoreEntries(dir); err != nil {
