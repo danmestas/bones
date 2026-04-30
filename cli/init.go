@@ -85,9 +85,6 @@ func reportWorkspace(op string, info workspace.Info, err error) error {
 	case errors.Is(err, workspace.ErrNoWorkspace):
 		fmt.Fprintln(os.Stderr,
 			"no bones workspace found; run `bones init` first")
-	case errors.Is(err, workspace.ErrLeafUnreachable):
-		fmt.Fprintln(os.Stderr,
-			"leaf daemon not reachable; its PID file may be stale")
 	case errors.Is(err, workspace.ErrLeafStartTimeout):
 		fmt.Fprintln(os.Stderr, "leaf failed to start within timeout")
 	}

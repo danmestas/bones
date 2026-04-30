@@ -243,10 +243,16 @@ func joinLogic(ctx context.Context, cwd string) (Info, error) {
 		return Info{}, fmt.Errorf("parse pid %q: %w", pidData, err)
 	}
 	if !pidAlive(pid) {
-		return Info{}, ErrLeafUnreachable
+		return Info{}, fmt.Errorf(
+			"%w: pid %d recorded in %s is not running; run `bones up` to rebind this workspace",
+			ErrLeafUnreachable, pid,
+			filepath.Join(workspaceDir, markerDirName, "leaf.pid"))
 	}
 	if !healthzOK(cfg.LeafHTTPURL+"/healthz", 500*time.Millisecond) {
-		return Info{}, ErrLeafUnreachable
+		return Info{}, fmt.Errorf(
+			"%w: pid %d alive but %s/healthz did not respond within 500ms;"+
+				" leaf may be hung — try `bones down && bones up`",
+			ErrLeafUnreachable, pid, cfg.LeafHTTPURL)
 	}
 	return Info{
 		AgentID:      cfg.AgentID,
