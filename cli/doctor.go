@@ -15,6 +15,7 @@ import (
 	"github.com/danmestas/bones/internal/githook"
 	"github.com/danmestas/bones/internal/scaffoldver"
 	"github.com/danmestas/bones/internal/swarm"
+	"github.com/danmestas/bones/internal/telemetry"
 	"github.com/danmestas/bones/internal/version"
 	"github.com/danmestas/bones/internal/workspace"
 )
@@ -34,12 +35,26 @@ type DoctorCmd struct {
 // Run invokes the EdgeSync doctor first; on completion (regardless
 // of pass/warn/fail) it appends a "swarm sessions" section that
 // iterates bones-swarm-sessions and reports each entry's state.
-func (c *DoctorCmd) Run(g *libfossilcli.Globals) error {
+func (c *DoctorCmd) Run(g *libfossilcli.Globals) (err error) {
+	_, end := telemetry.RecordCommand(context.Background(), "doctor")
+	var (
+		baseFailed  bool
+		swarmFailed bool
+	)
+	defer func() {
+		end(err,
+			telemetry.Bool("base_failed", baseFailed),
+			telemetry.Bool("swarm_failed", swarmFailed),
+		)
+	}()
+
 	// The EdgeSync side returns an error on failed checks; surface
 	// that error AFTER our additional report so operators see the
 	// swarm picture even when an upstream check failed.
 	baseErr := c.DoctorCmd.Run(g)
+	baseFailed = baseErr != nil
 	swarmErr := c.runSwarmReport()
+	swarmFailed = swarmErr != nil
 	c.runBypassReport()
 	if baseErr != nil {
 		return baseErr
