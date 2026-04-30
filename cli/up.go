@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/danmestas/bones/internal/githook"
+	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
@@ -52,10 +53,16 @@ func runUp(cwd string) error {
 		return fmt.Errorf("hub-bootstrap: %w", err)
 	}
 
-	if err := waitHubReady("http://127.0.0.1:8765/xfer", 5*time.Second); err != nil {
+	fossilURL := hub.FossilURL(wsDir)
+	natsURL := hub.NATSURL(wsDir)
+	if fossilURL == "" {
+		return fmt.Errorf("hub started but no .orchestrator/hub-fossil-url recorded — " +
+			"check .orchestrator/hub.log")
+	}
+	if err := waitHubReady(fossilURL+"/xfer", 5*time.Second); err != nil {
 		return fmt.Errorf("hub health check: %w", err)
 	}
-	fmt.Println("up: hub is up at http://127.0.0.1:8765 — NATS at nats://127.0.0.1:4222")
+	fmt.Printf("up: hub is up at %s — NATS at %s\n", fossilURL, natsURL)
 	return nil
 }
 

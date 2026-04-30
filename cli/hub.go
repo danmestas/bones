@@ -40,9 +40,13 @@ type HubCmd struct {
 // servers down on SIGINT/SIGTERM. Foreground mode is the easiest way to
 // see hub logs interactively.
 type HubStartCmd struct {
-	Detach     bool `name:"detach" help:"return immediately after the hub is reachable"`
-	FossilPort int  `name:"fossil-port" help:"Fossil HTTP port" default:"8765"`
-	NATSPort   int  `name:"nats-port" help:"NATS client port" default:"4222"`
+	Detach bool `name:"detach" help:"return immediately after the hub is reachable"`
+	// 0 = let the hub allocate per-workspace (default). The hub records
+	// the resolved URL at .orchestrator/hub-{fossil,nats}-url so a
+	// second workspace can run concurrently on its own free ports.
+	// Pass an explicit non-zero port to pin.
+	FossilPort int `name:"fossil-port" help:"Fossil HTTP port (0 = per-workspace allocation)" default:"0"`
+	NATSPort   int `name:"nats-port" help:"NATS client port (0 = per-workspace allocation)" default:"0"`
 }
 
 func (c *HubStartCmd) Run(g *libfossilcli.Globals) error {
