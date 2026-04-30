@@ -45,8 +45,8 @@ type HubStartCmd struct {
 	// the resolved URL at .orchestrator/hub-{fossil,nats}-url so a
 	// second workspace can run concurrently on its own free ports.
 	// Pass an explicit non-zero port to pin.
-	FossilPort int `name:"fossil-port" help:"Fossil HTTP port (0 = per-workspace allocation)" default:"0"`
-	NATSPort   int `name:"nats-port" help:"NATS client port (0 = per-workspace allocation)" default:"0"`
+	FossilPort int `name:"fossil-port" default:"0" help:"Fossil HTTP port (0 = per-ws)"`
+	NATSPort   int `name:"nats-port" default:"0" help:"NATS client port (0 = per-ws)"`
 }
 
 func (c *HubStartCmd) Run(g *libfossilcli.Globals) error {
