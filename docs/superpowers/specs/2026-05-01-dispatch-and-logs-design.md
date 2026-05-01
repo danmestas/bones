@@ -4,16 +4,17 @@
 **Status:** Draft
 **Replaces:** N/A
 **Related:** ADR 0023 (hub-leaf orchestrator), ADR 0028 (swarm verbs + lease types), ADR 0034 (bypass prevention), Spec `cross-workspace-identity`, Spec `doctor-ergonomics`
+**Dependencies:** Existing `bones-tasks` KV (ADR 0005), existing `validate-plan` verb. No hard dependency on Specs 1 or 2 — `dispatch-and-logs` can ship independently. (`bones swarm status` extension benefits from Spec 1's registry but doesn't require it.)
 
 ## Scope
 
 **In:**
 
 - `bones swarm dispatch <plan>` — validate plan, create tasks in `bones-tasks` KV, group into dependency waves, emit a dispatch manifest
-- `bones swarm dispatch --resume` — advance to the next wave after the current wave completes
-- `bones swarm dispatch --mark-wave-complete=<N>` — public skill-facing verb; called by consumer skills when a wave's subagents all close successfully
-- `bones swarm dispatch --cancel` — abandons an in-flight dispatch (removes manifest, marks open tasks `cancelled`)
+- `bones swarm dispatch --advance` — single flag that handles wave progression. Bones queries `bones-tasks` KV; if all current-wave tasks are `Closed`, promotes the next wave and re-emits the manifest. Called by consumer skills when their subagents close, or by users manually
+- `bones swarm dispatch --cancel` — abandons an in-flight dispatch (removes manifest, closes any still-open tasks via the existing `Closed` status with `ClosedReason: "dispatch-cancelled"`)
 - Dispatch manifest schema at `.bones/swarm/dispatch.json` (versioned, harness-agnostic contract)
+- Extension to existing `bones swarm status` showing dispatch-in-flight context (one line at the top: plan path, current wave / total waves)
 - Update to existing `orchestrator` skill (claude-specific layer) to consume the manifest
 - `bones logs --slot=<name>` and `bones logs --workspace` — view bones-side event logs (with `--tail` / `--since` / `--last` / `--json`)
 - Per-slot event log file at `.bones/swarm/<slot>/log` (newline-delimited JSON)
@@ -106,14 +107,13 @@ Path: `.bones/swarm/dispatch.json`. Versioned (`schema_version`) so the consumer
         }
       ]
     }
-  ],
-  "status": "ready"
+  ]
 }
 ```
 
-**`status` transitions:** `ready` → `wave_in_flight` (when consumer-skill begins spawning) → `wave_complete` (when all current wave's tasks closed) → next wave's `ready` after `--resume`. Eventually `complete` when the last wave finishes.
+**No `status` field.** The manifest doesn't track wave state explicitly; bones derives it on demand from `current_wave` plus task state in `bones-tasks` KV. This eliminates two stores of truth (manifest field vs. KV) which could disagree if a process crashes mid-update.
 
-The skill never writes the manifest file directly — it always goes through `bones swarm dispatch --mark-wave-complete=<N>`. Keeps file ownership with bones; prevents skills from corrupting the contract.
+The skill never writes the manifest file directly. Wave advancement always goes through `bones swarm dispatch --advance`, which queries the KV authoritatively and only mutates the manifest when the KV says current-wave tasks are all `Closed`. Keeps file ownership with bones; eliminates the "skill thinks wave is done but bones doesn't" failure mode entirely.
 
 ### `bones swarm dispatch <plan>`
 
@@ -134,10 +134,9 @@ Next step (Claude Code): in your claude session, run
 
 **Flags:**
 
-- `--resume` — re-emit manifest with the next wave promoted to `current_wave`. Errors if previous wave isn't `wave_complete`.
-- `--wave=N` — explicit wave number. Rare; for testing or jumping past a stuck wave with manual cleanup.
-- `--mark-wave-complete=<N>` — public verb intentionally exposed for skill use. Consumer skills call this when all wave-N subagents close successfully; it flips manifest `status` to `wave_complete`. Documented as "skill API surface" rather than hidden, because consumers other than the in-tree orchestrator skill (cursor, aider) need it too.
-- `--cancel` — abandons an in-flight dispatch: removes `.bones/swarm/dispatch.json`, closes any still-open tasks the manifest created with `result=cancelled`. Use when a dispatch needs to be torn down before completion.
+- `--advance` — single flag that handles wave progression. Bones queries `bones-tasks` KV; if all current-wave tasks are `Closed`, promotes `current_wave` and re-emits the manifest. If not all closed, errors with the list of still-open tasks. Used by both consumer skills (when their subagents close) and users (manually). One flag replaces what was previously a `--resume` + `--mark-wave-complete=<N>` pair: bones derives wave-completion state from authoritative KV rather than accepting a skill's claim about it.
+- `--wave=N` — explicit wave number. Rare; for testing or jumping past a stuck wave after manual cleanup.
+- `--cancel` — abandons an in-flight dispatch: removes `.bones/swarm/dispatch.json`, closes any still-open tasks the manifest created via the existing `Closed` status with `ClosedReason: "dispatch-cancelled"`. Reuses the existing task state machine (`open / claimed / closed` per ADR 0005) — no new states introduced.
 - `--json` — manifest path + summary as JSON (for scripting).
 - `--dry-run` — validate + show what would be created/written, without touching NATS or filesystem.
 
@@ -165,20 +164,23 @@ The template is bones-binary code (closed catalog — extending requires a code 
 - Dispatch fires only the first parallelizable wave (`current_wave = 1`).
 - Consumer skill (orchestrator) spawns subagents for the wave's slots.
 - As subagents `bones swarm close --result=success`, tasks transition to `Closed` in `bones-tasks` KV.
-- When all of wave-1's tasks are `Closed`, the consumer skill calls `bones swarm dispatch --mark-wave-complete=1`. Manifest's `status` flips to `wave_complete`.
-- User runs `bones swarm dispatch --resume`. Manifest `current_wave` advances to 2, `status` returns to `ready`.
-- Consumer skill spawns wave-2's subagents. Repeat until manifest `status = complete`.
+- When all of wave-1's tasks are `Closed`, the consumer skill (or a user) calls `bones swarm dispatch --advance`. Bones queries the KV, confirms all wave-1 tasks closed, promotes `current_wave` to 2, and re-emits the manifest.
+- Consumer skill spawns wave-2's subagents. Repeat until `--advance` reports "all waves complete; nothing to do."
+
+One flag, one path. Bones is the single source of truth on "is this wave done?" — the skill never reports it (and so cannot disagree with bones).
 
 **User-visible state at any moment** (existing `bones swarm status` extended with one dispatch-context line):
 
 ```
 $ bones swarm status
-Dispatch: ./plan.md  (wave 1 of 2 — wave_in_flight)
+Dispatch: ./plan.md  (wave 1 of 2)
   slot a [active]   commit 8m ago
   slot b [active]   commit 2m ago
   slot c [active]   commit 4m ago
   slot d [stale]    last_renewed 12m ago
 ```
+
+The dispatch-context line shows current wave and total wave count. Whether the wave is "in flight" or "complete-but-not-yet-advanced" is derivable from the slot status rows directly — no separate state to display.
 
 Cross-references Spec 2: `bones doctor` would tag the stale slot and emit a `Fix:` line per the doctor catalog.
 
@@ -188,7 +190,7 @@ Out of scope for the *binary spec* itself, but committed as a deliverable of thi
 
 - Skill input becomes "read `.bones/swarm/dispatch.json`" rather than taking a plan path directly.
 - Skill spawns N Task-tool subagents per the manifest's `current_wave`'s `slots[]`, using each slot's `subagent_prompt` field verbatim.
-- Skill calls `bones swarm dispatch --mark-wave-complete=<N>` when all wave subagents close successfully.
+- Skill calls `bones swarm dispatch --advance` when all wave subagents close successfully. If the wave isn't actually complete (some subagents still running), `--advance` errors and the skill waits.
 - Skill's docs updated: invocation is now `/orchestrator dispatch` (consumes manifest) rather than `/orchestrator <plan-path>`.
 
 ### `bones logs --slot=<name>` and `bones logs --workspace`
@@ -261,14 +263,14 @@ Useful for "what did bones do in this workspace today?" rather than per-slot dri
 | Scenario | Behavior |
 |---|---|
 | `bones swarm dispatch ./plan.md` with prior dispatch in flight (different plan_sha256) | Error: `dispatch already in flight for ./other-plan.md (wave 2 of 3). Cancel with: bones swarm dispatch --cancel` |
-| `bones swarm dispatch --resume` while current wave isn't `wave_complete` | Error: `current wave is wave_in_flight. Wait for subagents to close, or run: bones doctor to inspect.` |
+| `bones swarm dispatch --advance` while current wave's tasks aren't all `Closed` | Error: `wave 1 not yet complete: tasks t-7c92, t-9e34 still open. Inspect with: bones doctor` |
 | `bones swarm dispatch` on invalid plan | Existing `validate-plan` errors propagate; no manifest written, no tasks created (atomic). |
 | `bones logs --slot=X` for nonexistent slot | `No log for slot 'X'. Active slots: a, b, c.` exit 1. |
 | Log file write fails (disk full, perms) | Warn to stderr; continue swarm operation. The event is lost; bones doesn't try to retry the log write. Better to lose a log line than to fail the underlying swarm verb. |
 | Concurrent log writes (two swarm verbs at once for same slot) | `O_APPEND` + sub-`PIPE_BUF` lines = atomic; no interleaving. |
 | `--tail` reader open during workspace-log rotation | Reader's file handle stays valid on the rotated `.log.1`; reader misses new events until they reopen. Documented as a known limitation; users typically `--tail` short-lived sessions. |
 | Per-slot log grew large mid-session (> 100 MB) | No rotation; slot-scoped logs are bounded by the slot's lifetime. If a slot somehow logs that much, it's a bug to investigate, not silently rotate around. |
-| Plan SHA changes between dispatch and resume (user edited plan) | `--resume` validates `plan_sha256` matches manifest. Mismatch → error: `plan changed since dispatch. Re-dispatch with: bones swarm dispatch --cancel && bones swarm dispatch <plan>` |
+| Plan SHA changes between dispatch and advance (user edited plan) | `--advance` validates `plan_sha256` matches manifest. Mismatch → error: `plan changed since dispatch. Re-dispatch with: bones swarm dispatch --cancel && bones swarm dispatch <plan>` |
 
 ### Migration
 
@@ -278,12 +280,12 @@ Useful for "what did bones do in this workspace today?" rather than per-slot dri
 ### Testing
 
 - **Unit:** dispatch manifest serialization at `schema_version=1`; wave grouping logic (correct dependency layering); event JSONL serialization for each event type; rotation logic at size threshold; `--since` / `--last` filter logic.
-- **Integration:** end-to-end flow: `bones swarm dispatch <plan>` writes correct manifest → simulated skill calls swarm verbs per wave → `--mark-wave-complete` + `--resume` cycle → final wave produces `status=complete`. Full slot lifecycle (`join` → `commit` × 2 → `close`) produces correct log entries; `bones logs --slot=X --tail` follows correctly; `--json` round-trips through `jq`.
+- **Integration:** end-to-end flow: `bones swarm dispatch <plan>` writes correct manifest → simulated skill calls swarm verbs per wave → `--advance` after each wave promotes `current_wave` → final `--advance` reports "all complete." Full slot lifecycle (`join` → `commit` × 2 → `close`) produces correct log entries; `bones logs --slot=X --tail` follows correctly; `--json` round-trips through `jq`.
 - **Manual:** `bones swarm dispatch ./plan.md` against a real workspace with a real orchestrator skill consumer; `--tail` during real swarm work; verify `bones doctor --all` (Spec 2) shows dispatch context correctly.
 
 ## Future Direction
 
-- **Auto-advance through waves.** Today's `--resume` is a manual user step. A `bones swarm dispatch --auto-advance` mode (or a separate watcher daemon) could detect wave completion and advance automatically. Designed deliberately as a v2 — auto-advance crosses into "agent management" territory that warrants its own design pass for safety (failed waves, partial completion, halt conditions).
+- **Auto-advance through waves.** Today's `--advance` is a manual call (by skill or user). A `bones swarm dispatch --watch` mode (or a separate watcher daemon) could observe `bones-tasks` KV and call `--advance` automatically when each wave completes. Designed deliberately as a v2 — auto-advance crosses into "agent management" territory that warrants its own design pass for safety (failed waves, partial completion, halt conditions).
 - **Cross-workspace logs.** `bones logs --all --slot-pattern='auth-*'` could aggregate logs across the registry (Spec 1). Not driven by current pain; revisit if dispatch-and-logs becomes a multi-workspace operation.
 - **Subagent transcript surfacing.** The harness owns its transcripts. If a `bones logs --slot=X --include-harness-transcript` convenience that finds the matching claude session jsonl is valuable, that's a future Claude Code-specific skill, not a binary feature.
 - **Real-time event subjects.** When the leaf-node user-NATS migration ships (per Spec 1's Future Direction), per-slot events would naturally publish to NATS subjects like `bones.workspace.<id>.slot.<name>.event`. `bones logs --tail` becomes a NATS subscription instead of a file tail. Same external contract, real-time substrate.

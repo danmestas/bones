@@ -68,8 +68,9 @@ Path: `~/.bones/sessions/<session_id>.json`.
 }
 ```
 
-- Writer: bones-managed SessionStart hook writes the file directly (filesystem op, no public CLI verb — the marker is a private implementation detail of the hook).
-- Remover: bones-managed SessionEnd hook unlinks the file directly.
+- Writer: bones-managed SessionStart hook calls a hidden internal subcommand `bones session-marker register` (not listed in `bones --help`; exists solely to keep the marker schema in Go code rather than duplicated in a shell script). The subcommand writes the JSON file.
+- Remover: bones-managed SessionEnd hook calls `bones session-marker unregister` (same hidden internal subcommand).
+- The `session-marker` subcommand is deliberately hidden because the marker mechanism is internal to bones; only the bones-managed hooks call it. Hiding it from `--help` prevents users from forming a false API contract on it.
 - Orphan GC: `bones up` and `bones status --all` filter session markers by `kill -0 claude_pid`; dead markers are unlinked as a side effect.
 
 The marker subsystem is deliberately not exposed as a public CLI verb. If marker introspection is ever needed for debugging, extend `bones doctor` to iterate them — that's a deep verb (one command, full internal view) rather than a shallow `register/unregister` pair.
@@ -147,6 +148,14 @@ Renamed ~/projects/foo: foo → auth-service
 ```
 
 **Validation:** the new name must be (a) non-empty, (b) free of path separators, (c) unique among currently-registered workspace names on this user (rejected with a clear message and the colliding workspace's path if not). Validation is performed before any write — defines the "duplicate name" error class out of existence at the verb boundary, rather than letting users hand-edit `.bones/config.json` and discover collisions later.
+
+Example collision error:
+
+```
+$ bones rename auth-service
+error: name 'auth-service' is already used by workspace at /Users/dmestas/work/auth
+       (rename that workspace first, or pick a different name)
+```
 
 **Why a verb instead of "edit `config.json` yourself":** hand-editing JSON is an obscure dependency (which file, which key, what's valid). A verb makes the operation discoverable, validates input, and updates both stores atomically.
 

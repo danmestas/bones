@@ -4,6 +4,7 @@
 **Status:** Draft
 **Replaces:** N/A
 **Related:** ADR 0028 (swarm verbs + lease types), ADR 0034 (bypass prevention), ADR 0038 (per-workspace hub ports), Spec `cross-workspace-identity` (the registry consumed by `--all`)
+**Dependencies:** Spec `cross-workspace-identity` must ship first — `bones doctor --all` reads its workspace registry. Single-workspace hint additions can ship independently.
 
 ## Scope
 
@@ -71,6 +72,11 @@ Every finding type maps to one templated hint. Templates are filled at render ti
 | `[OK]` *anything* | check passed | (no fix — nothing to fix) |
 
 **Why a closed catalog instead of free-form fix strings:** consistent rendering, machine-parseable, no risk of fix prose drifting across checks. New finding types must extend the catalog explicitly. Hint logic lives in one place rather than scattered through individual checks.
+
+**Two deliberate tradeoffs in the catalog:**
+
+- `[STALE]` and `[DEAD]` map to the same fix (`bones swarm close --slot=<name> --result=fail`). They are semantically distinct (stale = claim never renewed within TTL; dead = leaf PID gone) but the recovery action is the same. Keeping them as separate tags preserves diagnostic clarity (the user can tell *why* the slot is unhealthy) without inventing distinct fixes that don't exist.
+- `[REMOTE]` findings get a `Fix:` line that says there's no local action. This is a Fix line that doesn't fix anything — a mild semantic stretch chosen for format consistency. The alternative (a separate `Note:` prefix) would split the rendering rules and complicate scanning. Consistency wins.
 
 ### Color and markup
 
