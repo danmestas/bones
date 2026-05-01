@@ -18,7 +18,7 @@ The command lives at `cli/apply.go` as `ApplyCmd`, registered in `cli/cli.go` ne
 ## Preconditions (fail fast, exit non-zero with a clear message)
 
 1. **Workspace exists.** `workspace.Join(ctx, cwd)` succeeds. Failure message: `"workspace not found: run \`bones init\` or \`bones up\` first"`.
-2. **Hub fossil exists.** `<workspace>/.orchestrator/hub.fossil` is a regular file. Failure message: `"hub repo not found at <path> — run \`bones up\` first"`.
+2. **Hub fossil exists.** `<workspace>/.bones/hub.fossil` is a regular file. Failure message: `"hub repo not found at <path> — run \`bones up\` first"`.
 3. **Git repo at workspace root.** `<workspace>/.git` exists. Failure message: `"no git repo at <workspace> — bones apply requires git for staging"`.
 4. **Git working tree is clean within fossil's view.** `git status --porcelain` filtered to paths in the trunk-tip manifest is empty. Failure message: `"uncommitted changes in fossil-tracked files: <up-to-3 paths>... — git stash or commit before applying"`. Untracked files outside fossil's view (editor swaps, build output, anything in fossil's ignore-globs) do not block.
 5. **`fossil` binary on PATH.** Same look-up as `cli/swarm_fanin.go:81-87`; same install hint on miss.

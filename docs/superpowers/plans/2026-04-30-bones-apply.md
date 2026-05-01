@@ -185,14 +185,11 @@ func setupApplyFixture(t *testing.T) string {
 		[]byte("workspace"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(dir, ".orchestrator"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	// A real hub.fossil requires fossil binary + init; tests can stub
 	// its presence by writing a placeholder file when only the existence
 	// check is exercised. Tests that exercise actual fossil ops should
 	// build a real fossil repo via exec.Command.
-	if err := os.WriteFile(filepath.Join(dir, ".orchestrator", "hub.fossil"),
+	if err := os.WriteFile(filepath.Join(dir, ".bones", "hub.fossil"),
 		[]byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +227,7 @@ func runApplyPreflight(cwd string) (*applyPreflight, error) {
 	if err != nil {
 		return nil, fmt.Errorf("workspace not found: run `bones init` or `bones up` first (%w)", err)
 	}
-	hubRepo := filepath.Join(info.WorkspaceDir, ".orchestrator", "hub.fossil")
+	hubRepo := filepath.Join(info.WorkspaceDir, ".bones", "hub.fossil")
 	if _, err := os.Stat(hubRepo); err != nil {
 		return nil, fmt.Errorf("hub repo not found at %s — run `bones up` first", hubRepo)
 	}
@@ -1122,9 +1119,7 @@ func buildLiveFixture(t *testing.T) string {
 	must(t, os.MkdirAll(filepath.Join(dir, ".bones"), 0o755))
 	must(t, os.WriteFile(filepath.Join(dir, ".bones", "workspace"),
 		[]byte("workspace"), 0o644))
-	must(t, os.MkdirAll(filepath.Join(dir, ".orchestrator"), 0o755))
-
-	hubFossil := filepath.Join(dir, ".orchestrator", "hub.fossil")
+	hubFossil := filepath.Join(dir, ".bones", "hub.fossil")
 	mustRun(t, "fossil", "new", "--admin-user", "u", hubFossil)
 	wt := filepath.Join(dir, ".bones", "fixture-wt")
 	mustRun(t, "fossil", "open", "--force", hubFossil, "--workdir", wt)
