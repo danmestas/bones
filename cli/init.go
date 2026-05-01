@@ -42,15 +42,22 @@ func (c *JoinCmd) Run(g *libfossilcli.Globals) error {
 // install, agent guidance, and Fossil drift check. The hub itself is no
 // longer started by `bones up`; per ADR 0041 it auto-starts on the first
 // verb that needs it via workspace.Join.
+//
+// Default output: a single confirmation line. With -v / --verbose: the
+// banner plus per-step status lines. WARN lines (drift, missing git)
+// print regardless because they describe real issues the operator must
+// see. Verbosity comes from the global -v flag on libfossilcli.Globals.
 type UpCmd struct{}
 
 func (c *UpCmd) Run(g *libfossilcli.Globals) error {
-	banner.Print()
+	if g.Verbose {
+		banner.Print()
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("cwd: %w", err)
 	}
-	return runUp(cwd)
+	return runUp(cwd, g.Verbose)
 }
 
 // reportWorkspace formats the standard workspace report and returns nil
