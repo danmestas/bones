@@ -50,7 +50,7 @@ make race        # race-detector tests
 - `pkg/` — exported packages.
 - `docs/adr/` — 21 architecture decision records documenting design rationale
   and trade-offs; read the relevant ADRs before proposing structural changes.
-- `scripts/`, `.orchestrator/` — orchestrator and bootstrap scaffolding.
+- `scripts/` — repo build helpers. Workspace runtime state lives under `.bones/` (ADR 0041).
 
 ## Submitting changes
 

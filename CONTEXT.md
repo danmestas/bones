@@ -12,21 +12,22 @@ time should start here.
 ## Topology
 
 **Workspace.** A repo directory bones has bootstrapped (`bones up`).
-Holds `.bones/` (per-process state), `.orchestrator/` (the hub's
-fossil + JetStream store + supervisor scripts), and `.claude/skills/`
-(scaffolded orchestrator and subagent skills). One workspace per
-repo. See ADR 0023 for the original spec.
+Holds `.bones/` (workspace marker + hub state, unified under ADR 0041)
+and `.claude/skills/` (scaffolded orchestrator and subagent skills).
+One workspace per repo. See ADRs 0023 and 0041.
 
 **Hub.** The single fossil repo + embedded NATS server that holds
 the trunk and the live coordination state. Lives at
-`<workspace>/.orchestrator/hub.fossil` plus JetStream KV buckets.
-Exactly one hub per workspace. See ADR 0023.
+`<workspace>/.bones/hub.fossil` plus JetStream KV buckets at
+`<workspace>/.bones/nats-store/`. Exactly one hub per workspace.
+Auto-starts on first verb that needs it (per ADR 0041); explicit
+control via `bones hub start` / `bones hub stop`. See ADR 0023.
 
-**Leaf.** A per-agent fossil clone of the hub. Each leaf syncs with
-the hub via NATS-bridged HTTP xfer (ADR 0023). The workspace itself
-runs a long-lived **workspace leaf** (the `leaf` daemon started by
-`bones init`); each running swarm slot opens an additional **per-slot
-leaf** for the duration of a CLI verb. See ADR 0023.
+**Leaf.** A per-agent fossil clone of the hub. Each running swarm
+slot opens a per-slot leaf for the duration of a CLI verb that
+syncs with the hub via NATS-bridged HTTP xfer (ADR 0023). The
+workspace itself no longer runs a separate workspace-bound leaf —
+that role collapsed into the hub under ADR 0041.
 
 **Trunk.** The hub's `trunk` branch. Every commit autosynced from
 every leaf advances trunk linearly — see *Autosync* below for the
