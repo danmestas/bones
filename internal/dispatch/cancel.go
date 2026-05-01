@@ -1,6 +1,9 @@
 package dispatch
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // TaskCloser closes a task with a reason string (e.g. "dispatch-canceled").
 // Implemented by the caller (typically a thin shim over internal/tasks).
@@ -14,7 +17,7 @@ const CancelReason = "dispatch-canceled"
 // when no manifest exists.
 func Cancel(root string, closeTask TaskCloser) error {
 	m, err := Read(root)
-	if err == ErrNoManifest {
+	if errors.Is(err, ErrNoManifest) {
 		return nil
 	}
 	if err != nil {

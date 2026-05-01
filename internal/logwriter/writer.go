@@ -78,32 +78,50 @@ func OpenSlot(slotDir, slot string) *Writer {
 // If maxSize > 0 and the file has grown beyond it, rotation is performed first.
 // The parent directory is created if absent.
 func (w *Writer) Append(e Event) error {
-	if err := os.MkdirAll(filepath.Dir(w.path), 0o755); err != nil {
-		return fmt.Errorf("logwriter: mkdir %s: %w", filepath.Dir(w.path), err)
-	}
-
 	if w.maxSize > 0 {
+		if err := os.MkdirAll(filepath.Dir(w.path), 0o755); err != nil {
+			return fmt.Errorf("logwriter: mkdir %s: %w", filepath.Dir(w.path), err)
+		}
 		if err := w.rotateIfNeeded(); err != nil {
 			return err
 		}
 	}
+	return AppendOnce(w.path, e)
+}
 
+// AppendOnce writes one event line to path without rotation. Use this for
+// per-slot logs and other call sites that don't carry rotation state across
+// calls — it skips the Writer allocation entirely. The parent directory is
+// created if absent.
+//
+// Atomicity: opens with O_APPEND|O_CREATE|O_WRONLY and writes a single
+// newline-terminated line. POSIX guarantees writes ≤PIPE_BUF are atomic.
+func AppendOnce(path string, e Event) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("logwriter: mkdir %s: %w", filepath.Dir(path), err)
+	}
 	b, err := json.Marshal(e)
 	if err != nil {
 		return fmt.Errorf("logwriter: marshal event: %w", err)
 	}
 	b = append(b, '\n')
-
-	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return fmt.Errorf("logwriter: open %s: %w", w.path, err)
+		return fmt.Errorf("logwriter: open %s: %w", path, err)
 	}
 	defer func() { _ = f.Close() }()
-
 	if _, err := f.Write(b); err != nil {
-		return fmt.Errorf("logwriter: write %s: %w", w.path, err)
+		return fmt.Errorf("logwriter: write %s: %w", path, err)
 	}
 	return nil
+}
+
+// SlotLogPath returns the per-slot log path under <slotDir>/log. Per-slot logs
+// are bounded by slot lifetime and never rotate, so callers should use
+// AppendOnce(SlotLogPath(slotDir, slot), event) — no Writer needed.
+func SlotLogPath(slotDir, slot string) string {
+	_ = slot // reserved for future use (e.g. naming variants)
+	return filepath.Join(slotDir, "log")
 }
 
 // rotateIfNeeded renames the current log file into the numbered backup series
