@@ -49,15 +49,15 @@ headings. You'll need the task IDs from `bones tasks list` to feed
 Check that the SessionStart hook ran successfully:
 
 ```
-test -f .orchestrator/pids/fossil.pid && \
-  test -f .orchestrator/pids/nats.pid && \
-  curl -fsS -X POST http://127.0.0.1:8765/xfer >/dev/null
+test -f .bones/pids/fossil.pid && \
+  test -f .bones/pids/nats.pid && \
+  curl -fsS -X POST "$(cat .bones/hub-fossil-url)/xfer" >/dev/null
 ```
 
-If any check fails, run the bootstrap script directly:
+If any check fails, start the hub directly:
 
 ```
-bash .orchestrator/scripts/hub-bootstrap.sh
+bones hub start
 ```
 
 (Idempotent — safe to re-run.)
@@ -155,7 +155,7 @@ When the integration agent returns:
 1. Verify the hub absorbed every slot's work:
 
    ```
-   fossil timeline -t ci -R .orchestrator/hub.fossil --limit <N>
+   fossil timeline -t ci -R .bones/hub.fossil --limit <N>
    ```
 
    You should see one commit per `bones swarm commit` invocation across
