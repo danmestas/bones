@@ -17,6 +17,7 @@ import (
 	_ "github.com/danmestas/libfossil/db/driver/modernc"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 
+	"github.com/danmestas/bones/internal/registry"
 	"github.com/danmestas/bones/internal/telemetry"
 )
 
@@ -158,6 +159,21 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 
 	fmt.Printf("hub: fossil at http://127.0.0.1:%d, nats at nats://127.0.0.1:%d\n",
 		o.fossilPort, o.natsPort)
+
+	// Record this workspace in the cross-workspace registry so
+	// `bones status --all` can discover running hubs. Non-fatal: the hub
+	// still works without registry visibility.
+	if err := registry.Write(registry.Entry{
+		Cwd:       p.root,
+		Name:      filepath.Base(p.root),
+		HubURL:    fmt.Sprintf("http://127.0.0.1:%d", o.fossilPort),
+		NATSURL:   fmt.Sprintf("nats://127.0.0.1:%d", o.natsPort),
+		HubPID:    os.Getpid(),
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "hub: registry write failed (non-fatal): %v\n", err)
+	}
+
 	<-ctx.Done()
 	fossilCancel()
 	natsSrv.Shutdown()

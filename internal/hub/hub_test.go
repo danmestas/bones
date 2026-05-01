@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/danmestas/bones/internal/registry"
 )
 
 // TestStartStopRoundTrip exercises the foreground path:
@@ -131,6 +133,71 @@ func TestPathsValidation(t *testing.T) {
 	_, err := newPaths("/this/path/does/not/exist/anywhere")
 	if err == nil {
 		t.Fatal("expected error for missing root")
+	}
+}
+
+// TestStartWritesRegistry asserts that a successful foreground Start writes
+// a cross-workspace registry entry with the correct workspace root.
+func TestStartWritesRegistry(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available; skipping hub round-trip")
+	}
+
+	t.Setenv("HOME", t.TempDir())
+	root := newGitRepoWithFile(t)
+	fossilPort, natsPort := freePort(t), freePort(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var startErr error
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		startErr = Start(ctx, root,
+			WithFossilPort(fossilPort),
+			WithNATSPort(natsPort),
+		)
+	}()
+
+	// Wait for both servers to be reachable before checking registry.
+	if err := waitForTCP("127.0.0.1:"+strconv.Itoa(fossilPort), 5*time.Second); err != nil {
+		cancel()
+		wg.Wait()
+		t.Fatalf("fossil never bound: %v", err)
+	}
+	if err := waitForTCP("127.0.0.1:"+strconv.Itoa(natsPort), 5*time.Second); err != nil {
+		cancel()
+		wg.Wait()
+		t.Fatalf("nats never bound: %v", err)
+	}
+
+	// Poll for registry entry — there's a brief window between servers
+	// binding and the registry.Write call completing.
+	deadline := time.Now().Add(3 * time.Second)
+	var entry registry.Entry
+	var readErr error
+	for time.Now().Before(deadline) {
+		entry, readErr = registry.Read(root)
+		if readErr == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	cancel()
+	wg.Wait()
+
+	if readErr != nil {
+		t.Fatalf("registry.Read after Start: %v", readErr)
+	}
+	if entry.Cwd != root {
+		t.Fatalf("entry.Cwd = %q, want %q", entry.Cwd, root)
+	}
+	if entry.HubPID != os.Getpid() {
+		t.Fatalf("entry.HubPID = %d, want %d", entry.HubPID, os.Getpid())
+	}
+	if startErr != nil {
+		t.Fatalf("foreground Start exit: %v", startErr)
 	}
 }
 
