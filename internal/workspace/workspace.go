@@ -227,6 +227,9 @@ func joinLogic(ctx context.Context, cwd string) (Info, error) {
 	// idempotent: a no-op when both pids are alive and URLs respond.
 	// On the first verb after computer restart, this prints one stderr
 	// line so the user knows why the verb is briefly slower.
+	// hubStartFunc's nil return is contracted to mean both ports are
+	// already bound; if a future refactor changes that, this code must
+	// re-probe healthz.
 	if !hubIsHealthy(workspaceDir) {
 		fmt.Fprintf(os.Stderr,
 			"bones: starting hub for workspace %s\n", workspaceDir)
@@ -238,7 +241,10 @@ func joinLogic(ctx context.Context, cwd string) (Info, error) {
 	natsURL := hub.NATSURL(workspaceDir)
 	fossilURL := hub.FossilURL(workspaceDir)
 	if natsURL == "" || fossilURL == "" {
-		return Info{}, fmt.Errorf("hub URLs not recorded after start; check leaf log")
+		return Info{}, fmt.Errorf(
+			"hub URLs not recorded after start in %s; check %s",
+			workspaceDir,
+			filepath.Join(workspaceDir, markerDirName, "hub.log"))
 	}
 
 	return Info{

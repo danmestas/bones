@@ -3,6 +3,8 @@ package workspace
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -262,5 +264,54 @@ func TestJoin_AutoStartsHubWhenDead(t *testing.T) {
 	}
 	if info.AgentID == "" {
 		t.Error("AgentID is empty")
+	}
+}
+
+func TestJoin_NoOpWhenHubHealthy(t *testing.T) {
+	// Pre-populate as a workspace with a "live" hub: pid files point
+	// at the test process (always alive), URL files point at a port we
+	// stand up below. hubStartFunc must NOT be called.
+	dir := t.TempDir()
+	if _, err := Init(context.Background(), dir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	bones := filepath.Join(dir, markerDirName)
+	if err := os.MkdirAll(filepath.Join(bones, "pids"), 0o755); err != nil {
+		t.Fatalf("mkdir pids: %v", err)
+	}
+	livePID := strconv.Itoa(os.Getpid())
+	for _, name := range []string{"fossil.pid", "nats.pid"} {
+		if err := os.WriteFile(filepath.Join(bones, "pids", name),
+			[]byte(livePID), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	// Stand up a tiny healthz server so hubIsHealthy's GET succeeds.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(srv.Close)
+	if err := os.WriteFile(filepath.Join(bones, "hub-fossil-url"),
+		[]byte(srv.URL+"\n"), 0o644); err != nil {
+		t.Fatalf("write fossil url: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bones, "hub-nats-url"),
+		[]byte("nats://127.0.0.1:65530\n"), 0o644); err != nil {
+		t.Fatalf("write nats url: %v", err)
+	}
+
+	called := false
+	old := hubStartFunc
+	hubStartFunc = func(ctx context.Context, root string, options ...hub.Option) error {
+		called = true
+		return nil
+	}
+	t.Cleanup(func() { hubStartFunc = old })
+
+	if _, err := Join(context.Background(), dir); err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	if called {
+		t.Error("hubStartFunc was called; expected no-op when hub healthy")
 	}
 }
