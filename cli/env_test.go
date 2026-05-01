@@ -7,6 +7,17 @@ import (
 	"testing"
 )
 
+// writeAgentIDForTest creates the .bones/agent.id marker that walkUpToBones
+// requires to recognize a directory as a workspace. Test fixtures use this
+// instead of just `mkdir .bones`.
+func writeAgentIDForTest(t *testing.T, root string) {
+	t.Helper()
+	path := filepath.Join(root, ".bones", "agent.id")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWalkUpToBones(t *testing.T) {
 	root := t.TempDir()
 	deep := filepath.Join(root, "a", "b", "c")
@@ -18,9 +29,7 @@ func TestWalkUpToBones(t *testing.T) {
 		t.Fatal(err)
 	}
 	// agent.id is the workspace marker (see walkUpToBones doc).
-	if err := os.WriteFile(filepath.Join(bonesDir, "agent.id"), []byte("test-agent"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeAgentIDForTest(t, filepath.Join(root, "a"))
 	got, found := walkUpToBones(deep)
 	if !found {
 		t.Fatalf("expected to find .bones above %s", deep)
@@ -45,7 +54,8 @@ func TestWalkUpToBones_IgnoresStateDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Mimic the user-level state-dir contents (no agent.id).
-	if err := os.WriteFile(filepath.Join(stateDir, "install-id"), []byte("xxx"), 0o644); err != nil {
+	idPath := filepath.Join(stateDir, "install-id")
+	if err := os.WriteFile(idPath, []byte("xxx"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(stateDir, "workspaces"), 0o755); err != nil {
@@ -56,7 +66,7 @@ func TestWalkUpToBones_IgnoresStateDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	if root, found := walkUpToBones(deep); found {
-		t.Fatalf("walkUpToBones must not match the state dir at %s, but returned root=%s", stateDir, root)
+		t.Fatalf("must not match state dir at %s, returned root=%s", stateDir, root)
 	}
 }
 
@@ -94,9 +104,7 @@ func TestEnvCmdInsideWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	// agent.id is the workspace marker walkUpToBones checks for.
-	if err := os.WriteFile(filepath.Join(root, ".bones", "agent.id"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeAgentIDForTest(t, root)
 	// Manual chdir + cleanup (t.Chdir requires Go 1.24+)
 	oldCwd, _ := os.Getwd()
 	if err := os.Chdir(root); err != nil {
@@ -147,9 +155,7 @@ func TestEnvCmdFishSyntax(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ".bones"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, ".bones", "agent.id"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeAgentIDForTest(t, root)
 	oldCwd, _ := os.Getwd()
 	if err := os.Chdir(root); err != nil {
 		t.Fatal(err)

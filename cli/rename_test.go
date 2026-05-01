@@ -46,9 +46,7 @@ func TestRenameWritesAndUpdatesRegistry(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(wsDir, ".bones"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(wsDir, ".bones", "agent.id"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeAgentIDForTest(t, wsDir)
 	oldCwd, _ := os.Getwd()
 	if err := os.Chdir(wsDir); err != nil {
 		t.Fatal(err)
@@ -89,9 +87,7 @@ func TestRenameRejectsCollision(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(wsDir, ".bones"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(wsDir, ".bones", "agent.id"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeAgentIDForTest(t, wsDir)
 	oldCwd, _ := os.Getwd()
 	if err := os.Chdir(wsDir); err != nil {
 		t.Fatal(err)
