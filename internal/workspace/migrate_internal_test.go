@@ -190,3 +190,49 @@ func TestRewriteHookForADR0041_NoSettings(t *testing.T) {
 		t.Errorf("rewriteHookForADR0041 with no settings.json: %v", err)
 	}
 }
+
+func TestRewriteHookForADR0041_AlreadyMigrated(t *testing.T) {
+	// settings.json already references `bones hub start` and not the legacy
+	// bash command. rewriteHookForADR0041 must be a no-op and not touch the
+	// file's mtime.
+	dir := t.TempDir()
+	claudeDir := filepath.Join(dir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	path := filepath.Join(claudeDir, "settings.json")
+	body := `{
+  "hooks": {
+    "SessionStart": [
+      {"command": "bones hub start", "type": "command", "timeout": 10}
+    ]
+  }
+}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+
+	if err := rewriteHookForADR0041(dir); err != nil {
+		t.Fatalf("rewriteHookForADR0041: %v", err)
+	}
+
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat after: %v", err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Errorf("mtime changed: file should not have been written when no legacy command present")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != body {
+		t.Errorf("settings.json was modified:\n--- want ---\n%s\n--- got ---\n%s",
+			body, string(got))
+	}
+}
