@@ -60,7 +60,7 @@ func TestStartStopRoundTrip(t *testing.T) {
 	// window between port-bind and pid-file write inside the
 	// foreground Start, so poll up to readyTimeout before failing.
 	for _, name := range []string{"fossil.pid", "nats.pid"} {
-		pidFile := filepath.Join(root, ".orchestrator", "pids", name)
+		pidFile := filepath.Join(root, markerDirName, "pids", name)
 		if !waitForPidLive(pidFile, 5*time.Second) {
 			cancel()
 			wg.Wait()
@@ -87,7 +87,7 @@ func TestStartStopRoundTrip(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 	for _, name := range []string{"fossil.pid", "nats.pid"} {
-		pidFile := filepath.Join(root, ".orchestrator", "pids", name)
+		pidFile := filepath.Join(root, markerDirName, "pids", name)
 		if _, err := os.Stat(pidFile); !os.IsNotExist(err) {
 			cancel()
 			wg.Wait()
