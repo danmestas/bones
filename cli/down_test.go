@@ -393,6 +393,31 @@ func TestRunDown_DryRun(t *testing.T) {
 	}
 }
 
+// TestDownAllInvokesPerWorkspace: runAll with --yes tears down every
+// registered workspace and removes their registry entries.
+func TestDownAllInvokesPerWorkspace(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ws1 := t.TempDir()
+	ws2 := t.TempDir()
+	now := time.Now().UTC()
+	for _, ws := range []string{ws1, ws2} {
+		if err := registry.Write(registry.Entry{
+			Cwd: ws, Name: filepath.Base(ws), HubPID: os.Getpid(), StartedAt: now,
+		}); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	cmd := &DownCmd{Yes: true, KeepHub: true, All: true}
+	if err := cmd.runAll(); err != nil {
+		t.Fatalf("runAll: %v", err)
+	}
+	for _, ws := range []string{ws1, ws2} {
+		if _, err := registry.Read(ws); !errors.Is(err, registry.ErrNotFound) {
+			t.Fatalf("expected registry entry removed for %s, got %v", ws, err)
+		}
+	}
+}
+
 // TestDownRemovesRegistry: runDown removes the workspace registry entry
 // when one exists. Uses --keep-hub to avoid touching hub processes.
 func TestDownRemovesRegistry(t *testing.T) {
