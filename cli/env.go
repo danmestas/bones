@@ -37,7 +37,7 @@ func resolveWorkspaceName(root string) string {
 }
 
 type EnvCmd struct {
-	Shell string `name:"shell" help:"shell: bash|zsh|fish (default: auto)" enum:"bash,zsh,fish,"`
+	Shell string `name:"shell" help:"shell: bash|zsh|fish (default: auto-detect from $SHELL)"`
 }
 
 func (c *EnvCmd) Run() error { return c.run(os.Stdout) }
@@ -46,6 +46,11 @@ func (c *EnvCmd) run(w io.Writer) error {
 	shell := c.Shell
 	if shell == "" {
 		shell = detectShell()
+	}
+	switch shell {
+	case "bash", "zsh", "fish":
+	default:
+		return fmt.Errorf("--shell: unknown shell %q (want bash, zsh, or fish)", shell)
 	}
 	cwd, err := os.Getwd()
 	if err != nil {

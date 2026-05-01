@@ -73,7 +73,7 @@ func TestDoctorAllVerboseShowsDetails(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	renderDoctorAll(&buf, doctorAllOpts{Verbose: true})
+	renderDoctorAll(&buf, doctorAllOpts{ShowOK: true})
 	out := buf.String()
 	// Verbose mode shows per-workspace section even for OK workspaces.
 	if !strings.Contains(out, "=== wk") {

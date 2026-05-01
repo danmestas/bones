@@ -34,10 +34,10 @@ var osHostname = os.Hostname
 // participate in Kong parsing.
 type DoctorCmd struct {
 	edgecli.DoctorCmd
-	All     bool `name:"all" help:"check all registered workspaces on this user/host"`
-	Quiet   bool `name:"quiet" short:"q" help:"only show workspaces with issues (with --all)"`
-	Verbose bool `name:"verbose" help:"show all checks including OK rows (with --all)"`
-	JSON    bool `name:"json" help:"emit machine-readable JSON"`
+	All    bool `name:"all" help:"check all registered workspaces on this user/host"`
+	Quiet  bool `name:"quiet" short:"q" help:"only show workspaces with issues (with --all)"`
+	ShowOK bool `name:"show-ok" help:"include OK workspaces in --all output (verbose mode)"`
+	JSON   bool `name:"json" help:"emit machine-readable JSON"`
 }
 
 // Run invokes the EdgeSync doctor first; on completion (regardless
@@ -82,8 +82,8 @@ func (c *DoctorCmd) runAll(_ *libfossilcli.Globals) error {
 		exitCode = renderDoctorAllJSON(os.Stdout)
 	} else {
 		exitCode = renderDoctorAll(os.Stdout, doctorAllOpts{
-			Quiet:   c.Quiet,
-			Verbose: c.Verbose,
+			Quiet:  c.Quiet,
+			ShowOK: c.ShowOK,
 		})
 	}
 	if exitCode != 0 {

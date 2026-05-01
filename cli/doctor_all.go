@@ -14,8 +14,8 @@ import (
 )
 
 type doctorAllOpts struct {
-	Quiet   bool
-	Verbose bool
+	Quiet  bool
+	ShowOK bool
 }
 
 // workspaceResult holds the per-workspace doctor outcome from --all.
@@ -55,7 +55,7 @@ func renderDoctorAll(w io.Writer, opts doctorAllOpts) int {
 	_ = tw.Flush()
 
 	// Per-workspace details. By default and with --quiet, only show
-	// workspaces that have issues. With --verbose, show every workspace
+	// workspaces that have issues. With --show-ok, show every workspace
 	// (including OK rows). --quiet additionally suppresses the per-row
 	// header in favor of a one-line tally when nothing's wrong.
 	anyIssue := false
@@ -63,7 +63,7 @@ func renderDoctorAll(w io.Writer, opts doctorAllOpts) int {
 		if r.Issues > 0 {
 			anyIssue = true
 		}
-		if r.Issues == 0 && !opts.Verbose {
+		if r.Issues == 0 && !opts.ShowOK {
 			continue
 		}
 		_, _ = fmt.Fprintf(w, "\n=== %s (%s) ===\n", r.Entry.Name, r.Entry.Cwd)
