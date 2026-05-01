@@ -36,7 +36,7 @@ func (c *TasksStatusCmd) Run(g *libfossilcli.Globals) error {
 	pidStr, err := os.ReadFile(pidPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr,
-			"hub not running — run `bash .orchestrator/scripts/hub-bootstrap.sh`\n"+
+			"hub not running — run `bones hub start`\n"+
 				"  (or `bones init` to create a fresh workspace)")
 		return fmt.Errorf("read pid: %w", err)
 	}

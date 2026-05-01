@@ -14,21 +14,15 @@ import (
 	"github.com/danmestas/bones/internal/version"
 )
 
-//go:embed all:templates/orchestrator
+//go:embed all:templates/orchestrator/skills
 var orchestratorTemplates embed.FS
 
-// scaffoldOrchestrator scaffolds the hub-leaf orchestrator scripts,
-// skills, and Claude Code hooks into the workspace at root. Idempotent:
-// re-running yields no diff against an already-installed workspace.
+// scaffoldOrchestrator scaffolds the orchestrator skills and Claude Code
+// hooks into the workspace at root. Per ADR 0041 the legacy bash scripts
+// (.orchestrator/scripts/) are no longer scaffolded — the hub auto-starts
+// via `bones hub start`. Idempotent: re-running yields no diff against
+// an already-installed workspace.
 func scaffoldOrchestrator(root string) error {
-	if err := copyTree(orchestratorTemplates, "templates/orchestrator/scripts",
-		filepath.Join(root, ".orchestrator", "scripts"), 0o644); err != nil {
-		return fmt.Errorf("scripts: %w", err)
-	}
-	if err := copyFile(orchestratorTemplates, "templates/orchestrator/dotorch-gitignore",
-		filepath.Join(root, ".orchestrator", ".gitignore"), 0o644); err != nil {
-		return fmt.Errorf("gitignore: %w", err)
-	}
 	if err := copyTree(orchestratorTemplates, "templates/orchestrator/skills",
 		filepath.Join(root, ".claude", "skills"), 0o644); err != nil {
 		return fmt.Errorf("skills: %w", err)
@@ -77,15 +71,20 @@ func copyFile(fsys embed.FS, src, dst string, mode fs.FileMode) error {
 	return os.WriteFile(dst, data, mode)
 }
 
-// mergeSettings idempotently adds hub-bootstrap and hub-shutdown hooks
-// to the consumer's .claude/settings.json. Creates the file if absent.
-// Preserves all existing top-level keys, hook events, and entries.
+// mergeSettings idempotently installs the SessionStart + PreCompact
+// hooks bones relies on into the consumer's .claude/settings.json.
+// Creates the file if absent. Preserves all existing top-level keys,
+// hook events, and entries.
 //
-// Hub teardown is wired to SessionEnd, not Stop. Stop fires after every
-// assistant turn and was tearing the hub down constantly; SessionEnd
-// fires only when the actual session terminates. Legacy installs that
-// have the shim under "Stop" are migrated by removing the old entry
-// before the SessionEnd entry is added.
+// Per ADR 0041 the SessionStart hub-startup entry is `bones hub start`
+// (not the legacy bash hub-bootstrap.sh shim). Pre-ADR-0041 entries are
+// pruned during scaffold so re-running over an existing workspace does
+// not leave the legacy command coexisting with the new one.
+//
+// Hub teardown is no longer wired into any session lifecycle hook. Per
+// ADR 0038 the hub is workspace-scoped and `bones down` is the explicit
+// teardown; legacy hub-shutdown.sh entries under Stop or SessionEnd are
+// migrated away.
 func mergeSettings(path string) error {
 	root := map[string]any{}
 	if data, err := os.ReadFile(path); err == nil {
@@ -103,14 +102,10 @@ func mergeSettings(path string) error {
 		hooks = map[string]any{}
 	}
 
-	// Prime first so task context lands in the agent's window before any
-	// other hook output. coord.Prime is the only thing that survives
-	// session boundaries — specs written outside `bones tasks` evaporate
-	// at the next compaction, which keeps planners filing atomic work
-	// rather than bypassing the tracker with freeform docs.
-	addHook(hooks, "SessionStart", "bones tasks prime --json")
-	addHook(hooks, "SessionStart", "bash .orchestrator/scripts/hub-bootstrap.sh")
-	addHook(hooks, "PreCompact", "bones tasks prime --json")
+	// Drop the pre-ADR-0041 bash hub-bootstrap entry before adding the
+	// new `bones hub start` entry, so re-scaffold over a legacy workspace
+	// doesn't leave both commands wired.
+	pruneLegacyBootstrap(hooks)
 
 	// The hub is a workspace-scoped daemon (per-workspace pid files +
 	// per-workspace ports). Tying its teardown to SessionEnd was a bug:
@@ -120,6 +115,15 @@ func mergeSettings(path string) error {
 	// longer carries hub-shutdown.
 	migrateStopToSessionEnd(hooks)
 	migrateSessionEndShutdown(hooks)
+
+	// Prime first so task context lands in the agent's window before any
+	// other hook output. coord.Prime is the only thing that survives
+	// session boundaries — specs written outside `bones tasks` evaporate
+	// at the next compaction, which keeps planners filing atomic work
+	// rather than bypassing the tracker with freeform docs.
+	addHook(hooks, "SessionStart", "bones tasks prime --json")
+	addHook(hooks, "SessionStart", "bones hub start")
+	addHook(hooks, "PreCompact", "bones tasks prime --json")
 
 	root["hooks"] = hooks
 
@@ -151,16 +155,30 @@ func migrateSessionEndShutdown(hooks map[string]any) {
 	pruneHubShutdown(hooks, "SessionEnd")
 }
 
-// pruneHubShutdown is the shared body of the two hub-shutdown migrations.
-// It walks hooks[event] and drops any entry whose command contains
-// "hub-shutdown.sh", removing empty groups and the event key itself if
-// nothing else lives under it. Unrelated entries are preserved verbatim.
+// pruneLegacyBootstrap removes the pre-ADR-0041 SessionStart entry
+// invoking bash .orchestrator/scripts/hub-bootstrap.sh. Re-scaffolding
+// over an existing workspace replaces it with the `bones hub start`
+// invocation; pruning first prevents both entries from coexisting.
+func pruneLegacyBootstrap(hooks map[string]any) {
+	pruneCommandFromEvent(hooks, "SessionStart", "hub-bootstrap.sh")
+}
+
+// pruneHubShutdown removes any hook entry under event whose command
+// references hub-shutdown.sh. Wraps pruneCommandFromEvent so the two
+// hub-shutdown migration helpers retain a self-documenting name.
 func pruneHubShutdown(hooks map[string]any, event string) {
+	pruneCommandFromEvent(hooks, event, "hub-shutdown.sh")
+}
+
+// pruneCommandFromEvent removes any hook entry under the given event
+// whose command contains needle. Empty matcher groups and the event
+// key itself are cleaned up if no entries remain. Unrelated entries
+// are preserved verbatim.
+func pruneCommandFromEvent(hooks map[string]any, event, needle string) {
 	groups, _ := hooks[event].([]any)
 	if groups == nil {
 		return
 	}
-	const needle = "hub-shutdown.sh"
 	var keep []any
 	for _, g := range groups {
 		gm, ok := g.(map[string]any)
@@ -241,11 +259,12 @@ func addHook(hooks map[string]any, event, cmd string) {
 	hooks[event] = groups
 }
 
-// ensureGitignoreEntries appends Fossil + orchestrator entries to the
+// ensureGitignoreEntries appends Fossil + bones runtime entries to the
 // project's root .gitignore if they're not already present. Per ADR
-// 0024: the orchestrator opens a Fossil checkout at the project root,
-// so .fslckout and .fossil-settings/ must be gitignored, and
-// .orchestrator/ holds runtime state that should never be committed.
+// 0023 the workspace opens a Fossil checkout at the project root, so
+// .fslckout and .fossil-settings/ must be gitignored. Per ADR 0041
+// runtime state lives under .bones/ — the legacy .orchestrator/ tree
+// is no longer scaffolded and is not in the entry list.
 //
 // Idempotent: skips entries already present (whole-line match).
 // Creates .gitignore if missing.
@@ -254,7 +273,6 @@ func ensureGitignoreEntries(dir string) error {
 	wantEntries := []string{
 		".fslckout",
 		".fossil-settings/",
-		".orchestrator/",
 		".bones/",
 	}
 
@@ -283,7 +301,7 @@ func ensureGitignoreEntries(dir string) error {
 	}
 	defer func() { _ = f.Close() }()
 
-	header := "\n# Orchestrator runtime + Fossil checkout-at-root (ADR 0023)\n"
+	header := "\n# Bones runtime + Fossil checkout-at-root (ADRs 0023, 0041)\n"
 	if _, err := f.WriteString(header); err != nil {
 		return fmt.Errorf("write .gitignore: %w", err)
 	}
