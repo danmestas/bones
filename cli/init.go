@@ -37,28 +37,11 @@ func (c *JoinCmd) Run(g *libfossilcli.Globals) error {
 	return reportWorkspace("join", info, err)
 }
 
-// OrchestratorCmd installs the hub-leaf orchestrator scripts, skills,
-// and Claude Code hooks into an existing workspace.
-type OrchestratorCmd struct{}
-
-func (c *OrchestratorCmd) Run(g *libfossilcli.Globals) error {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("cwd: %w", err)
-	}
-	info, err := workspace.Join(context.Background(), cwd)
-	if err != nil {
-		return fmt.Errorf("must be run inside a workspace (try `bones init` first): %w", err)
-	}
-	if err := scaffoldOrchestrator(info.WorkspaceDir); err != nil {
-		return err
-	}
-	fmt.Println("orchestrator: scaffolded scripts, skills, and Claude Code hooks")
-	return nil
-}
-
-// UpCmd performs full bootstrap from a fresh clone: workspace init,
-// orchestrator scaffold, leaf binary resolution, and hub bootstrap.
+// UpCmd performs workspace bootstrap from a fresh clone: workspace init
+// (idempotent), orchestrator scaffold (scripts, skills, hooks), git hook
+// install, agent guidance, and Fossil drift check. The hub itself is no
+// longer started by `bones up`; per ADR 0041 it auto-starts on the first
+// verb that needs it via workspace.Join.
 type UpCmd struct{}
 
 func (c *UpCmd) Run(g *libfossilcli.Globals) error {
@@ -87,6 +70,10 @@ func reportWorkspace(op string, info workspace.Info, err error) error {
 			"no bones workspace found; run `bones init` first")
 	case errors.Is(err, workspace.ErrLeafStartTimeout):
 		fmt.Fprintln(os.Stderr, "leaf failed to start within timeout")
+	case errors.Is(err, workspace.ErrLegacyLayout):
+		fmt.Fprintln(os.Stderr,
+			"bones workspace uses pre-ADR-0041 layout and a leaf is currently running.\n"+
+				"Tear it down first: `bones down`, then re-run to migrate.")
 	}
 	return fmt.Errorf("%s: %w", op, err)
 }

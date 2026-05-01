@@ -168,7 +168,7 @@ Comes after Phase 2. Largest doc impact.
   - `.claude/skills/orchestrator` — invocations of any renamed verb.
   - `.claude/skills/subagent` — same.
   - Hook scripts scaffolded by `bones up` (find via
-    `grep -r "bones " .orchestrator/ scripts/`).
+    `grep -r "bones " .bones/ scripts/`).
   - `cmd/bones-up/` templates — the source of the scaffolded scripts.
   - `Makefile` recipes that invoke `bones`.
   - `README.md`, `GETTING_STARTED.md`, `AGENTS.md` — verb names anywhere

@@ -29,7 +29,7 @@ func freePort(t *testing.T) string {
 }
 
 // leaseFixture brings up a workspace dir + an in-process hub
-// (writing hub.fossil under .orchestrator) and returns the
+// (writing hub.fossil under .bones) and returns the
 // workspace.Info shape Acquire / Resume consume. Per ADR
 // 0030 this uses real NATS + real Fossil — no mocks.
 type leaseFixture struct {
@@ -41,9 +41,9 @@ type leaseFixture struct {
 func newLeaseFixture(t *testing.T) *leaseFixture {
 	t.Helper()
 	dir := t.TempDir()
-	orch := filepath.Join(dir, ".orchestrator")
+	orch := filepath.Join(dir, ".bones")
 	if err := os.MkdirAll(orch, 0o755); err != nil {
-		t.Fatalf("mkdir orchestrator: %v", err)
+		t.Fatalf("mkdir .bones: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
@@ -90,12 +90,12 @@ func (f *leaseFixture) createTask(t *testing.T, title, holdPath string) coord.Ta
 
 // TestAcquire_RefusesWithoutHubFossil pins the role-leak
 // guard from PR #54. A workspace dir with no
-// `.orchestrator/hub.fossil` MUST cause Acquire to return
+// `.bones/hub.fossil` MUST cause Acquire to return
 // ErrWorkspaceNotBootstrapped without attempting any other work.
 // The error string MUST NOT contain "run `bones up`" — that
 // guidance is for orchestrators, not leaves.
 func TestAcquire_RefusesWithoutHubFossil(t *testing.T) {
-	dir := t.TempDir() // no .orchestrator/hub.fossil
+	dir := t.TempDir() // no .bones/hub.fossil
 	info := workspace.Info{WorkspaceDir: dir, NATSURL: "nats://127.0.0.1:1"}
 
 	_, err := Acquire(context.Background(), info, "demo", "task-x", AcquireOpts{})

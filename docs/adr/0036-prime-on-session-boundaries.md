@@ -6,11 +6,11 @@ bones already has the primitives for tasks-as-survivor: `coord.Prime` returns a 
 
 The asymmetry that keeps planners filing atomic tasks rather than freeform specs is auto-injection of prime at SessionStart and PreCompact. With prime injected at both events, only the tasks substrate survives session and compaction boundaries; any narrative written outside `bones tasks` evaporates and stops being a viable side channel. Without prime, a `spec.md` in the workspace rides on equal footing with filed tasks, and the tracker stops being the path of least resistance.
 
-ADR 0034 chose the workspace scaffold (`scaffoldOrchestrator` in `cli/orchestrator.go`) as the seam for hook installation — that is where the SessionStart hub-bootstrap line and the `.git/hooks/pre-commit` install already land. The same seam is the natural place to wire prime injection.
+ADR 0034 chose the workspace scaffold (`scaffoldOrchestrator` in `cli/orchestrator.go`) as the seam for hook installation — that is where the SessionStart `bones up` line and the `.git/hooks/pre-commit` install already land. The same seam is the natural place to wire prime injection.
 
 ## Decision
 
-The `bones up` scaffold writes `bones tasks prime --json` into both the SessionStart and PreCompact hook arrays of the workspace's `.claude/settings.json`. SessionStart prime runs before the hub bootstrap script so task context lands in the agent's window before any other hook output. PreCompact prime runs as the only hook on that event.
+The `bones up` scaffold writes `bones tasks prime --json` into both the SessionStart and PreCompact hook arrays of the workspace's `.claude/settings.json`. SessionStart prime runs before the SessionStart `bones up` line so task context lands in the agent's window before any other hook output. PreCompact prime runs as the only hook on that event.
 
 The wiring is two `addHook` calls in `mergeSettings`:
 

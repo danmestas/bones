@@ -41,7 +41,7 @@ func TestApplyRun_DryRunDoesNotStage(t *testing.T) {
 	}
 	dir := buildLiveFixture(t)
 	// Add a new fossil commit so there's something to apply.
-	hubFossil := filepath.Join(dir, ".orchestrator", "hub.fossil")
+	hubFossil := filepath.Join(dir, ".bones", "hub.fossil")
 	wt := filepath.Join(dir, ".bones", "fixture-wt2")
 	mustRun(t, "fossil", "open", "--force", hubFossil, "--workdir", wt)
 	must(t, os.WriteFile(filepath.Join(wt, "newfile.txt"), []byte("added\n"), 0o644))
@@ -89,9 +89,8 @@ func buildLiveFixture(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	must(t, os.MkdirAll(filepath.Join(dir, ".bones"), 0o755))
-	must(t, os.MkdirAll(filepath.Join(dir, ".orchestrator"), 0o755))
 
-	hubFossil := filepath.Join(dir, ".orchestrator", "hub.fossil")
+	hubFossil := filepath.Join(dir, ".bones", "hub.fossil")
 	mustRun(t, "fossil", "new", "--admin-user", "u", hubFossil)
 	wt := filepath.Join(dir, ".bones", "fixture-wt")
 	mustRun(t, "fossil", "open", "--force", hubFossil, "--workdir", wt)
@@ -151,7 +150,7 @@ func TestApplyPreflight_HappyPath(t *testing.T) {
 	if pre.WorkspaceDir != dir {
 		t.Errorf("WorkspaceDir = %q, want %q", pre.WorkspaceDir, dir)
 	}
-	if pre.HubFossil != filepath.Join(dir, ".orchestrator", "hub.fossil") {
+	if pre.HubFossil != filepath.Join(dir, ".bones", "hub.fossil") {
 		t.Errorf("HubFossil = %q", pre.HubFossil)
 	}
 	if pre.FossilBin == "" {
@@ -459,10 +458,7 @@ func setupApplyFixture(t *testing.T) string {
 	if err := os.MkdirAll(filepath.Join(dir, ".bones"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(dir, ".orchestrator"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, ".orchestrator", "hub.fossil"),
+	if err := os.WriteFile(filepath.Join(dir, ".bones", "hub.fossil"),
 		[]byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}

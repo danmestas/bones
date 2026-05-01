@@ -36,7 +36,7 @@ const DefaultCaps = "oih"
 const activeThresholdSec = 90
 
 // ErrWorkspaceNotBootstrapped is returned by Acquire when
-// `<workspace>/.orchestrator/hub.fossil` is missing. The role-leak
+// `<workspace>/.bones/hub.fossil` is missing. The role-leak
 // guard from PR #54 lives here: a leaf must NEVER read the error as
 // "run `bones up`" — bootstrap is the orchestrator's job. The error
 // string deliberately omits the `bones up` phrase so a subagent
@@ -292,7 +292,7 @@ type ResumedLease struct {
 // record yet. Used by `bones swarm join`. Steps, in order, with any
 // partial work cleaned up on error:
 //
-//  1. Verify `<workspace>/.orchestrator/hub.fossil` exists. If not,
+//  1. Verify `<workspace>/.bones/hub.fossil` exists. If not,
 //     return ErrWorkspaceNotBootstrapped — the role-leak guard from
 //     PR #54.
 //  2. Create the slot's fossil user on the hub repo if missing.
@@ -927,12 +927,12 @@ func pushLeafFossil(
 
 // ensureSlotUser creates the slot's fossil user on the hub repo if
 // missing. The role-guard for "workspace not bootstrapped" lives
-// here: if `<workspace>/.orchestrator/hub.fossil` is absent, returns
+// here: if `<workspace>/.bones/hub.fossil` is absent, returns
 // ErrWorkspaceNotBootstrapped without trying to create anything.
 // Bootstrap is the orchestrator's job; a leaf must never fix it
 // (PR #54).
 func ensureSlotUser(workspaceDir, login, caps string) error {
-	hubRepoPath := filepath.Join(workspaceDir, ".orchestrator", "hub.fossil")
+	hubRepoPath := filepath.Join(workspaceDir, ".bones", "hub.fossil")
 	if _, err := os.Stat(hubRepoPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return ErrWorkspaceNotBootstrapped

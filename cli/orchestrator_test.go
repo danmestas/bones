@@ -15,9 +15,6 @@ func TestScaffoldOrchestrator_FreshWorkspace(t *testing.T) {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 	for _, want := range []string{
-		".orchestrator/scripts/hub-bootstrap.sh",
-		".orchestrator/scripts/hub-shutdown.sh",
-		".orchestrator/.gitignore",
 		".claude/skills/orchestrator/SKILL.md",
 		".claude/skills/subagent/SKILL.md",
 		".claude/skills/uninstall-bones/SKILL.md",
@@ -27,14 +24,9 @@ func TestScaffoldOrchestrator_FreshWorkspace(t *testing.T) {
 			t.Errorf("missing %s: %v", want, err)
 		}
 	}
-	for _, sh := range []string{"hub-bootstrap.sh", "hub-shutdown.sh"} {
-		fi, err := os.Stat(filepath.Join(dir, ".orchestrator", "scripts", sh))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if fi.Mode()&0o100 == 0 {
-			t.Errorf("%s not executable: mode=%o", sh, fi.Mode())
-		}
+	// Per ADR 0041, .orchestrator/scripts/ is no longer scaffolded.
+	if _, err := os.Stat(filepath.Join(dir, ".orchestrator")); err == nil {
+		t.Errorf(".orchestrator/ should not be scaffolded post-ADR-0041")
 	}
 	verifyHooks(t, filepath.Join(dir, ".claude", "settings.json"))
 }
@@ -91,8 +83,8 @@ func TestScaffoldOrchestrator_PreservesExistingHooks(t *testing.T) {
 	if !strings.Contains(out, "existing-thing") {
 		t.Errorf("existing hook lost:\n%s", out)
 	}
-	if !strings.Contains(out, "hub-bootstrap.sh") {
-		t.Errorf("hub-bootstrap not added:\n%s", out)
+	if !strings.Contains(out, "bones hub start") {
+		t.Errorf("bones hub start not added:\n%s", out)
 	}
 	if !strings.Contains(out, "keepme") {
 		t.Errorf("unrelated top-level key lost:\n%s", out)
@@ -307,8 +299,13 @@ func verifyHooks(t *testing.T, path string) {
 	}
 	dump, _ := json.MarshalIndent(parsed, "", "  ")
 	out := string(dump)
-	if !strings.Contains(out, "hub-bootstrap.sh") {
-		t.Errorf("SessionStart hub-bootstrap missing:\n%s", out)
+	// Per ADR 0041: SessionStart starts the hub via `bones hub start`,
+	// not the legacy bash hub-bootstrap.sh shim.
+	if !strings.Contains(out, "bones hub start") {
+		t.Errorf("SessionStart bones hub start missing:\n%s", out)
+	}
+	if strings.Contains(out, "hub-bootstrap.sh") {
+		t.Errorf("legacy hub-bootstrap.sh should not be in fresh scaffold:\n%s", out)
 	}
 	// Per ADR 0038: hub is workspace-scoped, so the scaffold no longer
 	// installs a SessionEnd hub-shutdown hook. `bones down` is the
@@ -405,45 +402,6 @@ func TestScaffoldOrchestrator_PreservesUnrelatedSessionEndHook(t *testing.T) {
 	}
 }
 
-func TestScaffoldOrchestrator_HubBootstrapShimsToGoCmd(t *testing.T) {
-	// The bash hub-bootstrap.sh used to enforce ADR 0023 directly via
-	// `git ls-files`, `fossil open --force`, etc. The Go path in
-	// internal/hub owns those invariants and the shipped shim only
-	// re-execs `bones hub start --detach`. Both shims must stay short
-	// (so any drift back into bash is obvious) and must dispatch to the
-	// Go subcommand.
-	dir := t.TempDir()
-	if err := scaffoldOrchestrator(dir); err != nil {
-		t.Fatalf("scaffoldOrchestrator: %v", err)
-	}
-
-	bootstrap, err := os.ReadFile(
-		filepath.Join(dir, ".orchestrator", "scripts", "hub-bootstrap.sh"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(bootstrap), "bones hub start --detach") {
-		t.Errorf("hub-bootstrap.sh must shim to `bones hub start --detach`, got:\n%s", bootstrap)
-	}
-	if n := strings.Count(string(bootstrap), "\n"); n > 10 {
-		t.Errorf("hub-bootstrap.sh shim grew to %d lines; keep it minimal", n)
-	}
-
-	shutdown, err := os.ReadFile(
-		filepath.Join(dir, ".orchestrator", "scripts", "hub-shutdown.sh"),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(shutdown), "bones hub stop") {
-		t.Errorf("hub-shutdown.sh must shim to `bones hub stop`, got:\n%s", shutdown)
-	}
-	if n := strings.Count(string(shutdown), "\n"); n > 10 {
-		t.Errorf("hub-shutdown.sh shim grew to %d lines; keep it minimal", n)
-	}
-}
-
 func TestScaffoldOrchestrator_SkillHasADR0023Completion(t *testing.T) {
 	dir := t.TempDir()
 	if err := scaffoldOrchestrator(dir); err != nil {
@@ -492,10 +450,15 @@ func TestEnsureGitignoreEntries_FreshFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{".fslckout", ".fossil-settings/", ".orchestrator/"} {
+	for _, want := range []string{".fslckout", ".fossil-settings/", ".bones/"} {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("missing %q\n%s", want, data)
 		}
+	}
+	// Per ADR 0041 .orchestrator/ is no longer scaffolded and not
+	// included in the gitignore entry list.
+	if strings.Contains(string(data), ".orchestrator/") {
+		t.Errorf(".orchestrator/ should not be in gitignore post-ADR-0041\n%s", data)
 	}
 }
 
@@ -560,12 +523,150 @@ func TestEnsureGitignoreEntries_PartialOverlap(t *testing.T) {
 	if strings.Count(body, ".fslckout\n") != 1 {
 		t.Errorf(".fslckout duplicated\n%s", body)
 	}
-	for _, want := range []string{".fossil-settings/", ".orchestrator/"} {
+	for _, want := range []string{".fossil-settings/", ".bones/"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q\n%s", want, body)
 		}
 	}
 	if !strings.Contains(body, "node_modules/") {
 		t.Errorf("preexisting entry lost\n%s", body)
+	}
+}
+
+// TestPruneLegacyBootstrap_RemovesLegacyEntry verifies that the
+// pre-ADR-0041 SessionStart bash hub-bootstrap entry is dropped during
+// scaffold so re-running over a legacy workspace doesn't leave the old
+// command coexisting with the new `bones hub start` invocation.
+func TestPruneLegacyBootstrap_RemovesLegacyEntry(t *testing.T) {
+	hooks := map[string]any{
+		"SessionStart": []any{
+			map[string]any{
+				"matcher": "",
+				"hooks": []any{
+					map[string]any{
+						"command": "bash .orchestrator/scripts/hub-bootstrap.sh",
+						"type":    "command",
+						"timeout": float64(10),
+					},
+				},
+			},
+		},
+	}
+	pruneLegacyBootstrap(hooks)
+	if _, ok := hooks["SessionStart"]; ok {
+		t.Errorf("SessionStart key should be removed; got %v", hooks)
+	}
+}
+
+// TestPruneLegacyBootstrap_PreservesUnrelatedEntries ensures the prune
+// only removes the bash hub-bootstrap.sh shim, not unrelated SessionStart
+// hooks the user installed.
+func TestPruneLegacyBootstrap_PreservesUnrelatedEntries(t *testing.T) {
+	hooks := map[string]any{
+		"SessionStart": []any{
+			map[string]any{
+				"matcher": "",
+				"hooks": []any{
+					map[string]any{
+						"command": "bash .orchestrator/scripts/hub-bootstrap.sh",
+						"type":    "command",
+					},
+					map[string]any{
+						"command": "echo hello",
+						"type":    "command",
+					},
+				},
+			},
+		},
+	}
+	pruneLegacyBootstrap(hooks)
+	groups, ok := hooks["SessionStart"].([]any)
+	if !ok || len(groups) != 1 {
+		t.Fatalf("expected 1 group remaining, got %v", hooks)
+	}
+	gm := groups[0].(map[string]any)
+	entries := gm["hooks"].([]any)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry remaining, got %d: %v", len(entries), entries)
+	}
+	em := entries[0].(map[string]any)
+	if cmd, _ := em["command"].(string); cmd != "echo hello" {
+		t.Errorf("unrelated entry lost; got %q", cmd)
+	}
+}
+
+// TestPruneLegacyBootstrap_NoLegacyEntry ensures the prune is a no-op
+// on workspaces that never had the legacy entry.
+func TestPruneLegacyBootstrap_NoLegacyEntry(t *testing.T) {
+	hooks := map[string]any{
+		"SessionStart": []any{
+			map[string]any{
+				"matcher": "",
+				"hooks": []any{
+					map[string]any{
+						"command": "bones hub start",
+						"type":    "command",
+					},
+				},
+			},
+		},
+	}
+	pruneLegacyBootstrap(hooks)
+	groups, ok := hooks["SessionStart"].([]any)
+	if !ok || len(groups) != 1 {
+		t.Fatalf("SessionStart group dropped unexpectedly: %v", hooks)
+	}
+	gm := groups[0].(map[string]any)
+	entries := gm["hooks"].([]any)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+}
+
+// TestScaffoldOrchestrator_MigratesLegacyBootstrap exercises the full
+// scaffold path: a workspace with a SessionStart bash hub-bootstrap.sh
+// entry should end up with `bones hub start` and no legacy command after
+// re-scaffolding.
+func TestScaffoldOrchestrator_MigratesLegacyBootstrap(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := map[string]any{
+		"hooks": map[string]any{
+			"SessionStart": []any{
+				map[string]any{
+					"matcher": "",
+					"hooks": []any{
+						map[string]any{
+							"command": "bash .orchestrator/scripts/hub-bootstrap.sh",
+							"type":    "command",
+							"timeout": float64(10),
+						},
+					},
+				},
+			},
+		},
+	}
+	data, _ := json.MarshalIndent(legacy, "", "  ")
+	if err := os.WriteFile(settingsPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatalf("scaffoldOrchestrator: %v", err)
+	}
+
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(got)
+	if strings.Contains(body, "hub-bootstrap.sh") {
+		t.Errorf("legacy hub-bootstrap.sh not migrated:\n%s", body)
+	}
+	if !strings.Contains(body, "bones hub start") {
+		t.Errorf("bones hub start missing after migration:\n%s", body)
 	}
 }

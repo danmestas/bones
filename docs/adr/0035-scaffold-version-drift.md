@@ -2,7 +2,7 @@
 
 ## Context
 
-The bones binary and the workspace state evolve independently. `brew upgrade bones` (or `go install`) replaces the binary at `/opt/homebrew/bin/bones`, but the per-workspace artifacts written by `bones up` — `.orchestrator/scripts/`, `.claude/skills/`, `.claude/settings.json`, the `.git/hooks/pre-commit` from ADR 0034 — are unchanged. Those artifacts came from templates embedded in the *previous* binary; they only refresh when the user re-runs `bones up`.
+The bones binary and the workspace state evolve independently. `brew upgrade bones` (or `go install`) replaces the binary at `/opt/homebrew/bin/bones`, but the per-workspace artifacts written by `bones up` — `.bones/scripts/`, `.claude/skills/`, `.claude/settings.json`, the `.git/hooks/pre-commit` from ADR 0034 — are unchanged. Those artifacts came from templates embedded in the *previous* binary; they only refresh when the user re-runs `bones up`.
 
 The result: a fix shipped in version N+1 (new hook semantics, new skill content, migrated hook events) does nothing in workspaces last scaffolded by version N until someone explicitly refreshes them. The 2026-04-29 incidents made this concrete — PR #79's pre-commit hook and PR #80's `Stop` → `SessionEnd` migration are both invisible until `bones up` runs again, and there is no signal telling the operator that's needed.
 
@@ -24,13 +24,13 @@ Any other case is drift.
 
 ### 2. SessionStart-path notice
 
-The Claude Code SessionStart hook runs `hub-bootstrap.sh`, which execs `bones hub start --detach`. The Go side of `bones hub start` now reads the scaffold stamp and compares it against `version.Get()` at the start of `Run`. On drift, it prints one line to stderr:
+The Claude Code SessionStart hook runs `bones up`, which (re)starts the hub via `bones hub start`. The Go side of `bones hub start` reads the scaffold stamp and compares it against `version.Get()` at the start of `Run`. On drift, it prints one line to stderr:
 
 > `bones: scaffold v0.3.0, binary v0.3.1 — run \`bones up\` to refresh skills/hooks`
 
 That's exactly when an agent or user starts working in the workspace. The notice is short, actionable, and doesn't block the hub from coming up — the contract is "tell me, then proceed."
 
-The shim (`hub-bootstrap.sh`) stays minimal because the check lives in Go; the test that pins the shim to ≤10 lines doesn't need to change.
+The fallback shim (`bones up`'s thin shell wrapper, kept for environments without bones on PATH) stays minimal because the check lives in Go; the test that pins the shim to ≤10 lines doesn't need to change.
 
 ### 3. Doctor report
 
@@ -57,7 +57,7 @@ The shim (`hub-bootstrap.sh`) stays minimal because the check lives in Go; the t
 
 **Homebrew post-install hook to run `bones up` automatically.** Cross-workspace: a single brew upgrade can't know which workspaces exist. Also makes `brew upgrade bones` mutate user state outside its install prefix, which is exactly the kind of thing brew warns formula authors against.
 
-**Bake the version check into hub-bootstrap.sh in shell.** Means parsing `bones --version` output in bash, which is fragile to format changes. Keeping the logic in Go gives us tests and lets the version source change without touching the shim.
+**Bake the version check into the shell shim.** Means parsing `bones --version` output in bash, which is fragile to format changes. Keeping the logic in Go gives us tests and lets the version source change without touching the shim.
 
 ## Status
 

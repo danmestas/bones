@@ -23,7 +23,7 @@ that embeds both the Fossil HTTP server and the NATS server.
          │
          ▼
   Claude Code session + orchestrator skill
-  ├─ Hub: bare libfossil repo at .orchestrator/hub.fossil
+  ├─ Hub: bare libfossil repo at .bones/hub.fossil
   │  ├─ libfossil ServeHTTP on :8765 (xfer protocol)
   │  └─ embedded nats-server on :4222 (mesh bus)
   └─ Dispatcher (Task tool)
@@ -69,7 +69,7 @@ assertion, not a recovery path.
 ### Fresh-start wipe and completion materialization
 
 On bootstrap, when no live fossil PID is detected, the hub removes
-`.orchestrator/hub.fossil`, `<root>/.fslckout`, and
+`.bones/hub.fossil`, `<root>/.fslckout`, and
 `<root>/.fossil-settings/` *before* `fossil new`. Working-tree files
 are untouched — git-committed work lives in `.git/`, not Fossil. The
 hub then seeds itself by walking `git ls-files -z`, calling
@@ -85,7 +85,7 @@ commits into the working tree as ordinary file changes. From there
 caller-driven.
 
 `agent-init` appends `.fslckout`, `.fossil-settings/`, and
-`.orchestrator/` to the host project's root `.gitignore` idempotently.
+`.bones/` to the host project's root `.gitignore` idempotently.
 
 ### Architectural invariants
 

@@ -4,23 +4,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"time"
 
 	"github.com/danmestas/bones/internal/githook"
-	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/telemetry"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
-// runUp performs a full single-command bootstrap from a fresh clone:
+// runUp performs workspace bootstrap from a fresh clone:
 //  1. workspace init (idempotent — joins if already initialized)
-//  2. orchestrator scaffold (scripts, skills, hooks)
-//  3. build bin/leaf if missing
-//  4. run hub-bootstrap.sh and verify the hub is up
+//  2. orchestrator scaffold (skills, hooks, gitignore, scaffold version)
+//  3. git pre-commit hook install
+//  4. agent guidance write
+//  5. Fossil drift check (warning only)
+//
+// Per ADR 0041 the hub is no longer started here. Any verb that needs the
+// hub auto-starts it lazily via workspace.Join.
 func runUp(cwd string) (err error) {
 	ctx, end := telemetry.RecordCommand(context.Background(), "bones.up",
 		telemetry.String("workspace_hash", telemetry.WorkspaceHash(cwd)),
@@ -37,7 +38,7 @@ func runUp(cwd string) (err error) {
 	if err := scaffoldOrchestrator(wsDir); err != nil {
 		return fmt.Errorf("orchestrator scaffold: %w", err)
 	}
-	fmt.Println("up: orchestrator scripts, skills, and hooks installed")
+	fmt.Println("up: orchestrator skills, hooks, and gitignore installed")
 
 	if err := installGitHook(wsDir); err != nil {
 		return fmt.Errorf("git hook: %w", err)
@@ -51,24 +52,8 @@ func runUp(cwd string) (err error) {
 		fmt.Fprintf(os.Stderr, "up: WARN  %v\n", err)
 	}
 
-	if err := ensureLeafBinary(wsDir); err != nil {
-		return fmt.Errorf("bin/leaf: %w", err)
-	}
-
-	if err := runHubBootstrap(wsDir); err != nil {
-		return fmt.Errorf("hub-bootstrap: %w", err)
-	}
-
-	fossilURL := hub.FossilURL(wsDir)
-	natsURL := hub.NATSURL(wsDir)
-	if fossilURL == "" {
-		return fmt.Errorf("hub started but no .orchestrator/hub-fossil-url recorded — " +
-			"check .orchestrator/hub.log")
-	}
-	if err := waitHubReady(fossilURL+"/xfer", 5*time.Second); err != nil {
-		return fmt.Errorf("hub health check: %w", err)
-	}
-	fmt.Printf("up: hub is up at %s — NATS at %s\n", fossilURL, natsURL)
+	fmt.Println("up: workspace ready. Run any verb (e.g., `bones tasks status`) " +
+		"and the hub will start automatically; or run `bones hub start` now.")
 	return nil
 }
 
@@ -83,110 +68,6 @@ func initOrJoinWorkspace(ctx context.Context, cwd string) (workspace.Info, error
 		return workspace.Join(ctx, cwd)
 	}
 	return info, err
-}
-
-// ensureLeafBinary checks the standard leaf-binary locations used by
-// hub-bootstrap.sh. If the binary is missing it attempts to build it
-// from the sibling EdgeSync repo. Matches hub-bootstrap.sh resolution
-// order:
-//  1. $LEAF_BIN env var
-//  2. $ROOT/bin/leaf
-//  3. $EDGESYNC_DIR/bin/leaf  ($EDGESYNC_DIR defaults to $ROOT/../EdgeSync)
-//  4. `leaf` on $PATH
-//  5. Build from $EDGESYNC_DIR/leaf/cmd/leaf
-func ensureLeafBinary(root string) error {
-	if p := os.Getenv("LEAF_BIN"); p != "" {
-		if isExec(p) {
-			fmt.Printf("up: using LEAF_BIN=%s\n", p)
-			return nil
-		}
-		return fmt.Errorf("LEAF_BIN=%s is not executable", p)
-	}
-
-	rootLeaf := filepath.Join(root, "bin", "leaf")
-	if isExec(rootLeaf) {
-		fmt.Printf("up: found bin/leaf at %s\n", rootLeaf)
-		return nil
-	}
-
-	edgesyncDir := os.Getenv("EDGESYNC_DIR")
-	if edgesyncDir == "" {
-		edgesyncDir = filepath.Join(root, "..", "EdgeSync")
-	}
-	edgesyncLeaf := filepath.Join(edgesyncDir, "bin", "leaf")
-	if isExec(edgesyncLeaf) {
-		fmt.Printf("up: found leaf at %s\n", edgesyncLeaf)
-		return nil
-	}
-
-	if p, err := exec.LookPath("leaf"); err == nil {
-		fmt.Printf("up: found leaf on PATH: %s\n", p)
-		return nil
-	}
-
-	leafSrc := filepath.Join(edgesyncDir, "leaf", "cmd", "leaf")
-	if _, err := os.Stat(leafSrc); os.IsNotExist(err) {
-		return fmt.Errorf(
-			"EdgeSync sibling clone not found at %s — "+
-				"clone https://github.com/danmestas/EdgeSync next to bones, "+
-				"then re-run `bones up`",
-			edgesyncDir,
-		)
-	}
-	fmt.Printf("up: building bin/leaf in %s ...\n", edgesyncDir)
-	cmd := exec.Command("make", "leaf")
-	cmd.Dir = edgesyncDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("make leaf in %s: %w", edgesyncDir, err)
-	}
-	if !isExec(edgesyncLeaf) {
-		return fmt.Errorf("make leaf succeeded but %s still not executable", edgesyncLeaf)
-	}
-	fmt.Printf("up: built %s\n", edgesyncLeaf)
-	return nil
-}
-
-// runHubBootstrap execs hub-bootstrap.sh from the workspace root.
-// The script is idempotent.
-func runHubBootstrap(root string) error {
-	script := filepath.Join(root, ".orchestrator", "scripts", "hub-bootstrap.sh")
-	if _, err := os.Stat(script); err != nil {
-		return fmt.Errorf("hub-bootstrap.sh not found at %s "+
-			"(run orchestrator scaffold first)", script)
-	}
-	cmd := exec.Command("bash", script)
-	cmd.Dir = root
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("hub-bootstrap.sh: %w", err)
-	}
-	return nil
-}
-
-// waitHubReady polls the hub's /xfer endpoint until it responds or the
-// timeout elapses. A 405 (method not allowed) counts as "up" — /xfer
-// only accepts POST.
-func waitHubReady(url string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		resp, err := http.Get(url) //nolint:noctx // fire-and-forget health probe
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusMethodNotAllowed {
-				return nil
-			}
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	return fmt.Errorf("hub at %s did not become ready within %s", url, timeout)
-}
-
-func isExec(path string) bool {
-	fi, err := os.Stat(path)
-	return err == nil && fi.Mode()&0o100 != 0
 }
 
 // installGitHook installs the bones pre-commit hook in the host

@@ -7,22 +7,22 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
 	"github.com/danmestas/bones/internal/githook"
+	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
-// DownCmd reverses bones up: stops the hub, removes the workspace
-// marker (.bones/), the orchestrator state (.orchestrator/), the
-// scaffolded skills (.claude/skills/{orchestrator,subagent,
-// uninstall-bones}), and the bones-installed SessionStart/Stop hooks
-// from .claude/settings.json. Other hooks in settings.json are left
-// untouched.
+// DownCmd reverses bones up: stops the hub via hub.Stop, removes the
+// workspace marker (.bones/), any leftover legacy state
+// (.orchestrator/ from pre-ADR-0041 workspaces), the scaffolded skills
+// (.claude/skills/{orchestrator,subagent,uninstall-bones}), and the
+// bones-installed SessionStart/Stop hooks from .claude/settings.json.
+// Other hooks in settings.json are left untouched.
 //
 // Destructive — requires --yes or an interactive y/N confirmation.
 // Idempotent: re-running on a clean tree is a no-op.
@@ -145,19 +145,14 @@ func planStopHub(root string, c *DownCmd) []downAction {
 	if c.KeepHub {
 		return nil
 	}
-	script := filepath.Join(root, ".orchestrator", "scripts", "hub-shutdown.sh")
-	if !fileExists(script) {
-		return nil
-	}
+	// Always queue the stop — hub.Stop is best-effort and idempotent
+	// (no-op when hub isn't running), so unconditional inclusion is
+	// both correct and self-documenting in the dry-run output.
 	return []downAction{{
-		description: "stop hub via " + script,
+		description: "stop hub (.bones/pids/{fossil,nats}.pid)",
 		do: func() error {
-			cmd := exec.Command("bash", script)
-			cmd.Dir = root
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
 			// Best-effort: an already-stopped hub must not fail down.
-			_ = cmd.Run()
+			_ = hub.Stop(root)
 			return nil
 		},
 	}}
@@ -174,6 +169,10 @@ func planRemoveBonesDir(root string) []downAction {
 	}}
 }
 
+// planRemoveOrchestrator removes the legacy .orchestrator/ directory
+// from pre-ADR-0041 workspaces. Post-ADR-0041 a fresh workspace won't
+// have one, but partially-migrated or unmigrated workspaces still do —
+// in which case this is the cleanup pass. No-op when absent.
 func planRemoveOrchestrator(root string, c *DownCmd) []downAction {
 	if c.KeepHub {
 		return nil
@@ -241,11 +240,14 @@ func planRemoveFossilMarkers(root string) []downAction {
 	return plan
 }
 
-// removeBonesHooks edits settings.json to drop hook entries whose
-// command references hub-bootstrap.sh or hub-shutdown.sh (the two
-// scripts bones up installs). Other hooks are preserved verbatim.
-// Empty hook groups and the "hooks" top-level key are pruned when
-// removal leaves them empty.
+// removeBonesHooks edits settings.json to drop hook entries that
+// bones installs:
+//   - the current install: SessionStart "bones hub start" (ADR 0041);
+//   - legacy installs: SessionStart "hub-bootstrap.sh", SessionEnd
+//     "hub-shutdown.sh", and the older Stop "hub-shutdown.sh" shim.
+//
+// Other hooks are preserved verbatim. Empty hook groups and the
+// "hooks" top-level key are pruned when removal leaves them empty.
 func removeBonesHooks(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -265,7 +267,8 @@ func removeBonesHooks(path string) error {
 	if hooks == nil {
 		return nil
 	}
-	pruneHookEvent(hooks, "SessionStart", "hub-bootstrap.sh")
+	pruneHookEvent(hooks, "SessionStart", "hub-bootstrap.sh") // legacy
+	pruneHookEvent(hooks, "SessionStart", "bones hub start")  // current (ADR 0041)
 	// Current installs land under SessionEnd; the legacy Stop event
 	// is also pruned so workspaces installed before the migration
 	// are still cleaned up by `bones down`.

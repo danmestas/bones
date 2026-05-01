@@ -14,6 +14,7 @@ import (
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
+	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/tasks"
 	"github.com/danmestas/bones/internal/workspace"
@@ -124,7 +125,7 @@ func gatherStatus(ctx context.Context, info workspace.Info) (statusReport, error
 
 	// Hub fossil access is best-effort: a brand-new workspace may not
 	// have run `bones up` yet, in which case we skip without erroring.
-	hubRepo := filepath.Join(info.WorkspaceDir, ".orchestrator", "hub.fossil")
+	hubRepo := hub.HubFossilPath(info.WorkspaceDir)
 	fossilBin, lookErr := exec.LookPath("fossil")
 	if _, statErr := os.Stat(hubRepo); statErr == nil && lookErr == nil {
 		rep.HubAvailable = true

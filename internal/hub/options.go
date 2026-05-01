@@ -8,7 +8,7 @@
 //
 // Two entry points:
 //
-//	Start(ctx, root, opts...) — idempotent. Creates .orchestrator/ if missing,
+//	Start(ctx, root, opts...) — idempotent. Creates .bones/ if missing,
 //	  seeds the hub from git-tracked files on first run, starts both servers,
 //	  and writes pid files. With WithDetach(true) returns once both servers
 //	  are accepting connections; otherwise blocks until ctx is canceled.

@@ -26,7 +26,7 @@ exactly the kind of substrate-vs-domain drift surface ADR 0025 exists to
 prevent. Replaced with `bones-swarm-sessions` KV bucket; only `leaf.pid`
 (host-local OS-process tracker) and the libfossil files (`leaf.fossil` +
 `wt/`) remain on disk, mirroring how `bones hub` already manages its own
-embedded NATS + Fossil processes (`.orchestrator/pids/fossil.pid`).
+embedded NATS + Fossil processes (`.bones/pids/fossil.pid`).
 
 **What the pivot bought.** Cross-host visibility for free; observability via
 `bones doctor` falls out for free; no local-vs-remote drift. Future multi-

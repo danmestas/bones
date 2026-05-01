@@ -25,6 +25,11 @@ import (
 // CLI sets this on the child to break the recursion.
 const detachEnv = "BONES_HUB_FOREGROUND"
 
+// markerDirName is the workspace-local directory housing all hub state.
+// Aligned with internal/workspace's markerDirName per ADR 0041 (collapsed
+// from the legacy .orchestrator/ + .bones/ split into a single .bones/).
+const markerDirName = ".bones"
+
 // readyTimeout bounds how long Start waits for each server to accept
 // connections. ADR 0034 raised this from 5s to 15s after the
 // 2026-04-29 serverdom incident, where loaded-machine NATS startup
@@ -46,7 +51,7 @@ const natsBootstrapAttempts = 3
 const natsBootstrapBackoff = 1 * time.Second
 
 // Start brings up the orchestrator hub: a Fossil repository at
-// .orchestrator/hub.fossil seeded from git-tracked files, a Fossil HTTP
+// .bones/hub.fossil seeded from git-tracked files, a Fossil HTTP
 // server on the chosen port, and an embedded NATS JetStream server.
 //
 // Idempotent: if both pid files exist and the recorded processes are
@@ -164,7 +169,7 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 }
 
 // spawnDetachedChild re-execs the current binary as a foreground hub
-// child, redirects its stdout/stderr to .orchestrator/hub.log, and
+// child, redirects its stdout/stderr to .bones/hub.log, and
 // returns once the child has bound both ports. On readiness failure,
 // the child is killed and pid files are cleared.
 func spawnDetachedChild(p paths, o opts) error {
@@ -282,8 +287,15 @@ type paths struct {
 	fslSettings string
 }
 
+// HubFossilPath returns the on-disk path of the hub fossil for the
+// given workspace root. Use this rather than building the path
+// literally in cli/ so verbs survive future layout changes.
+func HubFossilPath(root string) string {
+	return filepath.Join(root, markerDirName, "hub.fossil")
+}
+
 // newPaths derives the hub layout from the workspace root. The root must
-// exist; the orchestrator subdirs are created lazily by Start.
+// exist; the .bones subdirs are created lazily by Start.
 func newPaths(root string) (paths, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
@@ -294,7 +306,7 @@ func newPaths(root string) (paths, error) {
 	} else if !info.IsDir() {
 		return paths{}, fmt.Errorf("hub: root %q is not a directory", abs)
 	}
-	orch := filepath.Join(abs, ".orchestrator")
+	orch := filepath.Join(abs, markerDirName)
 	return paths{
 		root:        abs,
 		orchDir:     orch,

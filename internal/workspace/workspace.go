@@ -15,17 +15,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
 
-	"github.com/danmestas/libfossil"
-	_ "github.com/danmestas/libfossil/db/driver/modernc"
 	"github.com/google/uuid"
 
+	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/telemetry"
 )
 
@@ -34,7 +30,6 @@ type Info struct {
 	AgentID      string
 	NATSURL      string
 	LeafHTTPURL  string
-	RepoPath     string
 	WorkspaceDir string
 }
 
@@ -43,10 +38,11 @@ var (
 	ErrNoWorkspace        = errors.New("no bones workspace found")
 	ErrLeafUnreachable    = errors.New("leaf daemon not reachable")
 	ErrLeafStartTimeout   = errors.New("leaf daemon failed to start within timeout")
+	ErrLegacyLayout       = errors.New("workspace uses pre-ADR-0041 layout")
 )
 
 // ExitCode maps errors returned by Init and Join to conventional process exit
-// codes: 0 on success, 2-5 for known sentinels, 1 for anything else. Callers
+// codes: 0 on success, 2-6 for known sentinels, 1 for anything else. Callers
 // that want a different convention can inspect errors directly.
 func ExitCode(err error) int {
 	switch {
@@ -60,23 +56,17 @@ func ExitCode(err error) int {
 		return 4
 	case errors.Is(err, ErrLeafStartTimeout):
 		return 5
+	case errors.Is(err, ErrLegacyLayout):
+		return 6
 	default:
 		return 1
 	}
 }
 
-// spawnParams is the input to spawnLeafFunc. Split out for test seams.
-type spawnParams struct {
-	LeafBinary     string
-	RepoPath       string
-	HTTPAddr       string
-	NATSClientPort int
-	LogPath        string
-}
-
-// spawnLeafFunc is the production spawner. Tests replace it via a saved/restored
-// pointer to isolate subprocess behavior.
-var spawnLeafFunc = spawnLeaf
+// hubStartFunc is the production hub-start path. Tests replace via
+// saved/restored pointer to verify Join's auto-start branch without
+// actually spawning a hub subprocess.
+var hubStartFunc = hub.Start
 
 // instrumented wraps op with a tracing span (via the telemetry seam) plus
 // slog start/complete events. The previous OTel meter-based op counters
@@ -112,13 +102,16 @@ func instrumented(
 	return info, err
 }
 
-// Init creates a fresh workspace rooted at cwd, starts a leaf daemon, and
-// returns its connection info. Returns ErrAlreadyInitialized only if a
-// fully-formed workspace (marker dir AND config.json) already exists.
-// An empty or partially-created marker dir is treated as a recoverable
-// state and Init proceeds — this fixes the case where 'bones up' had
-// previously mkdir'd .bones/ without writing config.json. A pre-rename
-// .agent-infra/ marker is silently migrated to .bones/ first.
+// Init scaffolds a fresh workspace at cwd: ensures .bones/ exists, writes
+// agent.id (idempotent — reused if already present), and transparently
+// migrates a pre-ADR-0041 layout if found. Does NOT start the hub —
+// hub.Start runs lazily on first verb that needs it via workspace.Join.
+//
+// Returns ErrLegacyLayout if a pre-ADR-0041 hub is still running and
+// must be torn down via `bones down` before migration can proceed.
+//
+// Init is idempotent: re-invocation against an existing workspace
+// succeeds with the existing agent.id.
 func Init(ctx context.Context, cwd string) (Info, error) {
 	return instrumented(ctx, "init", cwd, func(ctx context.Context) (Info, error) {
 		return initLogic(ctx, cwd)
@@ -129,90 +122,52 @@ func initLogic(ctx context.Context, cwd string) (Info, error) {
 	if err := migrateLegacyMarker(cwd); err != nil {
 		return Info{}, err
 	}
+	if state, err := detectLegacyLayout(cwd); err != nil {
+		return Info{}, err
+	} else if state == legacyLive {
+		return Info{}, ErrLegacyLayout
+	} else if state == legacyDead {
+		if err := migrateLegacyLayout(cwd); err != nil {
+			return Info{}, err
+		}
+	}
+
 	markerDir := filepath.Join(cwd, markerDirName)
-	configPath := filepath.Join(markerDir, "config.json")
-	if _, err := os.Stat(configPath); err == nil {
-		return Info{}, ErrAlreadyInitialized
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return Info{}, fmt.Errorf("stat config: %w", err)
-	}
-
 	if err := os.MkdirAll(markerDir, 0o755); err != nil {
-		return Info{}, fmt.Errorf("mkdir marker: %w", err)
+		return Info{}, fmt.Errorf("mkdir .bones: %w", err)
 	}
 
-	httpPort, err := pickFreePort()
+	// Idempotent: if agent.id already exists, reuse it; otherwise mint.
+	agentID, err := readAgentID(cwd)
 	if err != nil {
-		_ = os.RemoveAll(markerDir)
-		return Info{}, fmt.Errorf("pick http port: %w", err)
-	}
-	natsPort, err := pickFreePort()
-	if err != nil {
-		_ = os.RemoveAll(markerDir)
-		return Info{}, fmt.Errorf("pick nats port: %w", err)
-	}
-
-	repoPath := filepath.Join(markerDir, "repo.fossil")
-	logPath := filepath.Join(markerDir, "leaf.log")
-	cfg := config{
-		Version:     configVersion,
-		AgentID:     uuid.NewString(),
-		NATSURL:     fmt.Sprintf("nats://127.0.0.1:%d", natsPort),
-		LeafHTTPURL: fmt.Sprintf("http://127.0.0.1:%d", httpPort),
-		RepoPath:    repoPath,
-		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+		if !os.IsNotExist(err) {
+			return Info{}, fmt.Errorf("read agent.id: %w", err)
+		}
+		agentID = uuid.NewString()
+		if err := writeAgentID(cwd, agentID); err != nil {
+			return Info{}, fmt.Errorf("write agent.id: %w", err)
+		}
 	}
 
-	slog.DebugContext(ctx, "agent_id generated", "agent_id", cfg.AgentID)
-
-	repo, err := libfossil.Create(repoPath, libfossil.CreateOpts{User: cfg.AgentID})
-	if err != nil {
-		_ = os.RemoveAll(markerDir)
-		return Info{}, fmt.Errorf("create fossil repo: %w", err)
-	}
-	_ = repo.Close()
-
-	// Bind to 127.0.0.1 only — we never want this daemon reachable from
-	// outside localhost by default.
-	pid, err := spawnLeafFunc(ctx, spawnParams{
-		LeafBinary:     leafBinaryPath(),
-		RepoPath:       repoPath,
-		HTTPAddr:       fmt.Sprintf("127.0.0.1:%d", httpPort),
-		NATSClientPort: natsPort,
-		LogPath:        logPath,
-	})
-	if err != nil {
-		_ = os.RemoveAll(markerDir)
-		return Info{}, err
-	}
-	if err := saveConfig(filepath.Join(markerDir, "config.json"), cfg); err != nil {
-		killPID(pid)
-		_ = os.RemoveAll(markerDir)
-		return Info{}, err
-	}
+	slog.DebugContext(ctx, "agent_id ready", "agent_id", agentID)
 
 	return Info{
-		AgentID:      cfg.AgentID,
-		NATSURL:      cfg.NATSURL,
-		LeafHTTPURL:  cfg.LeafHTTPURL,
-		RepoPath:     cfg.RepoPath,
+		AgentID:      agentID,
 		WorkspaceDir: cwd,
+		// NATSURL, LeafHTTPURL populated by Join after hub.Start.
 	}, nil
 }
 
-func killPID(pid int) {
-	if pid <= 0 {
-		return
-	}
-	proc, err := os.FindProcess(pid)
-	if err == nil {
-		_ = proc.Kill()
-	}
-}
-
-// Join locates the nearest .bones/ walking up from cwd and verifies
-// the recorded leaf is still reachable. A pre-rename .agent-infra/
-// marker rooted at cwd is silently migrated to .bones/ before walkUp.
+// Join locates the nearest .bones/ walking up from cwd, ensures the
+// hub is running (auto-starting via hub.Start when not healthy), and
+// returns a populated Info. A pre-rename .agent-infra/ marker rooted
+// at cwd is silently migrated to .bones/ before walkUp; a pre-ADR-0041
+// .orchestrator/ layout is migrated transparently when no legacy hub
+// is running, or surfaced as ErrLegacyLayout when one is.
+//
+// On the first call after computer restart, Join prints one stderr
+// line ("bones: starting hub for workspace ...") and continues once
+// the hub is up.
 func Join(ctx context.Context, cwd string) (Info, error) {
 	return instrumented(ctx, "join", cwd, func(ctx context.Context) (Info, error) {
 		return joinLogic(ctx, cwd)
@@ -227,56 +182,68 @@ func joinLogic(ctx context.Context, cwd string) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
-	cfg, err := loadConfig(filepath.Join(workspaceDir, markerDirName, "config.json"))
-	if err != nil {
-		return Info{}, fmt.Errorf("load config: %w", err)
+
+	if state, err := detectLegacyLayout(workspaceDir); err != nil {
+		return Info{}, err
+	} else if state == legacyLive {
+		return Info{}, ErrLegacyLayout
+	} else if state == legacyDead {
+		if err := migrateLegacyLayout(workspaceDir); err != nil {
+			return Info{}, err
+		}
 	}
 
-	slog.DebugContext(ctx, "config loaded", "agent_id", cfg.AgentID)
+	agentID, err := readAgentID(workspaceDir)
+	if err != nil {
+		return Info{}, fmt.Errorf("read agent.id: %w", err)
+	}
 
-	pidData, err := os.ReadFile(filepath.Join(workspaceDir, markerDirName, "leaf.pid"))
-	if err != nil {
-		return Info{}, fmt.Errorf("read pid file: %w", err)
+	// Auto-start the hub if it isn't already healthy. hub.Start is
+	// idempotent: a no-op when both pids are alive and URLs respond.
+	// On the first verb after computer restart, this prints one stderr
+	// line so the user knows why the verb is briefly slower.
+	// hubStartFunc's nil return is contracted to mean both ports are
+	// already bound; if a future refactor changes that, this code must
+	// re-probe healthz.
+	if !hubIsHealthy(workspaceDir) {
+		fmt.Fprintf(os.Stderr,
+			"bones: starting hub for workspace %s\n", workspaceDir)
+		if err := hubStartFunc(ctx, workspaceDir, hub.WithDetach(true)); err != nil {
+			return Info{}, fmt.Errorf("auto-start hub: %w", err)
+		}
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
-	if err != nil {
-		return Info{}, fmt.Errorf("parse pid %q: %w", pidData, err)
-	}
-	if !pidAlive(pid) {
+
+	natsURL := hub.NATSURL(workspaceDir)
+	fossilURL := hub.FossilURL(workspaceDir)
+	if natsURL == "" || fossilURL == "" {
 		return Info{}, fmt.Errorf(
-			"%w: pid %d recorded in %s is not running; run `bones up` to rebind this workspace",
-			ErrLeafUnreachable, pid,
-			filepath.Join(workspaceDir, markerDirName, "leaf.pid"))
+			"hub URLs not recorded after start in %s; check %s",
+			workspaceDir,
+			filepath.Join(workspaceDir, markerDirName, "hub.log"))
 	}
-	if !healthzOK(cfg.LeafHTTPURL+"/healthz", 500*time.Millisecond) {
-		return Info{}, fmt.Errorf(
-			"%w: pid %d alive but %s/healthz did not respond within 500ms;"+
-				" leaf may be hung — try `bones down && bones up`",
-			ErrLeafUnreachable, pid, cfg.LeafHTTPURL)
-	}
+
 	return Info{
-		AgentID:      cfg.AgentID,
-		NATSURL:      cfg.NATSURL,
-		LeafHTTPURL:  cfg.LeafHTTPURL,
-		RepoPath:     cfg.RepoPath,
+		AgentID:      agentID,
+		NATSURL:      natsURL,
+		LeafHTTPURL:  fossilURL,
 		WorkspaceDir: workspaceDir,
 	}, nil
 }
 
-func pickFreePort() (int, error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, err
+// hubIsHealthy returns true when both the fossil and nats pid files
+// resolve to live processes and a /healthz GET succeeds within 500ms.
+// False on any failure — caller responds by calling hubStartFunc.
+func hubIsHealthy(workspaceDir string) bool {
+	pidsDir := filepath.Join(workspaceDir, markerDirName, "pids")
+	if !pidFileLive(filepath.Join(pidsDir, "fossil.pid")) {
+		return false
 	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
-	return port, nil
-}
-
-// leafBinaryPath returns LEAF_BIN if set, else "leaf" (resolved via PATH).
-func leafBinaryPath() string {
-	if p := os.Getenv("LEAF_BIN"); p != "" {
-		return p
+	if !pidFileLive(filepath.Join(pidsDir, "nats.pid")) {
+		return false
 	}
-	return "leaf"
+	url := hub.FossilURL(workspaceDir)
+	if url == "" {
+		return false
+	}
+	return healthzOK(url+"/healthz", 500*time.Millisecond)
 }

@@ -26,13 +26,13 @@ Agents inside the workspace share the substrate; agents in different workspaces 
 
 ## Orchestrator
 
-The orchestrator is the agent that reads a slot-annotated plan and dispatches one subagent per slot. Bones doesn't prescribe an orchestrator implementation — the shipped Claude Code skill is one possible policy. The CLI surface (`bones orchestrator`, `bones validate-plan`) is the substrate primitive; orchestration logic lives in `.orchestrator/scripts/` and the skill prompt.
+The orchestrator is the agent that reads a slot-annotated plan and dispatches one subagent per slot. Bones doesn't prescribe an orchestrator implementation — the shipped Claude Code skill is one possible policy. The CLI surface (`bones up`, `bones validate-plan`) is the substrate primitive; orchestration logic lives in the skill prompt.
 
 ## Hub and leaf
 
 Bones uses a hub-leaf topology for parallel runs:
 
-- **Hub** — a single Fossil repo (`hub.fossil`) plus an HTTP xfer endpoint, started by `hub-bootstrap.sh`. The canonical state.
+- **Hub** — a single Fossil repo (`hub.fossil`) plus an HTTP xfer endpoint, auto-started on first verb that needs it (per ADR 0041; explicit control via `bones hub start`). The canonical state.
 - **Leaf** — a per-agent clone with its own worktree, opened via `coord.OpenLeaf`. The leaf's `leaf.Agent` (from EdgeSync) handles NATS mesh sync; `coord` wraps the claim and task surfaces on top.
 
 Subagents call `coord.OpenLeaf(ctx, LeafConfig{Hub: hub, ...})`; the leaf clones from the hub, starts NATS sync, and the agent commits via the leaf's worktree. All sync is fire-and-forget — agents don't push or pull manually.

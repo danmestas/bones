@@ -17,7 +17,7 @@ Listed alphabetically by prefix.
 
 - `EDGESYNC_DIR` — path to the EdgeSync sibling repository.
   Default: `$ROOT/../EdgeSync` (where `$ROOT` is the bones workspace root).
-  Used by: `.orchestrator/scripts/hub-bootstrap.sh`, `bones up`.
+  Used by: `bones hub start` (when resolving the leaf binary).
 
 ## HERD_*
 
@@ -36,23 +36,21 @@ Listed alphabetically by prefix.
 ## LEAF_*
 
 Variables consumed by the `bin/leaf` daemon (EdgeSync upstream). The subset
-that `hub-bootstrap.sh` and bones's workspace package use:
+that `bones hub start` reads:
 
 - `LEAF_BIN` — absolute path to the `leaf` binary.
-  If unset, `hub-bootstrap.sh` resolves the binary in priority order:
-  `$ROOT/bin/leaf` → `$EDGESYNC_DIR/bin/leaf` → `leaf` on `$PATH` →
-  build from `$EDGESYNC_DIR/leaf/cmd/leaf`.
-  Used by: `.orchestrator/scripts/hub-bootstrap.sh`, `bones up`,
-  `internal/workspace`, `examples/two-agents`.
+  If unset, `bones hub start` resolves the binary in priority order:
+  `$ROOT/bin/leaf` → `$EDGESYNC_DIR/bin/leaf` → `leaf` on `$PATH`.
+  Used by: `bones hub start`, `internal/hub`, `examples/two-agents`.
 
-- `LEAF_NATS_CLIENT_PORT` — TCP port for the embedded NATS server started by
-  `hub-bootstrap.sh`. Set to `4222` by the script (hardcoded in the hub
-  launch env); override only if port 4222 is already occupied.
-  Used by: `.orchestrator/scripts/hub-bootstrap.sh` (sets it in leaf env).
+- `LEAF_NATS_CLIENT_PORT` — TCP port for the embedded NATS server.
+  Per ADR 0038 the hub allocates ports dynamically and records them in
+  `.bones/hub-nats-url`; override only if you want a fixed port.
+  Used by: `internal/hub`.
 
-- `LEAF_NATS_URL` — upstream NATS URL for the leaf daemon. Set to `""` by
-  `hub-bootstrap.sh` to disable leaf-node uplink (the hub is standalone).
-  Used by: `.orchestrator/scripts/hub-bootstrap.sh` (sets it in leaf env).
+- `LEAF_NATS_URL` — upstream NATS URL for the leaf daemon. The hub is
+  standalone, so this is unset by the hub-start path.
+  Used by: `internal/hub`.
 
 Full `LEAF_*` flag reference (EdgeSync upstream, affects `bin/leaf` directly):
 
@@ -76,8 +74,9 @@ disabled (no-op) and the binary runs normally.
 - `OTEL_EXPORTER_OTLP_ENDPOINT` — OTLP collector endpoint
   (e.g. `https://api.honeycomb.io`).
   Used by: `bin/bones`, `examples/herd-hub-leaf`.
-  Note: `hub-bootstrap.sh` **unsets** this var in the hub process env to
-  prevent the hub from blocking on a slow or unreachable collector.
+  Note: `bones hub start` **unsets** this var in the hub child-process env
+  (per ADR 0041) to prevent the hub from blocking on a slow or unreachable
+  collector.
 
 - `OTEL_EXPORTER_OTLP_HEADERS` — key=value pairs passed to the OTLP exporter,
   comma-separated (e.g. `x-honeycomb-team=abc123`).
@@ -100,8 +99,8 @@ bridge is part of the EdgeSync dependency:
 - `BRIDGE_PREFIX` — NATS subject prefix (default `fossil`).
 - `BRIDGE_PROJECT_CODE` — Fossil project code (`--project` flag).
 
-`hub-bootstrap.sh` does **not** start a bridge — the hub uses leaf's native
-HTTP xfer endpoint (`--serve-http :8765`) directly.
+`bones hub start` does **not** start a bridge — the hub uses leaf's native
+HTTP xfer endpoint directly (port allocated dynamically per ADR 0038).
 
 ---
 
@@ -114,8 +113,8 @@ grep -rn 'os\.Getenv\|os\.LookupEnv' --include='*.go' . \
   | grep -v reference/ | grep -v _test.go
 ```
 
-Find env vars set or exported in orchestrator scripts:
+Find every env var read by the hub child process:
 
 ```bash
-grep -rn 'export\b\|LEAF_\|EDGESYNC_\|OTEL_' .orchestrator/scripts/
+grep -rn 'os\.Getenv\|os\.LookupEnv' --include='*.go' internal/hub/
 ```

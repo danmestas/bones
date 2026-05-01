@@ -23,9 +23,9 @@ import (
 //	hub user add <login>    pre-create a fossil user in the hub repo
 //	hub user list           list fossil users in the hub repo
 //
-// The shipped scripts under .orchestrator/scripts/ are thin shims around
-// these subcommands, kept for backward compatibility with .claude/settings.json
-// hooks generated before the Go-native hub.
+// Per ADR 0041 these subcommands are the only entry points to hub
+// lifecycle: the legacy bash bootstrap shims under .orchestrator/scripts/
+// are no longer scaffolded.
 type HubCmd struct {
 	Start HubStartCmd `cmd:"" help:"Start the embedded Fossil hub + NATS server"`
 	Stop  HubStopCmd  `cmd:"" help:"Stop the embedded Fossil hub + NATS server"`
@@ -42,7 +42,7 @@ type HubCmd struct {
 type HubStartCmd struct {
 	Detach bool `name:"detach" help:"return immediately after the hub is reachable"`
 	// 0 = let the hub allocate per-workspace (default). The hub records
-	// the resolved URL at .orchestrator/hub-{fossil,nats}-url so a
+	// the resolved URL at .bones/hub-{fossil,nats}-url so a
 	// second workspace can run concurrently on its own free ports.
 	// Pass an explicit non-zero port to pin.
 	FossilPort int `name:"fossil-port" default:"0" help:"Fossil HTTP port (0 = per-ws)"`

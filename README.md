@@ -32,7 +32,7 @@ cd ~/your-repo
 bones up
 ```
 
-That's it — scaffolds `.bones/`, `.orchestrator/`, and `.claude/skills/` into your project, brings up an embedded fossil hub on `127.0.0.1:8765`, and installs Claude Code SessionStart/Stop hooks that auto-start the hub when you open the project.
+That's it — scaffolds `.bones/` and `.claude/skills/` into your project and installs a Claude Code SessionStart hook that runs `bones hub start` when you open the project. The hub also auto-starts on first verb use after a restart.
 
 Then in Claude Code, write a plan with `[slot: name]` annotations on tasks and ask it to "run this plan in parallel." The orchestrator skill validates slot disjointness, dispatches one subagent per slot, and each leaf commits through the hub. Or use `bones tasks create / list / claim / close` for a personal backlog you work serially.
 
@@ -49,22 +49,20 @@ Full docs: [bones.daniel-mestas.workers.dev](https://bones.daniel-mestas.workers
 
 ```
 your-repo/
-├── .bones/                  # workspace marker, per-process state
-│   ├── config.json          # agent_id, NATS URL, leaf HTTP URL
-│   ├── repo.fossil          # per-agent fossil clone (syncs from the hub)
-│   ├── leaf.pid             # pid of the long-running leaf daemon
-│   └── swarm/<slot>/wt/     # per-slot worktrees, created on `swarm join`
-├── .orchestrator/
+├── .bones/                  # workspace marker + hub state (ADR 0041)
+│   ├── agent.id             # workspace's coord identity
 │   ├── hub.fossil           # shared trunk: code, tasks, chat, presence
+│   ├── hub-fossil-url       # discovered HTTP URL (per ADR 0038)
+│   ├── hub-nats-url         # discovered NATS URL
 │   ├── nats-store/          # JetStream persistence
 │   ├── pids/{fossil,nats}.pid
-│   └── scripts/             # SessionStart + Stop hooks
+│   └── swarm/<slot>/wt/     # per-slot worktrees, created on `swarm join`
 └── .claude/
-    ├── settings.json        # hub-bootstrap / hub-shutdown hooks merged in
+    ├── settings.json        # bones hub start / tasks prime hooks
     └── skills/              # orchestrator · subagent · uninstall-bones
 ```
 
-The hub fossil holds durable state (commits, tasks, presence, chat). Each leaf is a standalone fossil clone that syncs with the hub via NATS-bridged HTTP xfer. Tasks live in NATS JetStream KV with CAS-gated claims; commits, chat, and presence land in fossil tables.
+The hub fossil holds durable state (commits, tasks, presence, chat). Tasks live in NATS JetStream KV with CAS-gated claims; commits, chat, and presence land in fossil tables. Per ADR 0041 the workspace marker and hub state are unified under `.bones/`.
 
 ## Commands
 
@@ -100,7 +98,7 @@ Env-var kill switch for CI / sandboxed runs: `BONES_TELEMETRY=0`.
 bones down            # confirms before removing anything
 ```
 
-`bones down` reverses `bones up`: stops the hub, removes `.bones/` and `.orchestrator/`, removes the scaffolded skills under `.claude/skills/`, and prunes only the bones-installed hooks from `.claude/settings.json` (leaving unrelated hooks intact). Flags: `--yes` skips the prompt, `--dry-run` prints the plan, `--keep-hub` / `--keep-skills` / `--keep-hooks` for partial uninstalls.
+`bones down` reverses `bones up`: stops the hub, removes `.bones/` (plus any leftover `.orchestrator/` from pre-ADR-0041 workspaces), removes the scaffolded skills under `.claude/skills/`, and prunes only the bones-installed hooks from `.claude/settings.json` (leaving unrelated hooks intact). Flags: `--yes` skips the prompt, `--dry-run` prints the plan, `--keep-hub` / `--keep-skills` / `--keep-hooks` for partial uninstalls.
 
 From inside Claude Code: ask it to "uninstall bones" — the bundled `uninstall-bones` skill walks through the same steps interactively.
 

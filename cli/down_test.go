@@ -188,6 +188,49 @@ func TestRemoveBonesHooks_LegacyStopHook(t *testing.T) {
 	}
 }
 
+// TestRemoveBonesHooks_StripsBonesHubStart: post-ADR-0041 the
+// SessionStart hook command is "bones hub start" (not the legacy
+// hub-bootstrap.sh). bones down must prune that entry while leaving
+// other co-located SessionStart hooks (like task-priming) intact.
+//
+// Schema mirrors what mergeSettings actually writes: each
+// SessionStart entry is a {matcher, hooks: [{command, type, ...}]}
+// group, not a flat hook map.
+func TestRemoveBonesHooks_StripsBonesHubStart(t *testing.T) {
+	dir := t.TempDir()
+	settings := filepath.Join(dir, "settings.json")
+	body := `{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"command": "bones tasks prime --json", "type": "command", "timeout": 10},
+          {"command": "bones hub start", "type": "command", "timeout": 10}
+        ]
+      }
+    ]
+  }
+}`
+	if err := os.WriteFile(settings, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := removeBonesHooks(settings); err != nil {
+		t.Fatalf("removeBonesHooks: %v", err)
+	}
+	got, err := os.ReadFile(settings)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	s := string(got)
+	if strings.Contains(s, "bones hub start") {
+		t.Errorf("settings still contains 'bones hub start':\n%s", s)
+	}
+	if !strings.Contains(s, "bones tasks prime --json") {
+		t.Errorf("prime hook stripped:\n%s", s)
+	}
+}
+
 // TestRemoveBonesHooks_MissingFile is a no-op (idempotent on a tree
 // that bones never installed into).
 func TestRemoveBonesHooks_MissingFile(t *testing.T) {
@@ -197,24 +240,39 @@ func TestRemoveBonesHooks_MissingFile(t *testing.T) {
 	}
 }
 
-// TestPlanDown_EmptyTree: nothing to remove on a tree without bones
-// state. The plan slice is empty.
+// TestPlanDown_EmptyTree: on a tree without bones state, the only
+// queued action is the always-on hub stop (best-effort, no-op when
+// the hub isn't running). Per ADR 0041, planStopHub no longer probes
+// for a script — it always queues hub.Stop.
 func TestPlanDown_EmptyTree(t *testing.T) {
 	dir := t.TempDir()
 	plan := planDown(dir, &DownCmd{})
+	if len(plan) != 1 {
+		t.Fatalf("empty tree plan: got %d actions, want 1 (hub stop):\n%+v", len(plan), plan)
+	}
+	if !strings.Contains(plan[0].description, "stop hub") {
+		t.Errorf("only action should be hub stop; got %q", plan[0].description)
+	}
+}
+
+// TestPlanDown_EmptyTree_KeepHub: --keep-hub suppresses the stop-hub
+// action, leaving an empty plan on a clean tree.
+func TestPlanDown_EmptyTree_KeepHub(t *testing.T) {
+	dir := t.TempDir()
+	plan := planDown(dir, &DownCmd{KeepHub: true})
 	if len(plan) != 0 {
-		t.Errorf("empty tree plan: got %d actions, want 0:\n%+v", len(plan), plan)
+		t.Errorf("KeepHub on empty tree should give empty plan; got:\n%+v", plan)
 	}
 }
 
 // TestPlanDown_FullInstall: a fully-scaffolded workspace produces
-// actions for every removable artifact.
+// actions for every removable artifact. Post-ADR-0041 the hub stop is
+// described as "stop hub (...)" rather than the deleted shutdown
+// script path; legacy .orchestrator/ is still cleaned up if present.
 func TestPlanDown_FullInstall(t *testing.T) {
 	dir := t.TempDir()
 	mkdir(t, filepath.Join(dir, ".bones"))
 	mkdir(t, filepath.Join(dir, ".orchestrator", "scripts"))
-	writeFile(t, filepath.Join(dir, ".orchestrator", "scripts", "hub-shutdown.sh"),
-		"#!/bin/sh\necho shutting down\n")
 	for _, name := range []string{"orchestrator", "subagent", "uninstall-bones"} {
 		mkdir(t, filepath.Join(dir, ".claude", "skills", name))
 	}
@@ -228,7 +286,7 @@ func TestPlanDown_FullInstall(t *testing.T) {
 	}
 	joined := strings.Join(descs, "\n")
 	wants := []string{
-		"hub-shutdown.sh",
+		"stop hub",
 		".bones",
 		".orchestrator",
 		".claude/skills/orchestrator",
@@ -249,7 +307,6 @@ func TestPlanDown_KeepFlags(t *testing.T) {
 	dir := t.TempDir()
 	mkdir(t, filepath.Join(dir, ".bones"))
 	mkdir(t, filepath.Join(dir, ".orchestrator", "scripts"))
-	writeFile(t, filepath.Join(dir, ".orchestrator", "scripts", "hub-shutdown.sh"), "#!/bin/sh\n")
 	mkdir(t, filepath.Join(dir, ".claude", "skills", "orchestrator"))
 	writeFile(t, filepath.Join(dir, ".claude", "settings.json"), `{}`)
 

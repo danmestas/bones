@@ -33,15 +33,14 @@ The bones CLI ends up at `./bin/bones`. The `leaf` binary lives in EdgeSync — 
 bin/bones up
 ```
 
-This is shorthand for the three explicit steps:
+This is shorthand for two explicit steps under ADR 0041:
 
 ```sh
-bin/bones init                              # creates .bones/ workspace + starts leaf
-bin/bones orchestrator                      # scaffolds .orchestrator/ for hub-leaf runs
-bash .orchestrator/scripts/hub-bootstrap.sh # starts the hub
+bin/bones init                              # creates .bones/ workspace marker (scaffold-only)
+bin/bones hub start                         # starts the hub (idempotent; auto-runs on first verb)
 ```
 
-`init` walks up to find an existing `.bones/` marker if you're inside a workspace already; otherwise it creates one. Pre-rename `.agent-infra/` markers auto-migrate to `.bones/` on first touch.
+`init` walks up to find an existing `.bones/` marker if you're inside a workspace already; otherwise it creates one. The hub auto-starts the first time any verb needs it, so explicit `bones hub start` is only needed if you want to verify the hub is up before invoking other commands. Pre-rename `.agent-infra/` markers auto-migrate to `.bones/` on first touch; pre-ADR-0041 `.orchestrator/` layouts auto-migrate too unless a leaf is still running.
 
 ## First task
 

@@ -106,7 +106,7 @@ func bootstrapResume(
 // resolveHubURL returns the hub fossil HTTP URL for swarm operations,
 // in priority order:
 //  1. override (an explicit `--hub-url=...` flag) wins
-//  2. the workspace's recorded URL at .orchestrator/hub-fossil-url
+//  2. the workspace's recorded URL at .bones/hub-fossil-url
 //  3. swarm.DefaultHubFossilURL as a legacy fallback for workspaces
 //     scaffolded before per-workspace ports landed
 //

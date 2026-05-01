@@ -13,6 +13,7 @@ import (
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
+	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/telemetry"
 	"github.com/danmestas/bones/internal/workspace"
 )
@@ -241,7 +242,7 @@ func runApplyPreflight(cwd string) (*applyPreflight, error) {
 		return nil, fmt.Errorf(
 			"bones apply: workspace not found — run `bones init` or `bones up` first (%w)", err)
 	}
-	hubRepo := filepath.Join(root, ".orchestrator", "hub.fossil")
+	hubRepo := hub.HubFossilPath(root)
 	if _, err := os.Stat(hubRepo); err != nil {
 		return nil, fmt.Errorf(
 			"bones apply: hub repo not found at %s — run `bones up` first", hubRepo)

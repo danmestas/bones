@@ -30,11 +30,14 @@ go.work.sum
 !.claude/skills/
 !.claude/skills/**
 
-# Orchestrator runtime + Fossil checkout-at-root (ADR 0023)
+# Bones runtime + Fossil checkout-at-root (ADRs 0023, 0041)
 .fslckout
 .fossil-settings/
-.orchestrator/
 .bones/
+# Legacy runtime state from pre-ADR-0041 workspaces — still present in
+# this repo's own dogfood checkout until bones down clears it. Safe to
+# delete once migration runs.
+.orchestrator/
 
 # Local scratch — code reviews and implementation plans (ephemeral, per-session)
 docs/code-review/
