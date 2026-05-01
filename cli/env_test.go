@@ -17,6 +17,10 @@ func TestWalkUpToBones(t *testing.T) {
 	if err := os.MkdirAll(bonesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// agent.id is the workspace marker (see walkUpToBones doc).
+	if err := os.WriteFile(filepath.Join(bonesDir, "agent.id"), []byte("test-agent"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	got, found := walkUpToBones(deep)
 	if !found {
 		t.Fatalf("expected to find .bones above %s", deep)
@@ -27,6 +31,32 @@ func TestWalkUpToBones(t *testing.T) {
 	other := t.TempDir()
 	if _, found := walkUpToBones(other); found {
 		t.Fatalf("expected not found in %s", other)
+	}
+}
+
+// TestWalkUpToBones_IgnoresStateDir verifies that ~/.bones/ (the user-level
+// state dir holding install-id, telemetry-acknowledged, and the workspaces/
+// registry) is NOT misclassified as a workspace. Only .bones/agent.id
+// (written by workspace.Init) marks a real workspace.
+func TestWalkUpToBones_IgnoresStateDir(t *testing.T) {
+	fakeHome := t.TempDir()
+	stateDir := filepath.Join(fakeHome, ".bones")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Mimic the user-level state-dir contents (no agent.id).
+	if err := os.WriteFile(filepath.Join(stateDir, "install-id"), []byte("xxx"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(stateDir, "workspaces"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	deep := filepath.Join(fakeHome, "projects", "anything")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if root, found := walkUpToBones(deep); found {
+		t.Fatalf("walkUpToBones must not match the state dir at %s, but returned root=%s", stateDir, root)
 	}
 }
 
@@ -61,6 +91,10 @@ func TestResolveWorkspaceName(t *testing.T) {
 func TestEnvCmdInsideWorkspace(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".bones"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// agent.id is the workspace marker walkUpToBones checks for.
+	if err := os.WriteFile(filepath.Join(root, ".bones", "agent.id"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// Manual chdir + cleanup (t.Chdir requires Go 1.24+)
@@ -111,6 +145,9 @@ func TestEnvCmdOutsideWorkspace(t *testing.T) {
 func TestEnvCmdFishSyntax(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".bones"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".bones", "agent.id"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	oldCwd, _ := os.Getwd()
