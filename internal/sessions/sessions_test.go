@@ -2,6 +2,7 @@ package sessions
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -38,5 +39,49 @@ func TestRegister(t *testing.T) {
 	path := filepath.Join(dir, ".bones", "sessions", m.SessionID+".json")
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected file at %s: %v", path, err)
+	}
+}
+
+func TestUnregister(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := Marker{
+		SessionID: "abc", WorkspaceCwd: "/x",
+		ClaudePID: os.Getpid(), StartedAt: time.Now().UTC(),
+	}
+	if err := Register(m); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if err := Unregister(m.SessionID); err != nil {
+		t.Fatalf("Unregister: %v", err)
+	}
+	if _, err := os.Stat(MarkerPath(m.SessionID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("file still exists after Unregister")
+	}
+	if err := Unregister("never-existed"); err != nil {
+		t.Fatalf("Unregister nonexistent: %v", err)
+	}
+}
+
+func TestListByWorkspace(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	myPID := os.Getpid()
+	now := time.Now().UTC()
+	for _, m := range []Marker{
+		{SessionID: "s1", WorkspaceCwd: "/a", ClaudePID: myPID, StartedAt: now},
+		{SessionID: "s2", WorkspaceCwd: "/a", ClaudePID: myPID, StartedAt: now},
+		{SessionID: "s3", WorkspaceCwd: "/b", ClaudePID: myPID, StartedAt: now},
+		{SessionID: "s4-dead", WorkspaceCwd: "/a", ClaudePID: 0, StartedAt: now},
+	} {
+		_ = Register(m)
+	}
+	got := ListByWorkspace("/a")
+	if len(got) != 2 {
+		t.Fatalf("expected 2 alive markers for /a, got %d", len(got))
+	}
+	if g := ListByWorkspace("/b"); len(g) != 1 {
+		t.Fatalf("expected 1 marker for /b, got %d", len(g))
+	}
+	if g := ListByWorkspace("/none"); len(g) != 0 {
+		t.Fatalf("expected 0 markers for /none, got %d", len(g))
 	}
 }

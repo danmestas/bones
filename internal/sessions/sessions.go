@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -55,4 +56,50 @@ func Register(m Marker) error {
 		return fmt.Errorf("marker close: %w", err)
 	}
 	return os.Rename(tmp.Name(), dst)
+}
+
+// Unregister deletes the marker file. Idempotent.
+func Unregister(sessionID string) error {
+	err := os.Remove(MarkerPath(sessionID))
+	if err == nil || errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return fmt.Errorf("marker remove: %w", err)
+}
+
+// ListByWorkspace returns markers whose WorkspaceCwd matches the argument
+// AND whose ClaudePID is alive on this host. Dead markers are unlinked as a
+// side effect (orphan GC).
+func ListByWorkspace(cwd string) []Marker {
+	matches, _ := filepath.Glob(filepath.Join(SessionsDir(), "*.json"))
+	out := make([]Marker, 0, len(matches))
+	for _, path := range matches {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var m Marker
+		if err := json.Unmarshal(data, &m); err != nil {
+			continue
+		}
+		if !pidAlive(m.ClaudePID) {
+			_ = os.Remove(path)
+			continue
+		}
+		if m.WorkspaceCwd == cwd {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func pidAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return p.Signal(syscall.Signal(0)) == nil
 }
