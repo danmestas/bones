@@ -89,7 +89,10 @@ func TestWrite(t *testing.T) {
 func TestRead(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
-	want := Entry{Cwd: "/x", Name: "x", HubURL: "u", HubPID: 1, StartedAt: time.Now().UTC().Truncate(time.Second)}
+	want := Entry{
+		Cwd: "/x", Name: "x", HubURL: "u", HubPID: 1,
+		StartedAt: time.Now().UTC().Truncate(time.Second),
+	}
 	if err := Write(want); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -137,7 +140,10 @@ func TestList(t *testing.T) {
 func TestRemove(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
-	e := Entry{Cwd: "/x", Name: "x", HubPID: 1, StartedAt: time.Now().UTC().Truncate(time.Second)}
+	e := Entry{
+		Cwd: "/x", Name: "x", HubPID: 1,
+		StartedAt: time.Now().UTC().Truncate(time.Second),
+	}
 	if err := Write(e); err != nil {
 		t.Fatalf("Write: %v", err)
 	}

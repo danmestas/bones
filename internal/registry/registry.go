@@ -55,14 +55,14 @@ func Write(e Entry) error {
 	if err != nil {
 		return fmt.Errorf("registry tmp: %w", err)
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return errors.Join(fmt.Errorf("registry write: %w", err), tmp.Close())
+		closeErr := tmp.Close()
+		return errors.Join(fmt.Errorf("registry write: %w", err), closeErr)
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("registry sync: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
