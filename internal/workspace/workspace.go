@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -31,7 +30,6 @@ type Info struct {
 	AgentID      string
 	NATSURL      string
 	LeafHTTPURL  string
-	RepoPath     string
 	WorkspaceDir string
 }
 
@@ -64,19 +62,6 @@ func ExitCode(err error) int {
 		return 1
 	}
 }
-
-// spawnParams is the input to spawnLeafFunc. Split out for test seams.
-type spawnParams struct {
-	LeafBinary     string
-	RepoPath       string
-	HTTPAddr       string
-	NATSClientPort int
-	LogPath        string
-}
-
-// spawnLeafFunc is the production spawner. Tests replace it via a saved/restored
-// pointer to isolate subprocess behavior.
-var spawnLeafFunc = spawnLeaf
 
 // hubStartFunc is the production hub-start path. Tests replace via
 // saved/restored pointer to verify Join's auto-start branch without
@@ -169,18 +154,8 @@ func initLogic(ctx context.Context, cwd string) (Info, error) {
 	return Info{
 		AgentID:      agentID,
 		WorkspaceDir: cwd,
-		// NATSURL, LeafHTTPURL, RepoPath populated by Join after hub.Start.
+		// NATSURL, LeafHTTPURL populated by Join after hub.Start.
 	}, nil
-}
-
-func killPID(pid int) {
-	if pid <= 0 {
-		return
-	}
-	proc, err := os.FindProcess(pid)
-	if err == nil {
-		_ = proc.Kill()
-	}
 }
 
 // Join locates the nearest .bones/ walking up from cwd, ensures the
@@ -251,7 +226,6 @@ func joinLogic(ctx context.Context, cwd string) (Info, error) {
 		AgentID:      agentID,
 		NATSURL:      natsURL,
 		LeafHTTPURL:  fossilURL,
-		RepoPath:     filepath.Join(workspaceDir, markerDirName, "hub.fossil"),
 		WorkspaceDir: workspaceDir,
 	}, nil
 }
@@ -272,22 +246,4 @@ func hubIsHealthy(workspaceDir string) bool {
 		return false
 	}
 	return healthzOK(url+"/healthz", 500*time.Millisecond)
-}
-
-func pickFreePort() (int, error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, err
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
-	return port, nil
-}
-
-// leafBinaryPath returns LEAF_BIN if set, else "leaf" (resolved via PATH).
-func leafBinaryPath() string {
-	if p := os.Getenv("LEAF_BIN"); p != "" {
-		return p
-	}
-	return "leaf"
 }

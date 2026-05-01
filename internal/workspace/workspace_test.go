@@ -6,13 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
-	"syscall"
 	"testing"
-	"time"
 
 	"github.com/danmestas/bones/internal/hub"
 )
@@ -38,41 +34,6 @@ func TestPackageBuilds(t *testing.T) {
 func TestExitCode_LegacyLayout(t *testing.T) {
 	if got, want := ExitCode(ErrLegacyLayout), 6; got != want {
 		t.Errorf("ExitCode(ErrLegacyLayout) = %d, want %d", got, want)
-	}
-}
-
-func TestConfig_RoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	orig := config{
-		Version:     configVersion,
-		AgentID:     "agent-123",
-		NATSURL:     "nats://127.0.0.1:4222",
-		LeafHTTPURL: "http://127.0.0.1:51234",
-		RepoPath:    "repo.fossil",
-		CreatedAt:   "2026-04-20T14:45:00Z",
-	}
-	path := dir + "/config.json"
-	if err := saveConfig(path, orig); err != nil {
-		t.Fatalf("saveConfig: %v", err)
-	}
-	got, err := loadConfig(path)
-	if err != nil {
-		t.Fatalf("loadConfig: %v", err)
-	}
-	if got != orig {
-		t.Fatalf("round-trip mismatch:\n got:  %+v\n want: %+v", got, orig)
-	}
-}
-
-func TestConfig_RejectsUnknownVersion(t *testing.T) {
-	dir := t.TempDir()
-	path := dir + "/config.json"
-	if err := os.WriteFile(path, []byte(`{"version":999}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, err := loadConfig(path)
-	if err == nil {
-		t.Fatal("expected error for unknown version, got nil")
 	}
 }
 
@@ -155,69 +116,6 @@ func TestInit_Idempotent(t *testing.T) {
 	if first.AgentID != second.AgentID {
 		t.Errorf("agent_id changed across Init calls: first=%q second=%q",
 			first.AgentID, second.AgentID)
-	}
-}
-
-func requireLeafBinary(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath(leafBinaryPath()); err != nil {
-		t.Skipf("leaf binary not available (%v); set LEAF_BIN or build it", err)
-	}
-}
-
-func killLeafPID(t *testing.T, pidPath string) {
-	t.Helper()
-	data, err := os.ReadFile(pidPath)
-	if err != nil {
-		return
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		return
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return
-	}
-	_ = proc.Signal(syscall.SIGKILL)
-}
-
-func TestJoin_FromSubdir(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skip in -short: spawns leaf")
-	}
-	requireLeafBinary(t)
-
-	root := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	initInfo, err := Init(ctx, root)
-	if err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-	t.Cleanup(func() { killLeafPID(t, filepath.Join(root, markerDirName, "leaf.pid")) })
-
-	subdir := filepath.Join(root, "deep", "nested", "subdir")
-	if err := os.MkdirAll(subdir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	joinInfo, err := Join(ctx, subdir)
-	if err != nil {
-		t.Fatalf("Join: %v", err)
-	}
-	if joinInfo.AgentID != initInfo.AgentID {
-		t.Errorf("AgentID drift: init=%q join=%q", initInfo.AgentID, joinInfo.AgentID)
-	}
-	if joinInfo.LeafHTTPURL != initInfo.LeafHTTPURL {
-		t.Errorf("LeafHTTPURL drift: init=%q join=%q", initInfo.LeafHTTPURL, joinInfo.LeafHTTPURL)
-	}
-	// On macOS t.TempDir returns /var/folders/... which is a symlink to /private/var/...
-	// walkUp calls filepath.Abs (which does not resolve symlinks), so we compare the
-	// raw root here. If this flakes, use filepath.EvalSymlinks on both sides.
-	if joinInfo.WorkspaceDir != root {
-		t.Errorf("WorkspaceDir: got %q, want %q", joinInfo.WorkspaceDir, root)
 	}
 }
 
