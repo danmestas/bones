@@ -93,6 +93,9 @@ func ListByWorkspace(cwd string) []Marker {
 	return out
 }
 
+// CountByWorkspace returns the number of alive session markers attached to cwd.
+func CountByWorkspace(cwd string) int { return len(ListByWorkspace(cwd)) }
+
 func pidAlive(pid int) bool {
 	if pid <= 0 {
 		return false

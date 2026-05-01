@@ -3,6 +3,7 @@ package sessions
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,5 +84,19 @@ func TestListByWorkspace(t *testing.T) {
 	}
 	if g := ListByWorkspace("/none"); len(g) != 0 {
 		t.Fatalf("expected 0 markers for /none, got %d", len(g))
+	}
+}
+
+func TestCountByWorkspace(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	myPID := os.Getpid()
+	for i, cwd := range []string{"/a", "/a", "/b"} {
+		_ = Register(Marker{
+			SessionID: fmt.Sprintf("s%d", i), WorkspaceCwd: cwd,
+			ClaudePID: myPID, StartedAt: time.Now().UTC(),
+		})
+	}
+	if got := CountByWorkspace("/a"); got != 2 {
+		t.Fatalf("CountByWorkspace(/a) = %d, want 2", got)
 	}
 }
