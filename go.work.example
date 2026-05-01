@@ -1,9 +1,0 @@
-// copy to go.work for local dev — do not commit go.work
-
-go 1.26.0
-
-use (
-	./
-	../EdgeSync
-	../go-libfossil
-)

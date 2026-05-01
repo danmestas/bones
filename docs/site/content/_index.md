@@ -1,4 +1,0 @@
----
-title: bones
-layout: landing
----
