@@ -80,20 +80,9 @@ func main() {
 	// to Debug so non-`-v` invocations stay quiet. `-v` (libfossilcli
 	// Globals.Verbose) reinstalls a Debug-level handler so the same
 	// sites are visible when troubleshooting.
-	//
-	// Either branch wraps in suppressBenignSyncErrorHandler so the
-	// round-0 NATS "no responders" ERROR emitted by EdgeSync/leaf's
-	// per-target sync loop (#118) is dropped while the HTTP target
-	// still carries the real result.
 	if c.Verbose {
-		slog.SetDefault(slog.New(suppressBenignSyncErrorHandler{
-			inner: slog.NewTextHandler(os.Stderr,
-				&slog.HandlerOptions{Level: slog.LevelDebug}),
-		}))
-	} else {
-		slog.SetDefault(slog.New(suppressBenignSyncErrorHandler{
-			inner: slog.Default().Handler(),
-		}))
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr,
+			&slog.HandlerOptions{Level: slog.LevelDebug})))
 	}
 
 	if err := ctx.Run(&c.Globals); err != nil {
