@@ -1,12 +1,3 @@
-```
- ____   ___  _   _ _____ ____
-| __ ) / _ \| \ | | ____/ ___|
-|  _ \| | | |  \| |  _| \___ \
-| |_) | |_| | |\  | |___ ___) |
-|____/ \___/|_| \_|_____|____/
-             multi-agent orchestration
-```
-
 # bones
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/danmestas/bones.svg)](https://pkg.go.dev/github.com/danmestas/bones)
