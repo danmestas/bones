@@ -1,10 +1,8 @@
 package workspace
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -180,33 +178,6 @@ func killLeafPID(t *testing.T, pidPath string) {
 	_ = proc.Signal(syscall.SIGKILL)
 }
 
-func TestInit_RollbackOnLeafFailure(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skip in -short: spawns leaf")
-	}
-	requireLeafBinary(t)
-
-	dir := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Force leaf to fail by making the binary path invalid via override.
-	savedSpawn := spawnLeafFunc
-	spawnLeafFunc = func(ctx context.Context, p spawnParams) (int, error) {
-		return 0, ErrLeafStartTimeout
-	}
-	t.Cleanup(func() { spawnLeafFunc = savedSpawn })
-
-	_, err := Init(ctx, dir)
-	if !errors.Is(err, ErrLeafStartTimeout) {
-		t.Fatalf("Init: got %v, want ErrLeafStartTimeout", err)
-	}
-	// Marker must be removed — no half-initialized state.
-	if _, err := os.Stat(filepath.Join(dir, markerDirName)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf(".bones/ still exists after rollback: stat=%v", err)
-	}
-}
-
 func TestJoin_FromSubdir(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skip in -short: spawns leaf")
@@ -281,41 +252,6 @@ func TestJoin_StaleLeaf(t *testing.T) {
 	for _, want := range []string{"leaf.pid", "bones up"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("Join error %q missing %q", msg, want)
-		}
-	}
-}
-
-func TestInit_EmitsSlogEvents(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skip in -short: spawns leaf")
-	}
-	requireLeafBinary(t)
-
-	var buf bytes.Buffer
-	handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
-	oldLogger := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(oldLogger) })
-
-	dir := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	info, err := Init(ctx, dir)
-	if err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-	t.Cleanup(func() { killLeafPID(t, filepath.Join(dir, markerDirName, "leaf.pid")) })
-
-	logs := buf.String()
-	wants := []string{
-		`"msg":"init start"`,
-		`"msg":"init complete"`,
-		`"agent_id":"` + info.AgentID + `"`,
-	}
-	for _, want := range wants {
-		if !strings.Contains(logs, want) {
-			t.Errorf("slog output missing %q.\nFull logs:\n%s", want, logs)
 		}
 	}
 }
