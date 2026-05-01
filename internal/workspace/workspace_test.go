@@ -20,7 +20,10 @@ import (
 
 func TestPackageBuilds(t *testing.T) {
 	// Sanity: exported symbols compile and sentinel errors are distinct.
-	errs := []error{ErrAlreadyInitialized, ErrNoWorkspace, ErrLeafUnreachable, ErrLeafStartTimeout, ErrLegacyLayout}
+	errs := []error{
+		ErrAlreadyInitialized, ErrNoWorkspace, ErrLeafUnreachable,
+		ErrLeafStartTimeout, ErrLegacyLayout,
+	}
 	seen := map[error]bool{}
 	for _, e := range errs {
 		if e == nil {
