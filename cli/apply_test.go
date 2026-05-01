@@ -17,6 +17,7 @@ func TestApplyRun_AlreadyUpToDate(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
 	}
+	clearLeakedGitEnv(t)
 	dir := buildLiveFixture(t)
 	t.Chdir(dir)
 	cmd := &ApplyCmd{}
@@ -39,6 +40,7 @@ func TestApplyRun_DryRunDoesNotStage(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
 	}
+	clearLeakedGitEnv(t)
 	dir := buildLiveFixture(t)
 	// Add a new fossil commit so there's something to apply.
 	hubFossil := filepath.Join(dir, ".bones", "hub.fossil")
@@ -71,6 +73,7 @@ func TestApplyRun_DirtyTreeRefuses(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
 	}
+	clearLeakedGitEnv(t)
 	dir := buildLiveFixture(t)
 	// Modify the fossil-tracked file to make git dirty on a tracked path.
 	must(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("locally edited\n"), 0o644))
@@ -233,6 +236,7 @@ func TestSandboxedEnv_OverridesAncestorGitDir(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
 	}
+	clearLeakedGitEnv(t)
 
 	// pinnedGit runs git with env vars that pin the operation to dir,
 	// overriding any GIT_DIR / GIT_WORK_TREE inherited from the test
@@ -304,6 +308,35 @@ func TestSandboxedEnv_OverridesAncestorGitDir(t *testing.T) {
 	}
 }
 
+// clearLeakedGitEnv unsets GIT_DIR and GIT_WORK_TREE in the test
+// process's environment for the duration of the test. The test runner's
+// parent process (most importantly, the git pre-push hook) leaks these
+// into our env, and they bypass git's normal cwd-based discovery.
+// Production code under test (ApplyCmd.Run, applyPlanToTree, etc.)
+// invokes git without setting Env, so it inherits whatever the test
+// process has. Clearing here makes those invocations honor the
+// chdir'd cwd instead of the inherited GIT_DIR.
+//
+// Tests that exercise production git code from a chdir'd tempdir
+// should call this near the top, alongside `t.Chdir(dir)`.
+//
+// Uses os.Unsetenv with t.Cleanup restoration rather than t.Setenv("",
+// "") because some git vars (notably GIT_INDEX_FILE) treat empty as a
+// literal empty path and emit "No such file or directory" errors.
+func clearLeakedGitEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{
+		"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
+		"GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR",
+	} {
+		prev, was := os.LookupEnv(k)
+		_ = os.Unsetenv(k)
+		if was {
+			t.Cleanup(func() { _ = os.Setenv(k, prev) })
+		}
+	}
+}
+
 // sandboxedEnv returns the env for a test-fixture command pinned to dir.
 // For `git`, the env defeats repository-discovery walks that previously
 // caused test commits to leak into a parent worktree's branch — issue
@@ -360,6 +393,7 @@ func TestDirtyTracked_ClearTree(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
 	}
+	clearLeakedGitEnv(t)
 	dir := t.TempDir()
 	mustRunIn(t, dir, "git", "init", "-q")
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("clean\n"), 0o644); err != nil {
@@ -382,6 +416,7 @@ func TestDirtyTracked_ModifiedFossilPath(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
 	}
+	clearLeakedGitEnv(t)
 	dir := t.TempDir()
 	mustRunIn(t, dir, "git", "init", "-q")
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("v1\n"), 0o644); err != nil {
@@ -407,6 +442,7 @@ func TestDirtyTracked_UntrackedFileIgnored(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
 	}
+	clearLeakedGitEnv(t)
 	dir := t.TempDir()
 	mustRunIn(t, dir, "git", "init", "-q")
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("v1\n"), 0o644); err != nil {
@@ -523,6 +559,7 @@ func TestApplyPlan_WritesAndDeletesAndStages(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
 	}
+	clearLeakedGitEnv(t)
 	dir := t.TempDir()
 	root := dir
 	temp := filepath.Join(dir, "tmp-checkout")
