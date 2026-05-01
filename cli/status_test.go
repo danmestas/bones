@@ -2,10 +2,15 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/danmestas/bones/internal/registry"
 	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/tasks"
 )
@@ -164,5 +169,79 @@ func TestSplitTimeAndRest(t *testing.T) {
 
 	if _, _, ok := splitTimeAndRest("not a timestamp"); ok {
 		t.Error("expected !ok for malformed line")
+	}
+}
+
+func TestStatusAllRendersTable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	now := time.Now().UTC()
+	pid := os.Getpid()
+	for _, e := range []registry.Entry{
+		{Cwd: "/Users/dan/foo", Name: "foo", HubURL: srv.URL, HubPID: pid, StartedAt: now},
+		{Cwd: "/Users/dan/bar", Name: "bar", HubURL: srv.URL, HubPID: pid, StartedAt: now},
+	} {
+		if err := registry.Write(e); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := renderStatusAll(&buf); err != nil {
+		t.Fatalf("renderStatusAll: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"WORKSPACE", "foo", "bar", "PATH"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestStatusAllEmptyRegistry(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var buf bytes.Buffer
+	if err := renderStatusAll(&buf); err != nil {
+		t.Fatalf("renderStatusAll: %v", err)
+	}
+	if !strings.Contains(buf.String(), "No workspaces running") {
+		t.Fatalf("expected 'No workspaces running', got: %s", buf.String())
+	}
+}
+
+func TestStatusAllJSON(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+	if err := registry.Write(registry.Entry{
+		Cwd: "/x", Name: "x", HubURL: srv.URL, HubPID: os.Getpid(), StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := renderStatusAllJSON(&buf); err != nil {
+		t.Fatalf("renderStatusAllJSON: %v", err)
+	}
+	var got struct {
+		Workspaces []struct {
+			Name string `json:"name"`
+			Cwd  string `json:"cwd"`
+		} `json:"workspaces"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.Workspaces) != 1 {
+		t.Fatalf("workspaces len = %d, want 1", len(got.Workspaces))
+	}
+	if got.Workspaces[0].Name != "x" {
+		t.Fatalf("name = %q, want x", got.Workspaces[0].Name)
 	}
 }
