@@ -24,8 +24,9 @@ import (
 //	tmp/
 //	├── .git/                  initialized so hub seedRepo finds tracked files
 //	├── seed.txt               one tracked file
-//	├── .bones/                created by `bones init` (workspace leaf)
-//	├── .orchestrator/         created by `bones hub start`
+//	├── .bones/                workspace marker + hub state (ADR 0041);
+//	│                          scaffolded by `bones init`, populated by
+//	│                          `bones hub start` (auto-runs on Join).
 //	└── .bones/swarm/<slot>/   created by `bones swarm join`
 func TestCLI_Swarm(t *testing.T) {
 	if testing.Short() {
@@ -135,7 +136,7 @@ func TestCLI_Swarm(t *testing.T) {
 		// leaf hardcodes a "leaf commit for task <id>" message), so
 		// we assert on the commit UUID prefix instead, which is
 		// stable and cross-version.
-		hubRepoPath := filepath.Join(dir, ".orchestrator", "hub.fossil")
+		hubRepoPath := filepath.Join(dir, ".bones", "hub.fossil")
 		tlOut, err := exec.Command("fossil",
 			"timeline", "-R", hubRepoPath, "-n", "5", "-t", "ci",
 		).CombinedOutput()
@@ -271,7 +272,7 @@ func TestCLI_SwarmJoin_RefusesBootstrapFromLeafContext(t *testing.T) {
 	requireBinaries(t)
 	dir := setupSwarmWorkspace(t)
 	// Deliberately skip startSwarmHub — the workspace has .bones/
-	// (workspace leaf) but no .orchestrator/hub.fossil. This is the
+	// (workspace leaf) but no .bones/hub.fossil. This is the
 	// exact state a leaf subagent encounters when an orchestrator
 	// hasn't run `bones up` (or when the orchestrator is running but
 	// pointed at a different workspace, as happened during the
@@ -355,7 +356,7 @@ func startSwarmHub(t *testing.T, dir string, httpPort, natsPort int) {
 	t.Cleanup(func() {
 		// Best-effort: signal SIGTERM via the hub's pid files.
 		for _, name := range []string{"fossil.pid", "nats.pid"} {
-			pidPath := filepath.Join(dir, ".orchestrator", "pids", name)
+			pidPath := filepath.Join(dir, ".bones", "pids", name)
 			data, err := os.ReadFile(pidPath)
 			if err != nil {
 				continue
@@ -497,7 +498,7 @@ func TestCLI_SwarmAutoDiscover(t *testing.T) {
 	}
 
 	// Hub timeline must carry the commit.
-	hubRepoPath := filepath.Join(dir, ".orchestrator", "hub.fossil")
+	hubRepoPath := filepath.Join(dir, ".bones", "hub.fossil")
 	tlOut, err := exec.Command("fossil",
 		"timeline", "-R", hubRepoPath, "-n", "5", "-t", "ci",
 	).CombinedOutput()
