@@ -7,6 +7,7 @@ import (
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
+	"github.com/danmestas/bones/internal/logwriter"
 	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/workspace"
 )
@@ -63,6 +64,15 @@ func (c *SwarmJoinCmd) run(ctx context.Context, info workspace.Info) error {
 		return fmt.Errorf("swarm join: %w", err)
 	}
 	c.emitJoinReport(lease)
+	appendSlotEvent(info.WorkspaceDir, lease.Slot(), logwriter.Event{
+		Timestamp: timeNow(),
+		Slot:      lease.Slot(),
+		Event:     logwriter.EventJoin,
+		Fields: map[string]interface{}{
+			"task_id":  lease.TaskID(),
+			"worktree": lease.WT(),
+		},
+	})
 	return lease.Release(ctx)
 }
 
