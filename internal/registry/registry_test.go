@@ -18,6 +18,9 @@ func TestWorkspaceID(t *testing.T) {
 			if len(got) != 16 {
 				t.Fatalf("WorkspaceID(%q) length = %d, want 16", tt.cwd, len(got))
 			}
+			if got != tt.want {
+				t.Errorf("WorkspaceID(%q) = %q, want %q", tt.cwd, got, tt.want)
+			}
 			// Same path always produces same ID
 			if got2 := WorkspaceID(tt.cwd); got != got2 {
 				t.Fatalf("WorkspaceID not deterministic: %q vs %q", got, got2)
