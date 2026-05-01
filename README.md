@@ -78,6 +78,18 @@ The hub fossil holds durable state (commits, tasks, presence, chat). Tasks live 
 
 Add `-v` to any command for DEBUG-level slog output. Default is silent.
 
+### Inspecting hub contents
+
+To list or read files in `.bones/hub.fossil`, use `bones repo` — not raw `fossil`:
+
+```bash
+bones repo ls -R .bones/hub.fossil          # list files at trunk tip
+bones repo ls -R .bones/hub.fossil <rev>    # list files at a specific rev
+bones repo cat -R .bones/hub.fossil <path>  # read a file's content at tip
+```
+
+`fossil ls -R .bones/hub.fossil -r tip` may return empty silently against a bones-managed hub even when the artifact is verifiably present. `bones repo` routes through libfossil — the same code path the hub uses to write commits — so it always sees the contents. Reach for `bones repo` first; it's the supported inspection surface.
+
 ## Telemetry
 
 Release binaries (Homebrew + GitHub releases) ship anonymous usage telemetry **on by default** — boolean outcomes, durations, and a 12-char `workspace_hash` go to a private Axiom dataset so the maintainer can see real-world failure modes. Source builds (`go install`) are zero-egress.
