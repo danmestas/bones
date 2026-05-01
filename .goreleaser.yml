@@ -127,6 +127,14 @@ brews:
     homepage: https://github.com/danmestas/bones
     description: "Unified CLI for the bones agent-infrastructure substrate (workspace, orchestrator, tasks)."
     license: Apache-2.0
+    # bones spawns the leaf daemon via exec (see cli/up.go ensureLeafBinary).
+    # Brew users would otherwise hit "leaf daemon failed to start within
+    # timeout" because the leaf binary lives in the sibling EdgeSync repo.
+    # Pulling it as a brew dep makes `brew install danmestas/tap/bones`
+    # produce a working install without manual EdgeSync setup.
+    dependencies:
+      - name: danmestas/tap/leaf
+        type: required
     install: |
       bin.install "bones"
     test: |
