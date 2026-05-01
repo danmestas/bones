@@ -36,7 +36,7 @@ type DoctorCmd struct {
 	edgecli.DoctorCmd
 	All     bool `name:"all" help:"check all registered workspaces on this user/host"`
 	Quiet   bool `name:"quiet" short:"q" help:"only show workspaces with issues (with --all)"`
-	Verbose bool `name:"verbose" short:"v" help:"show all checks including OK rows (with --all)"`
+	Verbose bool `name:"verbose" help:"show all checks including OK rows (with --all)"`
 	JSON    bool `name:"json" help:"emit machine-readable JSON"`
 }
 

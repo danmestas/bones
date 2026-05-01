@@ -36,8 +36,10 @@ func FixForScaffoldDrift() string {
 }
 
 // FixForFossilDrift returns the fix command for fossil/git HEAD divergence.
+// Per ADR 0037, `bones apply` materializes the fossil trunk tip into the
+// git working tree; this is the correct path when fossil tip != git HEAD.
 func FixForFossilDrift() string {
-	return "bones up"
+	return "bones apply"
 }
 
 // FixForHubDown returns an advisory hint for a workspace whose hub is not responding.
