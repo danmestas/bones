@@ -23,12 +23,10 @@ reference/*/
 go.work
 go.work.sum
 
-# Claude Code / scheduled_tasks runtime state (local-only).
-# Skills and settings are project-level config — track those explicitly.
+# Claude Code state — fully local. Skills and settings are scaffolded
+# fresh by `bones up`; nothing under .claude/ should be tracked.
 .claude/
-!.claude/settings.json
-!.claude/skills/
-!.claude/skills/**
+.claude/**
 
 # Bones runtime + Fossil checkout-at-root (ADRs 0023, 0041)
 .fslckout
