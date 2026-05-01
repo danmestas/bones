@@ -9,6 +9,7 @@ require (
 	github.com/danmestas/libfossil v0.4.6-rc3
 	github.com/danmestas/libfossil/db/driver/modernc v0.1.0
 	github.com/google/uuid v1.6.0
+	github.com/mattn/go-isatty v0.0.20
 	github.com/nats-io/nats-server/v2 v2.12.8
 	github.com/nats-io/nats.go v1.51.0
 	go.opentelemetry.io/otel v1.43.0
@@ -30,7 +31,6 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect
 	github.com/hexops/gotextdiff v1.0.3 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/minio/highwayhash v1.0.4-0.20251030100505-070ab1a87a76 // indirect
 	github.com/nats-io/jwt/v2 v2.8.1 // indirect
 	github.com/nats-io/nkeys v0.4.15 // indirect

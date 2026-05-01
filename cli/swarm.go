@@ -21,14 +21,15 @@ import (
 // prompts run them as plain shell commands; the orchestrator skill
 // (R6 follow-up) renders them inline.
 type SwarmCmd struct {
-	Join   SwarmJoinCmd   `cmd:"" help:"Open a leaf, claim a task, prepare a worktree"`
-	Commit SwarmCommitCmd `cmd:"" help:"Commit changes (heartbeats the session)"`
-	Close  SwarmCloseCmd  `cmd:"" help:"Release claim, post result, stop the leaf"`
-	Status SwarmStatusCmd `cmd:"" help:"List active swarm sessions"`
-	Cwd    SwarmCwdCmd    `cmd:"" help:"Print the slot's worktree path"`
-	Tasks  SwarmTasksCmd  `cmd:"" help:"List ready tasks matching slot"`
-	FanIn  SwarmFanInCmd  `cmd:"" name:"fan-in" help:"Merge open hub leaves into trunk"`
-	Reap   SwarmReapCmd   `cmd:"" help:"Force-close stale same-host sessions as result=fail"`
+	Join     SwarmJoinCmd     `cmd:"" help:"Open a leaf, claim a task, prepare a worktree"`
+	Commit   SwarmCommitCmd   `cmd:"" help:"Commit changes (heartbeats the session)"`
+	Close    SwarmCloseCmd    `cmd:"" help:"Release claim, post result, stop the leaf"`
+	Status   SwarmStatusCmd   `cmd:"" help:"List active swarm sessions"`
+	Cwd      SwarmCwdCmd      `cmd:"" help:"Print the slot's worktree path"`
+	Tasks    SwarmTasksCmd    `cmd:"" help:"List ready tasks matching slot"`
+	FanIn    SwarmFanInCmd    `cmd:"" name:"fan-in" help:"Merge open hub leaves into trunk"`
+	Reap     SwarmReapCmd     `cmd:"" help:"Force-close stale same-host sessions as result=fail"`
+	Dispatch SwarmDispatchCmd `cmd:"" help:"Dispatch a plan: create tasks + write manifest"`
 }
 
 // openSwarmSessions dials NATS for the workspace and opens a swarm

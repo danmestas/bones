@@ -200,6 +200,75 @@ Density flags:
 - `-v` / `--verbose` — show all checks including OK rows
 - `--json` — machine-readable output
 
+## Parallel dispatch (`bones swarm dispatch`)
+
+`bones swarm dispatch` turns a multi-slot plan into a coordinated wave of parallel subagents.
+Each slot runs independently; waves execute sequentially (wave 2 starts only after wave 1 completes).
+
+### Typical flow
+
+**1. Emit the manifest from a plan file**
+
+```
+$ bones swarm dispatch ./plan.md
+Manifest written: .bones/swarm/dispatch.json
+  Wave 1: 3 slots  (auth, api, frontend)
+
+Next step: run /orchestrator dispatch in your Claude Code session.
+```
+
+**2. Drive the current wave from a Claude Code session**
+
+```
+/orchestrator dispatch
+```
+
+The orchestrator skill reads `.bones/swarm/dispatch.json`, dispatches one subagent Task per
+slot in the current wave, waits for all to close, then calls `--advance` automatically.
+
+Other harnesses (Cursor, Aider, etc.) ship their own equivalent that consumes the same
+`dispatch.json` schema.
+
+**3. Advance to the next wave (after each wave completes)**
+
+```
+$ bones swarm dispatch --advance
+Wave 1 complete. Advanced to wave 2 of 2.
+```
+
+`--advance` checks that every task in the current wave is Closed before promoting. If any
+task is still open it exits non-zero with an explanation.
+
+**4. Watch slot progress in real time**
+
+```
+$ bones logs --slot=auth --tail
+2026-05-01T12:00:01Z  auth  Starting auth service implementation…
+2026-05-01T12:00:45Z  auth  Created internal/auth/handler.go
+2026-05-01T12:01:10Z  auth  All tasks done. Closing slot.
+```
+
+**5. Abandon an in-flight dispatch**
+
+```
+$ bones swarm dispatch --cancel
+Canceled. Closed 3 tasks with reason "dispatch-canceled". Manifest removed.
+```
+
+### Checking dispatch context in `bones swarm status`
+
+When a manifest is in flight, `bones swarm status` shows a dispatch context line at the top:
+
+```
+$ bones swarm status
+Dispatch: ./plan.md  (wave 1 of 2)
+
+SLOT      TASK-ID   HOST    PID    STATE   RENEWED
+auth      t-9a3c    laptop  0      active  2s ago
+api       t-b12f    laptop  0      active  5s ago
+frontend  t-c44a    laptop  0      stale   120s ago
+```
+
 ## License
 
 Apache-2.0. See `[LICENSE](LICENSE)`.

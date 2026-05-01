@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
+	"github.com/danmestas/bones/internal/dispatch"
 	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/workspace"
 )
@@ -57,6 +59,14 @@ func (c *SwarmStatusCmd) Run(g *libfossilcli.Globals) error {
 }
 
 func (c *SwarmStatusCmd) run(ctx context.Context, info workspace.Info) error {
+	// Emit dispatch context line before the slot table when a manifest exists.
+	// Best-effort: a corrupt or unreadable manifest must not block the operator
+	// from inspecting live sessions (which is exactly when they need status most).
+	if !c.JSON {
+		if err := emitDispatchLine(info.WorkspaceDir); err != nil {
+			fmt.Fprintf(os.Stderr, "swarm status: warning: dispatch line: %v\n", err)
+		}
+	}
 	sess, closeSess, err := openSwarmSessions(ctx, info)
 	if err != nil {
 		return err
@@ -72,6 +82,21 @@ func (c *SwarmStatusCmd) run(ctx context.Context, info workspace.Info) error {
 		return emitStatusJSON(rows)
 	}
 	return emitStatusTable(rows)
+}
+
+// emitDispatchLine prints a single "Dispatch: ..." line when a dispatch
+// manifest is present in the workspace. Silent on ErrNoManifest.
+func emitDispatchLine(workspaceRoot string) error {
+	m, err := dispatch.Read(workspaceRoot)
+	if errors.Is(err, dispatch.ErrNoManifest) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	totalWaves := len(m.Waves)
+	fmt.Printf("Dispatch: %s  (wave %d of %d)\n", m.PlanPath, m.CurrentWave, totalWaves)
+	return nil
 }
 
 // buildStatusRows attaches a state label and a stale-seconds counter

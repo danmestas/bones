@@ -9,6 +9,7 @@ import (
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
 	"github.com/danmestas/bones/internal/coord"
+	"github.com/danmestas/bones/internal/logwriter"
 	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/workspace"
 )
@@ -49,9 +50,25 @@ func (c *SwarmCommitCmd) Run(g *libfossilcli.Globals) error {
 	}
 	res, err := lease.Commit(ctx, c.Message, files)
 	if err != nil {
+		appendSlotEvent(info.WorkspaceDir, lease.Slot(), logwriter.Event{
+			Timestamp: timeNow(),
+			Slot:      lease.Slot(),
+			Event:     logwriter.EventCommitError,
+			Fields:    map[string]interface{}{"reason": err.Error()},
+		})
 		return fmt.Errorf("swarm commit: %w", err)
 	}
 	c.emitCommitReport(lease.Slot(), lease.TaskID(), files, res, resolveHubURL(c.HubURL))
+	appendSlotEvent(info.WorkspaceDir, lease.Slot(), logwriter.Event{
+		Timestamp: timeNow(),
+		Slot:      lease.Slot(),
+		Event:     logwriter.EventCommit,
+		Fields: map[string]interface{}{
+			"message": c.Message,
+			"sha":     res.UUID,
+			"files":   len(files),
+		},
+	})
 	return nil
 }
 
