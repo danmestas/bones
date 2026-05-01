@@ -87,6 +87,10 @@ func reportWorkspace(op string, info workspace.Info, err error) error {
 			"no bones workspace found; run `bones init` first")
 	case errors.Is(err, workspace.ErrLeafStartTimeout):
 		fmt.Fprintln(os.Stderr, "leaf failed to start within timeout")
+	case errors.Is(err, workspace.ErrLegacyLayout):
+		fmt.Fprintln(os.Stderr,
+			"bones workspace uses pre-ADR-0041 layout and a leaf is currently running.\n"+
+				"Tear it down first: `bones down`, then re-run to migrate.")
 	}
 	return fmt.Errorf("%s: %w", op, err)
 }

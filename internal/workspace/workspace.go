@@ -43,10 +43,11 @@ var (
 	ErrNoWorkspace        = errors.New("no bones workspace found")
 	ErrLeafUnreachable    = errors.New("leaf daemon not reachable")
 	ErrLeafStartTimeout   = errors.New("leaf daemon failed to start within timeout")
+	ErrLegacyLayout       = errors.New("workspace uses pre-ADR-0041 layout")
 )
 
 // ExitCode maps errors returned by Init and Join to conventional process exit
-// codes: 0 on success, 2-5 for known sentinels, 1 for anything else. Callers
+// codes: 0 on success, 2-6 for known sentinels, 1 for anything else. Callers
 // that want a different convention can inspect errors directly.
 func ExitCode(err error) int {
 	switch {
@@ -60,6 +61,8 @@ func ExitCode(err error) int {
 		return 4
 	case errors.Is(err, ErrLeafStartTimeout):
 		return 5
+	case errors.Is(err, ErrLegacyLayout):
+		return 6
 	default:
 		return 1
 	}

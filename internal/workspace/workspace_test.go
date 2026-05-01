@@ -20,7 +20,7 @@ import (
 
 func TestPackageBuilds(t *testing.T) {
 	// Sanity: exported symbols compile and sentinel errors are distinct.
-	errs := []error{ErrAlreadyInitialized, ErrNoWorkspace, ErrLeafUnreachable, ErrLeafStartTimeout}
+	errs := []error{ErrAlreadyInitialized, ErrNoWorkspace, ErrLeafUnreachable, ErrLeafStartTimeout, ErrLegacyLayout}
 	seen := map[error]bool{}
 	for _, e := range errs {
 		if e == nil {
@@ -30,6 +30,12 @@ func TestPackageBuilds(t *testing.T) {
 			t.Fatalf("duplicate sentinel: %v", e)
 		}
 		seen[e] = true
+	}
+}
+
+func TestExitCode_LegacyLayout(t *testing.T) {
+	if got, want := ExitCode(ErrLegacyLayout), 6; got != want {
+		t.Errorf("ExitCode(ErrLegacyLayout) = %d, want %d", got, want)
 	}
 }
 
