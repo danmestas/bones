@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/danmestas/bones/internal/hub"
 )
 
 func TestPackageBuilds(t *testing.T) {
@@ -225,33 +227,40 @@ func TestJoin_NoMarker(t *testing.T) {
 	}
 }
 
-func TestJoin_StaleLeaf(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skip in -short: spawns leaf")
-	}
-	requireLeafBinary(t)
-
+func TestJoin_AutoStartsHubWhenDead(t *testing.T) {
 	dir := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if _, err := Init(ctx, dir); err != nil {
+	// Pre-populate as a workspace with no live hub.
+	if _, err := Init(context.Background(), dir); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	// Kill the leaf, then try Join.
-	killLeafPID(t, filepath.Join(dir, markerDirName, "leaf.pid"))
-
-	// Give the OS a moment to reap.
-	time.Sleep(100 * time.Millisecond)
-
-	_, err := Join(ctx, dir)
-	if !errors.Is(err, ErrLeafUnreachable) {
-		t.Fatalf("Join: got %v, want ErrLeafUnreachable", err)
+	called := false
+	old := hubStartFunc
+	hubStartFunc = func(ctx context.Context, root string, options ...hub.Option) error {
+		called = true
+		// Pretend the hub came up: write URL files so Join can read them.
+		bones := filepath.Join(root, markerDirName)
+		_ = os.WriteFile(filepath.Join(bones, "hub-fossil-url"),
+			[]byte("http://127.0.0.1:65534\n"), 0o644)
+		_ = os.WriteFile(filepath.Join(bones, "hub-nats-url"),
+			[]byte("nats://127.0.0.1:65533\n"), 0o644)
+		return nil
 	}
-	msg := err.Error()
-	for _, want := range []string{"leaf.pid", "bones up"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("Join error %q missing %q", msg, want)
-		}
+	t.Cleanup(func() { hubStartFunc = old })
+
+	info, err := Join(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	if !called {
+		t.Error("hubStartFunc was not called")
+	}
+	if info.NATSURL != "nats://127.0.0.1:65533" {
+		t.Errorf("NATSURL = %q, want from-fixture", info.NATSURL)
+	}
+	if info.LeafHTTPURL != "http://127.0.0.1:65534" {
+		t.Errorf("LeafHTTPURL = %q, want from-fixture", info.LeafHTTPURL)
+	}
+	if info.AgentID == "" {
+		t.Error("AgentID is empty")
 	}
 }
