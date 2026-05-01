@@ -1,9 +1,9 @@
 // Package scaffoldver tracks which bones binary version scaffolded
-// the current workspace's .bones/, .orchestrator/, and .claude/skills
-// trees. The scaffold and the binary upgrade independently — brew
-// upgrade replaces the binary but leaves the workspace state alone —
-// so we record the version each time scaffoldOrchestrator runs and
-// detect drift on subsequent invocations.
+// the current workspace's .bones/ and .claude/skills trees. The
+// scaffold and the binary upgrade independently — brew upgrade
+// replaces the binary but leaves the workspace state alone — so we
+// record the version each time scaffoldOrchestrator runs and detect
+// drift on subsequent invocations.
 //
 // See ADR 0035 (`docs/adr/0035-scaffold-version-drift.md`) for the
 // rationale and detection strategy.
