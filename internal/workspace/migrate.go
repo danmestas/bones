@@ -7,6 +7,7 @@
 package workspace
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -210,10 +211,31 @@ func readLegacyAgentID(path string) string {
 	return cfg.AgentID
 }
 
-// rewriteHookForADR0041 stub — real implementation lands in Task 7.
-// Returning nil here is correct for Task 6 because TestMigrateLegacyLayout_*
-// don't exercise hook rewriting. Task 7 adds the real string-substitution
-// logic + its own tests.
+const (
+	legacyHookCommand = "bash .orchestrator/scripts/hub-bootstrap.sh"
+	newHookCommand    = "bones hub start"
+)
+
+// rewriteHookForADR0041 updates the SessionStart hook entry in
+// .claude/settings.json from the legacy bootstrap-script command to
+// `bones hub start`. No-op when settings.json is missing or the legacy
+// command is not present.
+//
+// Implementation note: this does string substitution rather than full
+// JSON marshal/unmarshal so the user's manual edits, ordering, and
+// formatting in settings.json are preserved verbatim.
 func rewriteHookForADR0041(workspaceDir string) error {
-	return nil
+	path := filepath.Join(workspaceDir, ".claude", "settings.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !bytes.Contains(data, []byte(legacyHookCommand)) {
+		return nil // already migrated or never had the hook
+	}
+	updated := strings.ReplaceAll(string(data), legacyHookCommand, newHookCommand)
+	return os.WriteFile(path, []byte(updated), 0o644)
 }

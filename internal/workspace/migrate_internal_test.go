@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -139,5 +140,53 @@ func TestMigrateLegacyLayout_Idempotent(t *testing.T) {
 	// Second run: should be a no-op (legacyAbsent).
 	if err := migrateLegacyLayout(dir); err != nil {
 		t.Fatalf("second migrate: %v", err)
+	}
+}
+
+func TestRewriteHookForADR0041(t *testing.T) {
+	dir := t.TempDir()
+	claudeDir := filepath.Join(dir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	orig := `{
+  "hooks": {
+    "SessionStart": [
+      {"command": "bones tasks prime --json", "type": "command", "timeout": 10},
+      {"command": "bash .orchestrator/scripts/hub-bootstrap.sh", "type": "command", "timeout": 10}
+    ]
+  }
+}`
+	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"),
+		[]byte(orig), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if err := rewriteHookForADR0041(dir); err != nil {
+		t.Fatalf("rewriteHookForADR0041: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	gotStr := string(got)
+	if !strings.Contains(gotStr, `"command": "bones hub start"`) {
+		t.Errorf("settings.json missing new command:\n%s", gotStr)
+	}
+	if strings.Contains(gotStr, `hub-bootstrap.sh`) {
+		t.Errorf("settings.json still references hub-bootstrap.sh:\n%s", gotStr)
+	}
+	// Other hook entries (prime) must survive untouched.
+	if !strings.Contains(gotStr, `"bones tasks prime --json"`) {
+		t.Errorf("prime hook stripped:\n%s", gotStr)
+	}
+}
+
+func TestRewriteHookForADR0041_NoSettings(t *testing.T) {
+	// No .claude/settings.json — migration is a no-op, no error.
+	dir := t.TempDir()
+	if err := rewriteHookForADR0041(dir); err != nil {
+		t.Errorf("rewriteHookForADR0041 with no settings.json: %v", err)
 	}
 }
