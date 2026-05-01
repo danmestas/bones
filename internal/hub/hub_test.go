@@ -22,7 +22,15 @@ import (
 //
 // Uses random ports (via net.Listen on :0) so parallel CI cannot collide
 // on 8765 / 4222.
+//
+// Skipped in -short. The test spawns subprocess servers and binds
+// real TCP ports; a freePort/bind race against parallel test runs
+// (issue #106) makes it flaky inside `make ci-fast`. Full coverage
+// runs in `make ci` and CI's non-short matrix.
 func TestStartStopRoundTrip(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: spawns subprocess servers, port-bind sensitive")
+	}
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available; skipping hub round-trip")
 	}
