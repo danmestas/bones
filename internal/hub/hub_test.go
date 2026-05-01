@@ -22,7 +22,15 @@ import (
 //
 // Uses random ports (via net.Listen on :0) so parallel CI cannot collide
 // on 8765 / 4222.
+//
+// Skipped in -short. The test spawns subprocess servers and binds
+// real TCP ports; a freePort/bind race against parallel test runs
+// (issue #106) makes it flaky inside `make ci-fast`. Full coverage
+// runs in `make ci` and CI's non-short matrix.
 func TestStartStopRoundTrip(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: spawns subprocess servers, port-bind sensitive")
+	}
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available; skipping hub round-trip")
 	}
@@ -187,11 +195,26 @@ func waitForPidLive(pidFile string, timeout time.Duration) bool {
 	return false
 }
 
-// mustRun executes cmd in dir and t.Fatalfs on any error.
+// mustRun executes cmd in dir and t.Fatalfs on any error. For `git`
+// invocations, dir is also stamped into GIT_DIR / GIT_WORK_TREE /
+// GIT_CEILING_DIRECTORIES so a test fixture cannot accidentally bind
+// to an ancestor repository's `.git`. See issue #106 for the bug this
+// defends against (test commits leaking into the parent worktree).
 func mustRun(t *testing.T, dir, name string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
+	if name == "git" {
+		cmd.Env = append(os.Environ(),
+			"GIT_CEILING_DIRECTORIES="+dir,
+			"GIT_DIR="+filepath.Join(dir, ".git"),
+			"GIT_WORK_TREE="+dir,
+			"GIT_AUTHOR_NAME=t",
+			"GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t",
+			"GIT_COMMITTER_EMAIL=t@t",
+		)
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%s %v: %v\n%s", name, args, err, out)
 	}
