@@ -20,6 +20,7 @@ type CLI struct {
 	Swarm  bonescli.SwarmCmd  `cmd:"" group:"daily" help:"Run as a slot-shaped swarm participant"`
 	Apply  bonescli.ApplyCmd  `cmd:"" group:"daily" help:"Materialize hub trunk into git tree"`
 	Env    bonescli.EnvCmd    `cmd:"" group:"daily" help:"Emit shell exports for current workspace"`
+	Rename bonescli.RenameCmd `cmd:"" group:"daily" help:"Set workspace display name"`
 
 	// Repository.
 	Repo libfossilcli.RepoCmd `cmd:"" group:"repo" help:"Fossil repository operations"`
