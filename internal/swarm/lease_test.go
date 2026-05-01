@@ -1,12 +1,15 @@
 package swarm
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -387,6 +390,105 @@ func TestClose_DeletesRecordAndPidFile(t *testing.T) {
 		t.Fatalf("post-Close Acquire: %v", err)
 	}
 	t.Cleanup(func() { _ = second.Release(ctx) })
+}
+
+// TestCommit_NoErrorWhenAnotherSyncTargetSucceeds is the bones-side
+// regression for #118 + EdgeSync#97: the round-0 NATS subject-interest
+// race emits a per-target sync error in EdgeSync's poll loop, but
+// when the HTTP target succeeds in the same cycle the failure must
+// be demoted to DEBUG. The bones-side workaround handler was deleted
+// in this PR; this test pins the upstream contract bones now relies
+// on. If a future EdgeSync regression re-introduces the ERROR-level
+// log, this fails.
+//
+// Vacuously passes when the race doesn't fire in the fixture (the
+// in-process mesh wires fast on some hosts) — the assertion is the
+// negative space "no ERROR-level target=nats sync error" rather
+// than an attempt to force the race.
+func TestCommit_NoErrorWhenAnotherSyncTargetSucceeds(t *testing.T) {
+	buf := captureSlog(t)
+
+	f := newLeaseFixture(t)
+	holdPath := filepath.Join(f.dir, "racecheck", "hello.txt")
+	taskID := string(f.createTask(t, "racecheck-task-1", holdPath))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	lease, err := Acquire(ctx, f.info, "racecheck", taskID, AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if err := lease.Release(ctx); err != nil {
+		t.Fatalf("Release after Acquire: %v", err)
+	}
+	resumed, err := Resume(ctx, f.info, "racecheck", AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	wt := resumed.WT()
+	if err := os.WriteFile(filepath.Join(wt, "hello.txt"), []byte("world"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	files := []coord.File{{
+		Path:    wspath.Must(holdPath),
+		Name:    "hello.txt",
+		Content: []byte("world"),
+	}}
+	if _, err := resumed.Commit(ctx, "test commit", files); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// Give the agent's poll loop a window to run a SyncNow-driven
+	// round. SyncNow is non-blocking; the per-target loop runs in a
+	// separate goroutine. 200ms is comfortably more than the in-process
+	// mesh's round-trip and matches the ordering already implicit in
+	// TestCommit_SuccessUpdatesTrunkAndRenewsSession.
+	time.Sleep(200 * time.Millisecond)
+
+	if err := resumed.Release(ctx); err != nil {
+		t.Errorf("Release: %v", err)
+	}
+
+	out := buf.String()
+	if strings.Contains(out, `level=ERROR msg="sync error" target=nats`) {
+		t.Errorf("expected no ERROR-level nats sync error during commit "+
+			"(per-target demotion regressed in upstream EdgeSync?), got:\n%s", out)
+	}
+}
+
+// captureSlog redirects slog.Default() to a thread-safe buffer at
+// Debug level for the test's lifetime, restoring the prior default
+// in t.Cleanup. Returns the buffer for assertion. Thread-safe
+// because the leaf's pollLoop writes to slog from a goroutine.
+func captureSlog(t *testing.T) *syncSlogBuffer {
+	t.Helper()
+	buf := &syncSlogBuffer{}
+	prev := slog.Default()
+	opts := &slog.HandlerOptions{Level: slog.LevelDebug}
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, opts)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return buf
+}
+
+// syncSlogBuffer is a sync.Mutex-protected bytes.Buffer.
+// slog.NewTextHandler is concurrent-safe but io.Writers it wraps
+// are not, and the leaf's pollLoop runs in a goroutine.
+type syncSlogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncSlogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncSlogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // TestCommit_SuccessUpdatesTrunkAndRenewsSession covers the happy
