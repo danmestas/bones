@@ -19,6 +19,7 @@ type CLI struct {
 	Tasks  bonescli.TasksCmd  `cmd:"" group:"daily" help:"Inspect and mutate runtime agent tasks"`
 	Swarm  bonescli.SwarmCmd  `cmd:"" group:"daily" help:"Run as a slot-shaped swarm participant"`
 	Apply  bonescli.ApplyCmd  `cmd:"" group:"daily" help:"Materialize hub trunk into git tree"`
+	Env    bonescli.EnvCmd    `cmd:"" group:"daily" help:"Emit shell exports for current workspace"`
 
 	// Repository.
 	Repo libfossilcli.RepoCmd `cmd:"" group:"repo" help:"Fossil repository operations"`
