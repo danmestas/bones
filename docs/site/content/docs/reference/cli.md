@@ -22,15 +22,17 @@ The `bones` binary is a single Kong-driven entry point covering workspace setup,
 | `bones doctor` | Check development environment health |
 | `bones init` | Create a workspace |
 | `bones join` | Locate an existing workspace (walks up from cwd) |
-| `bones up` | Full bootstrap: workspace + scaffold + leaf + hub |
+| `bones up` | Workspace bootstrap: `.bones/`, agent.id, hooks, skill templates |
+| `bones hub start` | Start the hub (idempotent; auto-runs on first verb that needs it) |
+| `bones hub stop` | Stop the hub fossil server and embedded NATS |
+| `bones down` | Reverse `bones up`: stop hub, remove `.bones/`, prune hooks |
 
-`up` is the one-shot equivalent of `init` + `orchestrator` + `bash .orchestrator/scripts/hub-bootstrap.sh`.
+Per ADR 0041, `bones up` is scaffold-only. The hub auto-starts on first verb invocation; `bones hub start` is only needed when you want to verify the hub is up explicitly.
 
 ### Orchestrator
 
 | Command | Purpose |
 |---|---|
-| `bones orchestrator` | Install orchestrator scaffolding (`.orchestrator/`) |
 | `bones validate-plan <path>` | Validate a slot-annotated plan; `--list-slots` emits JSON |
 | `bones peek` | Open the hub Fossil repo in the system `fossil ui` web view (timeline, branches, files). Optional enhancement — prints a one-line install hint and exits cleanly when `fossil` isn't on PATH. `--port=N` to pin the UI port. |
 
