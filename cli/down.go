@@ -14,6 +14,7 @@ import (
 
 	"github.com/danmestas/bones/internal/githook"
 	"github.com/danmestas/bones/internal/hub"
+	"github.com/danmestas/bones/internal/registry"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
@@ -113,6 +114,7 @@ type downAction struct {
 func planDown(root string, c *DownCmd) []downAction {
 	var plan []downAction
 	plan = append(plan, planStopHub(root, c)...)
+	plan = append(plan, planRemoveRegistry(root)...)
 	plan = append(plan, planRemoveGitHook(root)...)
 	plan = append(plan, planRemoveBonesDir(root)...)
 	plan = append(plan, planRemoveOrchestrator(root, c)...)
@@ -155,6 +157,16 @@ func planStopHub(root string, c *DownCmd) []downAction {
 			_ = hub.Stop(root)
 			return nil
 		},
+	}}
+}
+
+// planRemoveRegistry removes the workspace's cross-workspace registry entry.
+// Idempotent (no-op if no entry exists). Best-effort — failure doesn't block
+// other teardown actions.
+func planRemoveRegistry(root string) []downAction {
+	return []downAction{{
+		description: "remove registry entry for " + root,
+		do:          func() error { return registry.Remove(root) },
 	}}
 }
 
