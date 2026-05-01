@@ -18,6 +18,7 @@ type CLI struct {
 	Status bonescli.StatusCmd `cmd:"" group:"daily" help:"Snapshot tasks, sessions, hub activity"`
 	Tasks  bonescli.TasksCmd  `cmd:"" group:"daily" help:"Inspect and mutate runtime agent tasks"`
 	Swarm  bonescli.SwarmCmd  `cmd:"" group:"daily" help:"Run as a slot-shaped swarm participant"`
+	Logs   bonescli.LogsCmd   `cmd:"" group:"daily" help:"Read per-slot or workspace event logs"`
 	Apply  bonescli.ApplyCmd  `cmd:"" group:"daily" help:"Materialize hub trunk into git tree"`
 	Env    bonescli.EnvCmd    `cmd:"" group:"daily" help:"Emit shell exports for current workspace"`
 	Rename bonescli.RenameCmd `cmd:"" group:"daily" help:"Set workspace display name"`
