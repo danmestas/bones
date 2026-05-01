@@ -10,6 +10,7 @@ import (
 
 	"github.com/danmestas/bones/internal/coord"
 	"github.com/danmestas/bones/internal/dispatch"
+	"github.com/danmestas/bones/internal/logwriter"
 	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/workspace"
 )
@@ -72,6 +73,15 @@ func (c *SwarmCloseCmd) Run(g *libfossilcli.Globals) error {
 		"swarm close: slot=%s task=%s result=%s\n",
 		lease.Slot(), lease.TaskID(), c.Result,
 	)
+	appendSlotEvent(info.WorkspaceDir, lease.Slot(), logwriter.Event{
+		Timestamp: timeNow(),
+		Slot:      lease.Slot(),
+		Event:     logwriter.EventClose,
+		Fields: map[string]interface{}{
+			"result":  c.Result,
+			"summary": c.Summary,
+		},
+	})
 	return nil
 }
 
