@@ -36,12 +36,14 @@ There is no `.bones/scripts/` directory. The two shell scripts under `.orchestra
 |---|---|
 | `bones up` | Scaffold only. Mkdir `.bones/`, write `.bones/agent.id`, install Claude Code SessionStart hook entry, write `.gitignore`. Idempotent. **Does not start the leaf.** |
 | SessionStart hook (Claude Code) | Calls `bones hub start`. |
-| Any bones verb that needs the hub (`tasks status`, `swarm join`, `apply`, `status`, etc.) | If `.bones/pids/leaf.pid` is dead or `hub-fossil-url` is missing, calls `bones hub start` internally before continuing. Prints one stderr line: `bones: starting leaf at http://127.0.0.1:8765 ...`. Then proceeds normally. |
+| Any bones verb that needs the hub (`tasks status`, `swarm join`, `apply`, `status`, etc.) | Calls `workspace.Join(cwd)`. Join handles auto-start transparently — verbs do not implement lifecycle logic themselves. |
 | `bones hub start` | Idempotent. If leaf is healthy at the URL recorded in `hub-fossil-url`, no-op. Otherwise spawn a fresh leaf (allocate ports per ADR 0038, write pid + URL files). |
 | `bones hub stop` | Kill the leaf, remove pid + URL files. Does not delete `.bones/`. |
 | `bones down` | Calls `bones hub stop`, then removes scaffolded hooks. Keeps `.bones/` on disk so JetStream KV state and the hub fossil survive — same lifecycle `bones down` has against `.orchestrator/` today. |
 
-PR #98's self-explaining `ErrLeafUnreachable` message stays on the failure path — it fires only when `bones hub start` itself fails (port collision, leaf binary missing, healthz timeout). Common-case "leaf isn't running yet" never reaches it because verbs auto-start.
+**Auto-start lives in `workspace.Join`, not duplicated across verbs.** This is the deep-module move: `Join(cwd) → Info` returns with the leaf guaranteed running, or returns a self-explaining error. The lifecycle logic (check pid, check healthz, call `hub.Start` if needed, print the one-line stderr feedback) lives in one place. Adding a new verb requires zero lifecycle code.
+
+PR #98's self-explaining `ErrLeafUnreachable` message stays on the failure path — it fires only when `hub.Start` itself fails (port collision, leaf binary missing, healthz timeout). Common-case "leaf isn't running yet" never reaches it because `Join` auto-starts.
 
 ## Migration
 
@@ -62,22 +64,27 @@ A new sentinel `workspace.ErrLegacyLayout` maps to a fresh exit code in `workspa
 
 **Old layout, no live leaf.** Detected by: `.orchestrator/` exists, no live process at the recorded pid (or no pid file at all).
 
-Behavior: auto-migrate inline, transparently. Steps:
+Behavior: auto-migrate inline, transparently.
 
-1. Move `.orchestrator/hub.fossil` → `.bones/hub.fossil`.
-2. Move `.orchestrator/hub-fossil-url`, `.orchestrator/hub-nats-url` → `.bones/`.
-3. Move `.orchestrator/nats-store/` → `.bones/nats-store/`.
-4. Move `.orchestrator/leaf.log` → `.bones/leaf.log` (any pre-existing `.bones/leaf.log` from the legacy workspace leaf is deleted; it's no longer relevant).
-5. Delete the legacy workspace-leaf files: old `.bones/config.json`, `.bones/repo.fossil`, `.bones/leaf.pid`, plus any old random-port URL records.
-6. If the old `.bones/config.json` had `agent_id`, write it to `.bones/agent.id`. If absent, generate a fresh UUID.
-7. Rewrite the SessionStart hook entry in the local hook config (location verified during implementation — see Verification Points below) from `.orchestrator/scripts/hub-bootstrap.sh` to `bones hub start`.
-8. `rmdir .orchestrator/scripts/` and `rmdir .orchestrator/`.
+**Ordering principle: all moves before any deletes.** Migration steps are ordered so that no destination state is destroyed before all source state has reached its new home. If any step fails, the world is partially migrated but never *lost*.
+
+Steps:
+
+1. Read `agent_id` from old `.bones/config.json` if present; cache in memory for step 7.
+2. Move `.orchestrator/hub.fossil` → `.bones/hub.fossil`.
+3. Move `.orchestrator/hub-fossil-url`, `.orchestrator/hub-nats-url` → `.bones/`.
+4. Move `.orchestrator/nats-store/` → `.bones/nats-store/`.
+5. Move `.orchestrator/leaf.log` → `.bones/leaf.log` (after step 6 finishes — see ordering).
+6. Delete the legacy workspace-leaf files: old `.bones/config.json`, `.bones/repo.fossil`, `.bones/leaf.pid`, `.bones/leaf.log` (the old workspace-leaf log; superseded by step 5's hub-leaf log).
+7. Write `.bones/agent.id` from cached value, or generate fresh UUID if absent.
+8. Rewrite the SessionStart hook entry in the local hook config (location verified during implementation — see Verification Points) from `.orchestrator/scripts/hub-bootstrap.sh` to `bones hub start`.
+9. `rmdir .orchestrator/scripts/` and `rmdir .orchestrator/`.
 
 Print one stderr line: `migrated workspace to .bones/ layout (ADR 0041)`.
 
-The migration is one-shot — once `.orchestrator/` is gone, this code path never runs again. No reverse migration; no flag to skip.
+**Idempotency.** Each step checks "is this already done?" before acting. Rerun on a partially-migrated state completes the remaining steps. Rerun on a fully-migrated state is a no-op (detection finds no `.orchestrator/`). No reverse migration; no flag to skip.
 
-Failure handling: if any move step fails midway (disk full, permission denied), the migrator surfaces the partial state in the error message and refuses to proceed. The user can manually recover by inspecting the partially-moved state and either completing the move or running `bones down && rm -rf .bones .orchestrator && bones up` for a clean slate.
+**Failure handling.** If any step fails (disk full, permission denied), the migrator surfaces the failed step in the error message and exits non-zero. The user reruns `bones up` or any verb that triggers `workspace.Join`; the migrator picks up where it left off because every step is idempotent. Manual recovery line for stuck states: `bones down && rm -rf .bones .orchestrator && bones up` for a clean slate, but this should be unreachable in practice.
 
 ## Code structure changes
 
@@ -87,7 +94,7 @@ Failure handling: if any move step fails midway (disk full, permission denied), 
 - `internal/workspace/config.go` — `config.json` is gone; replaced by a 3-line `readAgentID` helper in `workspace.go`.
 - `.orchestrator/scripts/hub-bootstrap.sh` — replaced by `bones hub start`. Logic the script had that wasn't already in Go (leaf-binary discovery fallbacks, fossil-create-if-missing) folds into `internal/hub.Start`.
 - `.orchestrator/scripts/hub-shutdown.sh` — replaced by `bones hub stop`.
-- `cli/orchestrator.go` — the `bones orchestrator install` command currently writes the bootstrap scripts. With no scripts, this command either folds into `bones up` or shrinks to a thin shim. Decision deferred to implementation; minimum scope is "no longer writes scripts."
+- `cli/orchestrator.go` — deleted. Its remaining responsibility (writing skill templates) moves into `bones up`. Fewer commands, fewer entry points to test, lower cognitive load. If a user wants to reinstall skills without re-running `bones up`, `rm -rf .claude/skills/orchestrator && bones up` is the documented workflow.
 
 ### Simplified
 
@@ -106,7 +113,7 @@ The `workspace.Info` struct's surface (`AgentID`, `NATSURL`, `LeafHTTPURL`, `Rep
 - `AgentID` — read from `.bones/agent.id`
 - `NATSURL` — read from `.bones/hub-nats-url`
 - `LeafHTTPURL` — read from `.bones/hub-fossil-url`
-- `RepoPath` — computed as `<WorkspaceDir>/.bones/hub.fossil`
+- `RepoPath` — fate decided by Verification Point 2; default delete, conditional retain at `<WorkspaceDir>/.bones/hub.fossil`
 - `WorkspaceDir` — the directory containing `.bones/`, unchanged
 
 This means downstream consumers (`internal/coord`, `internal/swarm`, `internal/tasks`, `cli/tasks_*.go`, etc.) need no interface changes. They keep reading `info.AgentID` etc. and get the right values.
@@ -159,7 +166,9 @@ Per the brainstorm decision, all 41 references to `.orchestrator/` get updated i
 
 ### Updated
 
-- `internal/workspace/workspace_test.go` — PR #98's `TestJoin_DeadPID_Message` and `TestJoin_HealthzFail_Message` move into `internal/hub`-equivalent tests since `Join` no longer probes the leaf. Existing `TestPackageBuilds`, `TestConfig_RoundTrip`, `TestJoin_NoMarker`, `TestJoin_StaleLeaf` update to the new layout. The legacy-layout migration tests cover the surface PR #98 originally exercised.
+- `internal/workspace/workspace_test.go` — `TestJoin_DeadPID_Message` and `TestJoin_HealthzFail_Message` from PR #98 are deleted. Equivalent coverage moves to new tests `TestStart_DeadPID_Message` and `TestStart_HealthzFail_Message` in `internal/hub/start_test.go`, since `hub.Start` is where leaf-spawn failures now originate. The wrapped-error contract from PR #98 (`%w: pid N ... `bones up` to rebind`) becomes `%w: pid N ... try \`bones hub start\`` — one string change, same `errors.Is(_, ErrLeafUnreachable)` invariant.
+- `TestConfig_RoundTrip` is deleted — `config.json` no longer exists.
+- `TestJoin_NoMarker` updates to assert against `.bones/` walk-up. `TestJoin_StaleLeaf` updates to exercise the auto-start-on-Join path: with `hub.Start` mocked to fail, `Join` returns the wrapped `ErrLeafUnreachable`; with it succeeding, `Join` returns a populated `Info`.
 - Integration tests across the codebase that built workspaces with the old layout in fixtures update to use the new layout. Expect ~5–10 file edits across `cmd/bones/integration/`, `internal/swarm/lease_test.go`, etc.
 
 ## Verification points (resolve during implementation)
@@ -168,9 +177,9 @@ These are unknowns I want to verify in code rather than guess:
 
 1. **SessionStart hook config location.** The hub-bootstrap script is invoked from somewhere — likely `.claude/settings.json` (workspace-local) or the user's global Claude Code config. The migration step 7 only works if it's workspace-local. If it's global, the migrator prints a manual update instruction instead of rewriting silently.
 
-2. **`info.RepoPath` callers.** Verified during brainstorming that no current verb reads `info.RepoPath` to do real work — only `internal/workspace/spawn.go` uses it (passing to the leaf as `--repo`). With spawn.go deleted, the field can be either dropped or repurposed as the path to `.bones/hub.fossil` for `bones apply`. Decision: keep the field, point it at `.bones/hub.fossil` for backward-compat with any caller I missed.
+2. **`info.RepoPath` callers.** Brainstorming verified the only writer is `internal/workspace/spawn.go` (passing to the leaf as `--repo`) — being deleted. Verify *during implementation* there are no other readers via `grep -rn 'info\.RepoPath\|\.RepoPath' .`. If zero readers outside spawn.go: drop the field. If readers exist: keep, document each, point at `.bones/hub.fossil`. The default is delete, not retain.
 
-3. **`bones orchestrator install` command surface.** Today it writes the bootstrap scripts. Once those are gone, the command may have no work left. Verify whether `bones up` can absorb its remaining responsibilities or whether it stays as a separate verb for advanced use.
+3. **`bones orchestrator install` skill-template logic.** Verify what the command does today beyond writing scripts (skill template installation, hook entries, etc.) so that the move into `bones up` covers all of it. The deletion of `cli/orchestrator.go` is decided; only the relocation surface needs verification.
 
 4. **Scaffold version stamp.** `internal/scaffoldver/scaffoldver.go` writes a version marker. Verify the path it writes to and update accordingly. The scaffold version drift logic in ADR 0035 must continue to work after the move.
 
@@ -192,3 +201,4 @@ The PR is ready to merge when:
 6. `bones tasks status`, `bones swarm join`, `bones apply`, `bones status` all work end-to-end on a fresh post-migration workspace.
 7. The first verb call in a fresh terminal session prints `bones: starting leaf at ...` and proceeds; subsequent calls in the same session are silent (leaf already up).
 8. All 41 source files no longer reference `.orchestrator/` (verified via `grep -rn '\.orchestrator' .` returning only ADR 0041 itself and any historical-mention text inside ADR 0041's body).
+9. **Information hiding holds:** `grep -rn '\.bones/' cli/` returns zero matches outside paths derived from `info.WorkspaceDir` via `internal/workspace` and `internal/hub` helpers. `cli/*.go` files do not build paths like `filepath.Join(workspaceDir, ".bones", "hub-fossil-url")` directly — they call `hub.FossilURL(root)`, `hub.NATSURL(root)`, or read fields off `workspace.Info`. The directory's internal layout is invisible to verbs.
