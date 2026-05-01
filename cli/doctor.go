@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,9 @@ import (
 	"github.com/danmestas/bones/internal/workspace"
 )
 
+// osHostname is a var so tests can override.
+var osHostname = os.Hostname
+
 // DoctorCmd extends EdgeSync's doctor with bones-specific checks. The
 // embedded EdgeSync DoctorCmd runs the base health gate (Go runtime,
 // fossil, NATS reachability, hooks); then this wrapper adds the
@@ -30,12 +34,20 @@ import (
 // participate in Kong parsing.
 type DoctorCmd struct {
 	edgecli.DoctorCmd
+	All     bool `name:"all" help:"check all registered workspaces on this user/host"`
+	Quiet   bool `name:"quiet" short:"q" help:"only show workspaces with issues (with --all)"`
+	Verbose bool `name:"verbose" help:"show all checks including OK rows (with --all)"`
+	JSON    bool `name:"json" help:"emit machine-readable JSON"`
 }
 
 // Run invokes the EdgeSync doctor first; on completion (regardless
 // of pass/warn/fail) it appends a "swarm sessions" section that
 // iterates bones-swarm-sessions and reports each entry's state.
 func (c *DoctorCmd) Run(g *libfossilcli.Globals) (err error) {
+	if c.All {
+		return c.runAll(g)
+	}
+
 	_, end := telemetry.RecordCommand(context.Background(), "doctor")
 	var (
 		baseFailed  bool
@@ -61,6 +73,23 @@ func (c *DoctorCmd) Run(g *libfossilcli.Globals) (err error) {
 		return baseErr
 	}
 	return swarmErr
+}
+
+// runAll dispatches the cross-workspace --all rendering path.
+func (c *DoctorCmd) runAll(_ *libfossilcli.Globals) error {
+	var exitCode int
+	if c.JSON {
+		exitCode = renderDoctorAllJSON(os.Stdout)
+	} else {
+		exitCode = renderDoctorAll(os.Stdout, doctorAllOpts{
+			Quiet:   c.Quiet,
+			Verbose: c.Verbose,
+		})
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("doctor --all: issues found")
+	}
+	return nil
 }
 
 // runTelemetryReport prints the current telemetry status so the
@@ -90,62 +119,83 @@ func (c *DoctorCmd) runTelemetryReport() {
 	}
 }
 
-// runBypassReport prints the ADR-0034 bypass-prevention checks: is
-// the pre-commit hook installed, and does the trunk fossil tip agree
-// with git HEAD. Both are best-effort — failures here do not fail
-// doctor, they surface as WARN so the operator sees the drift before
-// it bites.
+// runBypassReport calls runBypassReportTo with stdout. Kept for the
+// existing call site in DoctorCmd.Run; the warn count is unused in
+// single-workspace mode (the per-line WARN prefix is the signal).
 func (c *DoctorCmd) runBypassReport() {
-	fmt.Println()
-	fmt.Println("=== bones substrate gates (ADR 0034) ===")
-
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Printf("  WARN  cwd: %v\n", err)
 		return
 	}
+	_, _ = runBypassReportTo(os.Stdout, cwd)
+}
+
+// runBypassReportTo is the writer-injection variant of runBypassReport.
+// Returns the count of WARN-class findings emitted (for callers that
+// aggregate across workspaces) plus an error reserved for caller-actionable
+// failures (currently always nil — per-finding errors surface as WARN
+// lines in the output, not return values).
+//
+// The warn count is the source of truth — callers must not scrape it from
+// the output buffer (display format is not a stable interface).
+func runBypassReportTo(w io.Writer, cwd string) (warns int, err error) {
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "=== bones substrate gates (ADR 0034) ===")
 
 	gitDir := githook.FindGitDir(cwd)
 	if gitDir == "" {
-		fmt.Println("  INFO  no .git found — skipping hook check")
+		_, _ = fmt.Fprintln(w, "  INFO  no .git found — skipping hook check")
 	} else {
-		installed, err := githook.IsInstalled(gitDir)
+		installed, hookErr := githook.IsInstalled(gitDir)
 		switch {
-		case err != nil:
-			fmt.Printf("  WARN  hook read failed: %v\n", err)
+		case hookErr != nil:
+			_, _ = fmt.Fprintf(w, "  WARN  hook read failed: %v\n", hookErr)
+			warns++
 		case !installed:
-			fmt.Println("  WARN  pre-commit hook missing — run `bones up` to reinstall")
+			_, _ = fmt.Fprintln(w, "  WARN  pre-commit hook missing — run `bones up` to reinstall")
+			printFix(w, FixForMissingHook())
+			warns++
 		default:
-			fmt.Println("  OK    pre-commit hook installed")
+			_, _ = fmt.Fprintln(w, "  OK    pre-commit hook installed")
 		}
 	}
 
-	stamp, err := scaffoldver.Read(cwd)
+	stamp, stampErr := scaffoldver.Read(cwd)
 	switch {
-	case err != nil:
-		fmt.Printf("  WARN  scaffold stamp read: %v\n", err)
+	case stampErr != nil:
+		_, _ = fmt.Fprintf(w, "  WARN  scaffold stamp read: %v\n", stampErr)
+		warns++
 	case stamp == "":
-		fmt.Println("  INFO  no scaffold version stamp — `bones up` to write one")
+		_, _ = fmt.Fprintln(w, "  INFO  no scaffold version stamp — `bones up` to write one")
 	case scaffoldver.Drifted(stamp, version.Get()):
-		fmt.Printf("  WARN  scaffold v%s, binary v%s — run `bones up` to refresh skills/hooks\n",
+		_, _ = fmt.Fprintf(w,
+			"  WARN  scaffold v%s, binary v%s — run `bones up` to refresh skills/hooks\n",
 			stamp, version.Get())
+		printFix(w, FixForScaffoldDrift())
+		warns++
 	default:
-		fmt.Printf("  OK    scaffold version v%s matches binary\n", stamp)
+		_, _ = fmt.Fprintf(w, "  OK    scaffold version v%s matches binary\n", stamp)
 	}
 
 	switch tip, head, drifted := fossilDrift(cwd); {
 	case tip == "" && head == "":
-		fmt.Println("  INFO  no git or fossil state to compare")
+		_, _ = fmt.Fprintln(w, "  INFO  no git or fossil state to compare")
 	case tip == "":
-		fmt.Println("  INFO  trunk fossil empty — first commit will seed it")
+		_, _ = fmt.Fprintln(w, "  INFO  trunk fossil empty — first commit will seed it")
 	case head == "":
-		fmt.Println("  WARN  cannot read git HEAD — is this a git workspace?")
+		_, _ = fmt.Fprintln(w, "  WARN  cannot read git HEAD — is this a git workspace?")
+		warns++
 	case drifted:
-		fmt.Printf("  WARN  fossil tip (%s) != git HEAD (%s) — re-init bones or apply pending\n",
+		_, _ = fmt.Fprintf(w,
+			"  WARN  fossil tip (%s) != git HEAD (%s) — re-init bones or apply pending\n",
 			short(tip), short(head))
+		printFix(w, FixForFossilDrift())
+		warns++
 	default:
-		fmt.Println("  OK    fossil tip == git HEAD")
+		_, _ = fmt.Fprintln(w, "  OK    fossil tip == git HEAD")
 	}
+	return warns, nil
 }
 
 // fossilDrift reads the fossil trunk tip marker and git HEAD; it
@@ -218,11 +268,18 @@ func (c *DoctorCmd) runSwarmReport() error {
 		fmt.Printf("  WARN  list sessions: %v\n", err)
 		return nil
 	}
+	host, _ := osHostname()
+	formatSwarmSessions(os.Stdout, sessions, host)
+	return nil
+}
+
+// formatSwarmSessions renders the swarm session inventory to w. Adds a
+// Fix line after each WARN-classified entry.
+func formatSwarmSessions(w io.Writer, sessions []swarm.Session, host string) {
 	if len(sessions) == 0 {
-		fmt.Println("  OK    no active swarm sessions")
-		return nil
+		_, _ = fmt.Fprintln(w, "  OK    no active swarm sessions")
+		return
 	}
-	host, _ := os.Hostname()
 	stale := 0
 	remote := 0
 	for _, s := range sessions {
@@ -233,16 +290,22 @@ func (c *DoctorCmd) runSwarmReport() error {
 		if state == "remote" {
 			remote++
 		}
-		fmt.Printf("  %-6s  slot=%-12s task=%s host=%s\n",
+		_, _ = fmt.Fprintf(w, "  %-6s  slot=%-12s task=%s host=%s\n",
 			labelFor(state), s.Slot, truncateID(s.TaskID, 8), s.Host)
+		// Add Fix lines per actionable state.
+		switch state {
+		case "stale", "remote-stale":
+			printFix(w, FixForStaleSlot(s.Slot))
+		case "remote":
+			printFix(w, FixForRemoteSlot(s.Host))
+		}
 	}
 	if stale+remote == 0 {
-		fmt.Printf("  OK    %d active session(s)\n", len(sessions))
+		_, _ = fmt.Fprintf(w, "  OK    %d active session(s)\n", len(sessions))
 	} else {
-		fmt.Printf("  NOTE  %d active, %d remote, %d stale\n",
+		_, _ = fmt.Fprintf(w, "  NOTE  %d active, %d remote, %d stale\n",
 			len(sessions)-stale-remote, remote, stale)
 	}
-	return nil
 }
 
 // classifySwarmSession reuses the same state model swarm status uses

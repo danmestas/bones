@@ -174,6 +174,32 @@ $ bones rename auth-service   # set this workspace's display name
 
 The registry that backs these commands lives at `~/.bones/workspaces/` (one JSON file per running workspace; created when a workspace's hub starts, removed by `bones down`).
 
+### Cross-workspace doctor
+
+`bones doctor --all` runs the standard doctor checks against every registered workspace on this user/host, summarizes results in a table, and aggregates exit codes (non-zero if any workspace has issues):
+
+```
+$ bones doctor --all
+WORKSPACE     HUB   ISSUES
+foo           OK    0
+bar           OK    1
+auth-service  DOWN  1
+
+=== bar (~/projects/bar) ===
+=== bones swarm sessions ===
+  WARN    slot=auth task=t-7c92 host=laptop  last_renewed 12m ago
+        Fix: bones swarm close --slot=auth --result=fail
+
+=== auth-service (~/work/auth) ===
+  WARN  hub down (not responding to HTTP probe)
+        Fix: bones up  # restarts hub for this workspace
+```
+
+Density flags:
+- `-q` / `--quiet` — show only workspaces with issues
+- `-v` / `--verbose` — show all checks including OK rows
+- `--json` — machine-readable output
+
 ## License
 
 Apache-2.0. See `[LICENSE](LICENSE)`.
