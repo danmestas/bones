@@ -43,6 +43,9 @@ go.work.sum
 docs/code-review/
 docs/plans/
 
+# Git worktrees (per-feature isolated checkouts)
+.worktrees/
+
 # Hugo build artifacts (docs site)
 docs/site/public/
 docs/site/resources/

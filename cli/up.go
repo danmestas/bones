@@ -22,7 +22,11 @@ import (
 //
 // Per ADR 0041 the hub is no longer started here. Any verb that needs the
 // hub auto-starts it lazily via workspace.Join.
-func runUp(cwd string) (err error) {
+//
+// Default output is a single confirmation line. With verbose=true, prints
+// per-step status lines. WARN lines from drift / missing-git checks
+// always print because they describe real issues operators must see.
+func runUp(cwd string, verbose bool) (err error) {
 	ctx, end := telemetry.RecordCommand(context.Background(), "bones.up",
 		telemetry.String("workspace_hash", telemetry.WorkspaceHash(cwd)),
 	)
@@ -33,14 +37,18 @@ func runUp(cwd string) (err error) {
 		return fmt.Errorf("workspace: %w", err)
 	}
 	wsDir := info.WorkspaceDir
-	fmt.Printf("up: workspace at %s\n", wsDir)
+	if verbose {
+		fmt.Printf("up: workspace at %s\n", wsDir)
+	}
 
 	if err := scaffoldOrchestrator(wsDir); err != nil {
 		return fmt.Errorf("orchestrator scaffold: %w", err)
 	}
-	fmt.Println("up: orchestrator skills, hooks, and gitignore installed")
+	if verbose {
+		fmt.Println("up: orchestrator skills, hooks, and gitignore installed")
+	}
 
-	if err := installGitHook(wsDir); err != nil {
+	if err := installGitHook(wsDir, verbose); err != nil {
 		return fmt.Errorf("git hook: %w", err)
 	}
 
@@ -52,8 +60,12 @@ func runUp(cwd string) (err error) {
 		fmt.Fprintf(os.Stderr, "up: WARN  %v\n", err)
 	}
 
-	fmt.Println("up: workspace ready. Run any verb (e.g., `bones tasks status`) " +
-		"and the hub will start automatically; or run `bones hub start` now.")
+	if verbose {
+		fmt.Println("up: workspace ready. Run any verb (e.g., `bones tasks status`) " +
+			"and the hub will start automatically; or run `bones hub start` now.")
+	} else {
+		fmt.Printf("up: ready at %s\n", wsDir)
+	}
 	return nil
 }
 
@@ -74,7 +86,11 @@ func initOrJoinWorkspace(ctx context.Context, cwd string) (workspace.Info, error
 // repository's .git/hooks directory. Per ADR 0034, this is the
 // enforcement seam that prevents agents from silently bypassing the
 // shadow trunk.
-func installGitHook(wsDir string) error {
+//
+// The "no .git found" line prints regardless of verbose because it
+// signals a missing enforcement gate the operator should know about.
+// The success line is verbose-only.
+func installGitHook(wsDir string, verbose bool) error {
 	gitDir := githook.FindGitDir(wsDir)
 	if gitDir == "" {
 		fmt.Println("up: no .git found — skipping pre-commit hook install")
@@ -83,7 +99,9 @@ func installGitHook(wsDir string) error {
 	if err := githook.Install(gitDir); err != nil {
 		return err
 	}
-	fmt.Printf("up: pre-commit hook installed at %s/hooks/pre-commit\n", gitDir)
+	if verbose {
+		fmt.Printf("up: pre-commit hook installed at %s/hooks/pre-commit\n", gitDir)
+	}
 	return nil
 }
 
