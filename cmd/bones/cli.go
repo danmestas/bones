@@ -38,4 +38,7 @@ type CLI struct {
 	Init bonescli.InitCmd `cmd:"" group:"plumbing" help:"Create a workspace"`
 	Join bonescli.JoinCmd `cmd:"" group:"plumbing" help:"Locate an existing workspace"`
 	Hub  bonescli.HubCmd  `cmd:"" group:"plumbing" help:"Manage the embedded Fossil + NATS hub"`
+
+	// Internal — hidden from --help, called by bones-managed hooks.
+	SessionMarker bonescli.SessionMarkerCmd `cmd:"" name:"session-marker" hidden:""`
 }
