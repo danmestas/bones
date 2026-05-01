@@ -78,8 +78,8 @@ Two `Hub` symbols, one name, two abstractions.
   **standalone-daemon supervisor**: spawns an external `fossil server`
   via `exec.Cmd`, embeds NATS JetStream, fork-execs for daemonization
   (`BONES_HUB_FOREGROUND`), manages pid files in
-  `.orchestrator/pids/`, redirects child output to
-  `.orchestrator/hub.log`. It is the implementation of
+  `.bones/pids/`, redirects child output to
+  `.bones/hub.log`. It is the implementation of
   `bones hub start --detach`. Stop semantics: signal a recorded pid.
 
 - **`coord.Hub`** (in `internal/coord/hub.go`) is the **embedded

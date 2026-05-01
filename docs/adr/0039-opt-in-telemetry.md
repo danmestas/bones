@@ -58,7 +58,7 @@ No file paths, no error message strings (errors are recorded via OTel's `RecordE
 
 ### Failure mode
 
-Export failures are logged to `.orchestrator/hub.log` and dropped. No retries. Telemetry must never block a bones operation, and a misconfigured endpoint must not cause `bones up` or `bones apply` to fail. Shutdown flushes spans within a 5-second budget; anything still pending at exit is dropped.
+Export failures are logged to `.bones/hub.log` and dropped. No retries. Telemetry must never block a bones operation, and a misconfigured endpoint must not cause `bones up` or `bones apply` to fail. Shutdown flushes spans within a 5-second budget; anything still pending at exit is dropped.
 
 ### `bones doctor` surface
 

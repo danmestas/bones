@@ -16,7 +16,7 @@ The hub is a workspace-scoped daemon with per-workspace dynamic ports.
 
 `hub.Start` defaults to ports `0` (was 8765 / 4222). Resolution order when a port arrives as zero:
 
-1. Read the workspace's recorded URL at `<workspace>/.orchestrator/hub-fossil-url` (or `hub-nats-url`) and reuse the recorded port. Steady-state restarts keep stable URLs.
+1. Read the workspace's recorded URL at `<workspace>/.bones/hub-fossil-url` (or `hub-nats-url`) and reuse the recorded port. Steady-state restarts keep stable URLs.
 2. Allocate a free TCP port via `net.Listen("tcp", "127.0.0.1:0")`.
 
 After resolution, `hub.Start` writes both URL files so consumers can discover the live hub without knowing the allocation policy. `hub.Stop` removes them.
@@ -27,13 +27,13 @@ The `--fossil-port=N` and `--nats-port=N` flags still pin to N when supplied, fo
 
 ### 2. Workspace-scoped lifecycle
 
-The scaffold no longer installs a SessionEnd `hub-shutdown.sh` hook. Hub teardown lives only in `bones down`, the explicit workspace teardown. SessionStart still runs `hub-bootstrap.sh` — it's idempotent, so it acts as a best-effort recovery if the hub crashed or was manually stopped.
+The scaffold no longer installs a SessionEnd hub-shutdown hook. Hub teardown lives only in `bones down`, the explicit workspace teardown. SessionStart still runs `bones up` — it's idempotent, so it acts as a best-effort recovery if the hub crashed or was manually stopped.
 
 A new migration in `mergeSettings` (`migrateSessionEndShutdown`, layered on the existing `pruneHubShutdown` helper) drops the legacy SessionEnd hub-shutdown entry on re-scaffold. The next `bones up` on an existing workspace silently cleans up the stale hook.
 
 ## Consequences
 
-- **Multi-workspace concurrent use works.** Each workspace gets its own ports, recorded in its own `.orchestrator/`. Two `bones up` invocations no longer collide; two Claude sessions in two workspaces no longer fight over port 8765.
+- **Multi-workspace concurrent use works.** Each workspace gets its own ports, recorded in its own `.bones/`. Two `bones up` invocations no longer collide; two Claude sessions in two workspaces no longer fight over port 8765.
 - **Hub lifecycle is single-owner.** `bones up` starts the hub; `bones down` stops it. SessionStart is recovery-only; SessionEnd no longer kills shared state.
 - **URLs are stable across hub restarts.** A `bones hub stop && bones hub start` reuses the recorded port, so consumer URLs don't drift unless the workspace is fully `bones down`'d.
 - **Existing workspaces migrate transparently.** `bones up` rerun on a pre-ADR-0038 workspace prunes the SessionEnd entry and writes URL files on the next hub start.
@@ -45,7 +45,7 @@ A new migration in `mergeSettings` (`migrateSessionEndShutdown`, layered on the 
 
 **Mutex semantics — refuse to start a second workspace while one is up.** Cheaper than dynamic ports, but breaks the user's mental model ("each repo is its own bones") and forces cross-workspace coordination on the user.
 
-**Allocate ports at `bones up` time, store in `.bones/config.json`.** Considered. Rejected because hub state already has its own home (`.orchestrator/`), and tying hub ports to workspace config means re-running `bones up` to recover from a port stuck-in-TIME_WAIT. The recorded-URL-files approach gives the same persistence with cleaner ownership.
+**Allocate ports at `bones up` time, store in `.bones/config.json`.** Considered. Rejected because hub state has its own files alongside config (`hub-fossil-url`, `hub-nats-url`), and tying hub ports to workspace config means re-running `bones up` to recover from a port stuck-in-TIME_WAIT. The recorded-URL-files approach gives the same persistence with cleaner ownership.
 
 **Keep SessionStart as the sole owner (drop hub start from `bones up`).** Considered. Rejected because users expect post-`bones up` to be in a runnable state — `bones doctor`, `bones tasks` (when those move to talk to the hub), and any non-Claude shell access need a hub before SessionStart fires. SessionStart is recovery, not bootstrap.
 
