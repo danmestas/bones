@@ -16,8 +16,12 @@ import (
 func TestRunBypassReportToNoGit(t *testing.T) {
 	var buf bytes.Buffer
 	tmp := t.TempDir()
-	if err := runBypassReportTo(&buf, tmp); err != nil {
+	warns, err := runBypassReportTo(&buf, tmp)
+	if err != nil {
 		t.Fatalf("runBypassReportTo: %v", err)
+	}
+	if warns != 0 {
+		t.Fatalf("expected 0 warns in no-git fixture, got %d", warns)
 	}
 	out := buf.String()
 	// No .git → INFO path; no actionable WARN, so no Fix line expected.

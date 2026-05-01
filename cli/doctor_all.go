@@ -54,20 +54,24 @@ func renderDoctorAll(w io.Writer, opts doctorAllOpts) int {
 	}
 	_ = tw.Flush()
 
-	// Per-workspace details
+	// Per-workspace details. By default and with --quiet, only show
+	// workspaces that have issues. With --verbose, show every workspace
+	// (including OK rows). --quiet additionally suppresses the per-row
+	// header in favor of a one-line tally when nothing's wrong.
 	anyIssue := false
 	for _, r := range results {
 		if r.Issues > 0 {
 			anyIssue = true
 		}
-		if opts.Quiet && r.Issues == 0 {
-			continue
-		}
-		if !opts.Verbose && r.Issues == 0 {
+		if r.Issues == 0 && !opts.Verbose {
 			continue
 		}
 		_, _ = fmt.Fprintf(w, "\n=== %s (%s) ===\n", r.Entry.Name, r.Entry.Cwd)
 		_, _ = fmt.Fprint(w, r.Detail)
+	}
+
+	if opts.Quiet && !anyIssue {
+		_, _ = fmt.Fprintf(w, "\nAll %d workspaces healthy.\n", len(results))
 	}
 
 	if anyIssue {
@@ -102,24 +106,21 @@ func runDoctorPerWorkspace(entries []registry.Entry) []workspaceResult {
 
 // runDoctorOne runs the bypass report for one workspace, capturing output
 // and counting WARN findings. Hub liveness is checked via HTTP probe.
+// Issue count comes from runBypassReportTo's return value, not from
+// scraping the rendered output.
 func runDoctorOne(e registry.Entry) workspaceResult {
 	r := workspaceResult{Entry: e}
 
 	r.HubAlive = isHubAlive(e.HubURL)
 
-	// Capture per-workspace report into a string.
 	var buf strings.Builder
 	if !r.HubAlive {
 		_, _ = fmt.Fprintln(&buf, "  WARN  hub down (not responding to HTTP probe)")
 		printFix(&buf, FixForHubDown())
 		r.Issues++
 	}
-	// Run bypass report against the workspace cwd. Count only the new WARNs
-	// it adds (not the hub-down WARN we already counted above).
-	preLen := buf.Len()
-	_ = runBypassReportTo(&buf, e.Cwd)
-	bypass := buf.String()[preLen:]
-	r.Issues += strings.Count(bypass, "  WARN  ")
+	bypassWarns, _ := runBypassReportTo(&buf, e.Cwd)
+	r.Issues += bypassWarns
 	r.Detail = buf.String()
 	return r
 }

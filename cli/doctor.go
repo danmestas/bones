@@ -120,20 +120,26 @@ func (c *DoctorCmd) runTelemetryReport() {
 }
 
 // runBypassReport calls runBypassReportTo with stdout. Kept for the
-// existing call site in DoctorCmd.Run.
+// existing call site in DoctorCmd.Run; the warn count is unused in
+// single-workspace mode (the per-line WARN prefix is the signal).
 func (c *DoctorCmd) runBypassReport() {
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Printf("  WARN  cwd: %v\n", err)
 		return
 	}
-	_ = runBypassReportTo(os.Stdout, cwd)
+	_, _ = runBypassReportTo(os.Stdout, cwd)
 }
 
 // runBypassReportTo is the writer-injection variant of runBypassReport.
-// Returns error only on caller-actionable failures (currently: none —
-// all errors surface as WARN lines in the output).
-func runBypassReportTo(w io.Writer, cwd string) error {
+// Returns the count of WARN-class findings emitted (for callers that
+// aggregate across workspaces) plus an error reserved for caller-actionable
+// failures (currently always nil — per-finding errors surface as WARN
+// lines in the output, not return values).
+//
+// The warn count is the source of truth — callers must not scrape it from
+// the output buffer (display format is not a stable interface).
+func runBypassReportTo(w io.Writer, cwd string) (warns int, err error) {
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "=== bones substrate gates (ADR 0034) ===")
 
@@ -141,22 +147,25 @@ func runBypassReportTo(w io.Writer, cwd string) error {
 	if gitDir == "" {
 		_, _ = fmt.Fprintln(w, "  INFO  no .git found — skipping hook check")
 	} else {
-		installed, err := githook.IsInstalled(gitDir)
+		installed, hookErr := githook.IsInstalled(gitDir)
 		switch {
-		case err != nil:
-			_, _ = fmt.Fprintf(w, "  WARN  hook read failed: %v\n", err)
+		case hookErr != nil:
+			_, _ = fmt.Fprintf(w, "  WARN  hook read failed: %v\n", hookErr)
+			warns++
 		case !installed:
 			_, _ = fmt.Fprintln(w, "  WARN  pre-commit hook missing — run `bones up` to reinstall")
 			printFix(w, FixForMissingHook())
+			warns++
 		default:
 			_, _ = fmt.Fprintln(w, "  OK    pre-commit hook installed")
 		}
 	}
 
-	stamp, err := scaffoldver.Read(cwd)
+	stamp, stampErr := scaffoldver.Read(cwd)
 	switch {
-	case err != nil:
-		_, _ = fmt.Fprintf(w, "  WARN  scaffold stamp read: %v\n", err)
+	case stampErr != nil:
+		_, _ = fmt.Fprintf(w, "  WARN  scaffold stamp read: %v\n", stampErr)
+		warns++
 	case stamp == "":
 		_, _ = fmt.Fprintln(w, "  INFO  no scaffold version stamp — `bones up` to write one")
 	case scaffoldver.Drifted(stamp, version.Get()):
@@ -164,6 +173,7 @@ func runBypassReportTo(w io.Writer, cwd string) error {
 			"  WARN  scaffold v%s, binary v%s — run `bones up` to refresh skills/hooks\n",
 			stamp, version.Get())
 		printFix(w, FixForScaffoldDrift())
+		warns++
 	default:
 		_, _ = fmt.Fprintf(w, "  OK    scaffold version v%s matches binary\n", stamp)
 	}
@@ -175,15 +185,17 @@ func runBypassReportTo(w io.Writer, cwd string) error {
 		_, _ = fmt.Fprintln(w, "  INFO  trunk fossil empty — first commit will seed it")
 	case head == "":
 		_, _ = fmt.Fprintln(w, "  WARN  cannot read git HEAD — is this a git workspace?")
+		warns++
 	case drifted:
 		_, _ = fmt.Fprintf(w,
 			"  WARN  fossil tip (%s) != git HEAD (%s) — re-init bones or apply pending\n",
 			short(tip), short(head))
 		printFix(w, FixForFossilDrift())
+		warns++
 	default:
 		_, _ = fmt.Fprintln(w, "  OK    fossil tip == git HEAD")
 	}
-	return nil
+	return warns, nil
 }
 
 // fossilDrift reads the fossil trunk tip marker and git HEAD; it
