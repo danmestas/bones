@@ -31,6 +31,7 @@ type SwarmCloseCmd struct {
 	Rev        string `name:"rev" help:"only with --result=fork: rev"`
 	HubURL     string `name:"hub-url" help:"override hub fossil HTTP URL"`
 	NoArtifact string `name:"no-artifact" help:"reason for closing success without a commit"`
+	KeepWT     bool   `name:"keep-wt" help:"retain wt dir on success (default: remove)"`
 }
 
 func (c *SwarmCloseCmd) Run(g *libfossilcli.Globals) error {
@@ -65,6 +66,7 @@ func (c *SwarmCloseCmd) Run(g *libfossilcli.Globals) error {
 	closeOpts := swarm.CloseOpts{
 		CloseTaskOnSuccess: c.Result == string(dispatch.ResultSuccess),
 		NoArtifact:         c.NoArtifact,
+		KeepWT:             c.KeepWT,
 	}
 	if err := lease.Close(ctx, closeOpts); err != nil {
 		return fmt.Errorf("swarm close: %w", err)

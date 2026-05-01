@@ -196,6 +196,15 @@ type CloseOpts struct {
 	// operator-driven close ("subagent reported done"). No effect
 	// on the cleanup mechanics.
 	Reaped bool
+
+	// KeepWT, when true, retains the per-slot worktree directory
+	// even on a successful close. Default behavior (KeepWT=false
+	// + CloseTaskOnSuccess=true) removes the wt so it does not
+	// accumulate across cycles. Failed and forked closes
+	// (CloseTaskOnSuccess=false) always retain wt regardless of
+	// this flag — the operator may need to inspect what the slot
+	// left behind.
+	KeepWT bool
 }
 
 // leaseBase holds the fields shared by FreshLease and ResumedLease.
@@ -662,6 +671,13 @@ func (l *ResumedLease) Close(ctx context.Context, opts CloseOpts) error {
 		return err
 	}
 	l.teardown()
+	if opts.CloseTaskOnSuccess && !opts.KeepWT {
+		// Best-effort idempotent removal: missing wt is fine. A
+		// permission-style error would propagate via os.RemoveAll's
+		// own retry semantics; in practice the slot's leaf is the
+		// only writer and it is stopped by teardown above.
+		_ = os.RemoveAll(SlotWorktree(l.info.WorkspaceDir, l.slot))
+	}
 	result := "fail"
 	if opts.CloseTaskOnSuccess {
 		result = "success"
