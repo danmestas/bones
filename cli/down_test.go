@@ -2,10 +2,14 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/danmestas/bones/internal/registry"
 )
 
 // TestRemoveBonesHooks_RemovesScaffoldedHooks pins the surgical-edit
@@ -240,28 +244,38 @@ func TestRemoveBonesHooks_MissingFile(t *testing.T) {
 	}
 }
 
-// TestPlanDown_EmptyTree: on a tree without bones state, the only
-// queued action is the always-on hub stop (best-effort, no-op when
-// the hub isn't running). Per ADR 0041, planStopHub no longer probes
-// for a script — it always queues hub.Stop.
+// TestPlanDown_EmptyTree: on a tree without bones state, the always-on
+// actions are hub stop and registry removal (both best-effort, no-ops when
+// nothing is running). Per ADR 0041, planStopHub no longer probes for a
+// script — it always queues hub.Stop.
 func TestPlanDown_EmptyTree(t *testing.T) {
 	dir := t.TempDir()
 	plan := planDown(dir, &DownCmd{})
-	if len(plan) != 1 {
-		t.Fatalf("empty tree plan: got %d actions, want 1 (hub stop):\n%+v", len(plan), plan)
+	if len(plan) != 2 {
+		t.Fatalf("empty tree plan: got %d actions, want 2 (hub stop + registry remove):\n%+v",
+			len(plan), plan)
 	}
-	if !strings.Contains(plan[0].description, "stop hub") {
-		t.Errorf("only action should be hub stop; got %q", plan[0].description)
+	descs := plan[0].description + "\n" + plan[1].description
+	if !strings.Contains(descs, "stop hub") {
+		t.Errorf("plan missing hub stop; got:\n%s", descs)
+	}
+	if !strings.Contains(descs, "registry entry") {
+		t.Errorf("plan missing registry remove; got:\n%s", descs)
 	}
 }
 
-// TestPlanDown_EmptyTree_KeepHub: --keep-hub suppresses the stop-hub
-// action, leaving an empty plan on a clean tree.
+// TestPlanDown_EmptyTree_KeepHub: --keep-hub suppresses the stop-hub action.
+// Registry removal is always-on (independent of hub lifecycle), so the plan
+// still contains the registry-remove action.
 func TestPlanDown_EmptyTree_KeepHub(t *testing.T) {
 	dir := t.TempDir()
 	plan := planDown(dir, &DownCmd{KeepHub: true})
-	if len(plan) != 0 {
-		t.Errorf("KeepHub on empty tree should give empty plan; got:\n%+v", plan)
+	if len(plan) != 1 {
+		t.Fatalf("KeepHub on empty tree: got %d actions, want 1 (registry remove):\n%+v",
+			len(plan), plan)
+	}
+	if !strings.Contains(plan[0].description, "registry entry") {
+		t.Errorf("only action should be registry remove; got %q", plan[0].description)
 	}
 }
 
@@ -287,6 +301,7 @@ func TestPlanDown_FullInstall(t *testing.T) {
 	joined := strings.Join(descs, "\n")
 	wants := []string{
 		"stop hub",
+		"registry entry",
 		".bones",
 		".orchestrator",
 		".claude/skills/orchestrator",
@@ -375,6 +390,57 @@ func TestRunDown_DryRun(t *testing.T) {
 	}
 	if !dirExists(filepath.Join(dir, ".bones")) {
 		t.Errorf(".bones/ removed during --dry-run")
+	}
+}
+
+// TestDownAllInvokesPerWorkspace: runAll with --yes tears down every
+// registered workspace and removes their registry entries.
+func TestDownAllInvokesPerWorkspace(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ws1 := t.TempDir()
+	ws2 := t.TempDir()
+	now := time.Now().UTC()
+	for _, ws := range []string{ws1, ws2} {
+		if err := registry.Write(registry.Entry{
+			Cwd: ws, Name: filepath.Base(ws), HubPID: os.Getpid(), StartedAt: now,
+		}); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	cmd := &DownCmd{Yes: true, KeepHub: true, All: true}
+	if err := cmd.runAll(); err != nil {
+		t.Fatalf("runAll: %v", err)
+	}
+	for _, ws := range []string{ws1, ws2} {
+		if _, err := registry.Read(ws); !errors.Is(err, registry.ErrNotFound) {
+			t.Fatalf("expected registry entry removed for %s, got %v", ws, err)
+		}
+	}
+}
+
+// TestDownRemovesRegistry: runDown removes the workspace registry entry
+// when one exists. Uses --keep-hub to avoid touching hub processes.
+func TestDownRemovesRegistry(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	wsDir := t.TempDir()
+
+	// Seed a registry entry for this workspace.
+	if err := registry.Write(registry.Entry{
+		Cwd:       wsDir,
+		Name:      "test",
+		HubPID:    os.Getpid(),
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed registry: %v", err)
+	}
+
+	cmd := &DownCmd{Yes: true, KeepHub: true}
+	if err := runDown(wsDir, cmd, strings.NewReader("")); err != nil {
+		t.Fatalf("runDown: %v", err)
+	}
+
+	if _, err := registry.Read(wsDir); !errors.Is(err, registry.ErrNotFound) {
+		t.Fatalf("expected registry entry removed, got %v", err)
 	}
 }
 

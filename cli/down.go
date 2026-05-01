@@ -14,6 +14,8 @@ import (
 
 	"github.com/danmestas/bones/internal/githook"
 	"github.com/danmestas/bones/internal/hub"
+	"github.com/danmestas/bones/internal/registry"
+	"github.com/danmestas/bones/internal/sessions"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
@@ -32,18 +34,61 @@ type DownCmd struct {
 	KeepHooks  bool `name:"keep-hooks" help:"do not edit .claude/settings.json"`
 	KeepHub    bool `name:"keep-hub" help:"do not stop hub or remove .orchestrator/"`
 	DryRun     bool `name:"dry-run" help:"print plan without executing"`
+	All        bool `name:"all" help:"tear down all registered workspaces"`
 }
 
 // Run is the Kong entry point. Resolves the workspace root (walking
 // up from cwd if a marker exists, falling back to cwd otherwise),
 // builds an execution plan, prompts unless --yes, and executes.
 func (c *DownCmd) Run(g *libfossilcli.Globals) error {
+	if c.All {
+		return c.runAll()
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("cwd: %w", err)
 	}
 	root := resolveDownRoot(cwd)
 	return runDown(root, c, os.Stdin)
+}
+
+// runAll iterates the workspace registry and tears each down. Prints
+// a summary, prompts unless --yes, then invokes runDown per workspace.
+func (c *DownCmd) runAll() error {
+	entries, err := registry.List()
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		fmt.Println("No workspaces running.")
+		return nil
+	}
+	fmt.Println("Will stop:")
+	for _, e := range entries {
+		fmt.Printf("  %-20s %s   sessions=%d\n",
+			e.Name, e.Cwd, sessions.CountByWorkspace(e.Cwd))
+	}
+	fmt.Printf("\n%d workspaces will be terminated.\n", len(entries))
+
+	if !c.Yes {
+		if !confirm(os.Stdin, "Continue?") {
+			return errors.New("down --all: aborted")
+		}
+	}
+
+	var firstErr error
+	for _, e := range entries {
+		single := *c
+		single.All = false
+		single.Yes = true
+		if err := runDown(e.Cwd, &single, os.Stdin); err != nil {
+			fmt.Fprintf(os.Stderr, "  %s: %v\n", e.Name, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
 }
 
 // resolveDownRoot returns the workspace root to operate on. Tries
@@ -113,6 +158,7 @@ type downAction struct {
 func planDown(root string, c *DownCmd) []downAction {
 	var plan []downAction
 	plan = append(plan, planStopHub(root, c)...)
+	plan = append(plan, planRemoveRegistry(root)...)
 	plan = append(plan, planRemoveGitHook(root)...)
 	plan = append(plan, planRemoveBonesDir(root)...)
 	plan = append(plan, planRemoveOrchestrator(root, c)...)
@@ -155,6 +201,16 @@ func planStopHub(root string, c *DownCmd) []downAction {
 			_ = hub.Stop(root)
 			return nil
 		},
+	}}
+}
+
+// planRemoveRegistry removes the workspace's cross-workspace registry entry.
+// Idempotent (no-op if no entry exists). Best-effort — failure doesn't block
+// other teardown actions.
+func planRemoveRegistry(root string) []downAction {
+	return []downAction{{
+		description: "remove registry entry for " + root,
+		do:          func() error { return registry.Remove(root) },
 	}}
 }
 

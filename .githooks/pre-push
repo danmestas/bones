@@ -6,5 +6,8 @@
 
 set -e
 echo "[pre-push] running make ci-fast..."
+# Hooks inherit GIT_DIR/GIT_WORK_TREE from git; clear them so
+# git rev-parse resolves the work tree from cwd, not the env.
+unset GIT_DIR GIT_WORK_TREE
 cd "$(git rev-parse --show-toplevel)"
 make ci-fast

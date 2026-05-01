@@ -19,6 +19,8 @@ type CLI struct {
 	Tasks  bonescli.TasksCmd  `cmd:"" group:"daily" help:"Inspect and mutate runtime agent tasks"`
 	Swarm  bonescli.SwarmCmd  `cmd:"" group:"daily" help:"Run as a slot-shaped swarm participant"`
 	Apply  bonescli.ApplyCmd  `cmd:"" group:"daily" help:"Materialize hub trunk into git tree"`
+	Env    bonescli.EnvCmd    `cmd:"" group:"daily" help:"Emit shell exports for current workspace"`
+	Rename bonescli.RenameCmd `cmd:"" group:"daily" help:"Set workspace display name"`
 
 	// Repository.
 	Repo libfossilcli.RepoCmd `cmd:"" group:"repo" help:"Fossil repository operations"`
@@ -38,4 +40,7 @@ type CLI struct {
 	Init bonescli.InitCmd `cmd:"" group:"plumbing" help:"Create a workspace"`
 	Join bonescli.JoinCmd `cmd:"" group:"plumbing" help:"Locate an existing workspace"`
 	Hub  bonescli.HubCmd  `cmd:"" group:"plumbing" help:"Manage the embedded Fossil + NATS hub"`
+
+	// Internal — hidden from --help, called by bones-managed hooks.
+	SessionMarker bonescli.SessionMarkerCmd `cmd:"" name:"session-marker" hidden:""`
 }

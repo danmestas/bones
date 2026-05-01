@@ -104,6 +104,76 @@ From inside Claude Code: ask it to "uninstall bones" — the bundled `uninstall-
 
 Remove the binary: `brew uninstall bones` (or delete `$(go env GOPATH)/bin/bones` if you `go install`ed).
 
+## Shell prompt integration
+
+`bones env` prints shell-export statements for `BONES_WORKSPACE` and `BONES_WORKSPACE_CWD`. Wire it into your shell's prompt hook so the env vars stay in sync as you `cd` between workspaces.
+
+### zsh (`~/.zshrc`)
+
+```zsh
+_bones_env_hook() { eval "$(bones env)"; }
+typeset -ag precmd_functions
+precmd_functions+=(_bones_env_hook)
+```
+
+### bash (`~/.bashrc`)
+
+```bash
+PROMPT_COMMAND='eval "$(bones env)"'
+```
+
+### fish (`~/.config/fish/conf.d/bones.fish`)
+
+```fish
+function _bones_env_hook --on-event fish_prompt
+    bones env --shell=fish | source
+end
+```
+
+### Prompt theme integration
+
+Once `BONES_WORKSPACE` is exported, themes read it directly.
+
+**Starship** (`~/.config/starship.toml`):
+
+```toml
+[env_var.BONES_WORKSPACE]
+format = "[$env_value](bold yellow) "
+```
+
+**Powerlevel10k** — define a custom segment:
+
+```zsh
+function prompt_bones_workspace() {
+    [[ -n "$BONES_WORKSPACE" ]] && p10k segment -t "$BONES_WORKSPACE" -f yellow
+}
+```
+
+Then add `bones_workspace` to your `POWERLEVEL9K_RIGHT_PROMPT_ELEMENTS` (or `_LEFT_`).
+
+**Plain bash/zsh:**
+
+```bash
+PS1='[${BONES_WORKSPACE:-no-bones}] \w $ '
+```
+
+## Cross-workspace commands
+
+When running bones across multiple workspaces in parallel (e.g., 6 terminals on 3 different repos), these commands give a global view from any terminal:
+
+```
+$ bones status --all
+WORKSPACE          PATH                HUB    SESSIONS  UPTIME
+foo                ~/projects/foo      :8765  6         2h
+bar                ~/projects/bar      :8766  3         45m
+auth-service       ~/work/auth         :8767  1         10m
+
+$ bones down --all      # tear down every registered workspace (prompts unless --yes)
+$ bones rename auth-service   # set this workspace's display name
+```
+
+The registry that backs these commands lives at `~/.bones/workspaces/` (one JSON file per running workspace; created when a workspace's hub starts, removed by `bones down`).
+
 ## License
 
 Apache-2.0. See `[LICENSE](LICENSE)`.

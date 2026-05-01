@@ -43,6 +43,8 @@ A new migration in `mergeSettings` (`migrateSessionEndShutdown`, layered on the 
 
 **Single global hub multiplexing all workspaces.** Rejected. Cross-workspace NATS subject routing would invade every consumer; the workspace-as-isolation-unit story matches the existing design (per-workspace fossil, per-workspace pid files, per-workspace .bones/).
 
+> **Future supersession trigger:** The "cross-workspace NATS subject routing" objection is solvable via JetStream `domain=` and per-account isolation. See `docs/superpowers/specs/2026-05-01-cross-workspace-identity-design.md` (Future Direction section) for the leaf-node topology that revisits this decision when cross-machine, real-time, or multi-user becomes a forcing function.
+
 **Mutex semantics — refuse to start a second workspace while one is up.** Cheaper than dynamic ports, but breaks the user's mental model ("each repo is its own bones") and forces cross-workspace coordination on the user.
 
 **Allocate ports at `bones up` time, store in `.bones/config.json`.** Considered. Rejected because hub state has its own files alongside config (`hub-fossil-url`, `hub-nats-url`), and tying hub ports to workspace config means re-running `bones up` to recover from a port stuck-in-TIME_WAIT. The recorded-URL-files approach gives the same persistence with cleaner ownership.

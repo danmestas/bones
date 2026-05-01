@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -15,16 +16,19 @@ import (
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
 	"github.com/danmestas/bones/internal/hub"
+	"github.com/danmestas/bones/internal/registry"
+	"github.com/danmestas/bones/internal/sessions"
 	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/tasks"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
 // StatusCmd renders a one-shot snapshot of the workspace combining
-// NATS task/session state with the hub fossil timeline. No flags yet
-// — the v1 tracer bullet is fixed-shape so we can iterate on layout
-// against real data before pinning a JSON schema or filter knobs.
-type StatusCmd struct{}
+// NATS task/session state with the hub fossil timeline.
+type StatusCmd struct {
+	All  bool `name:"all" help:"show status across all workspaces on this user/host"`
+	JSON bool `name:"json" help:"emit machine-readable JSON"`
+}
 
 // activityKind is a small enum for event sources in the unified feed.
 // Symbols below are paired with each kind in renderActivity.
@@ -74,6 +78,12 @@ type activityEvent struct {
 }
 
 func (c *StatusCmd) Run(g *libfossilcli.Globals) error {
+	if c.All {
+		if c.JSON {
+			return renderStatusAllJSON(os.Stdout)
+		}
+		return renderStatusAll(os.Stdout)
+	}
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
 		return err
@@ -351,4 +361,102 @@ func truncateTitle(s string, n int) string {
 		return s
 	}
 	return s[:n-1] + "…"
+}
+
+// renderStatusAll iterates the workspace registry, prunes stale entries
+// in place (live-only semantics), and prints a table summarizing every
+// running workspace on this user/host.
+func renderStatusAll(w io.Writer) error {
+	entries, err := registry.List()
+	if err != nil {
+		return err
+	}
+	live := entries[:0]
+	for _, e := range entries {
+		if registry.IsAlive(e) {
+			live = append(live, e)
+		} else {
+			_ = registry.Remove(e.Cwd)
+		}
+	}
+	if len(live) == 0 {
+		_, err := io.WriteString(w, "No workspaces running. Use 'bones up' in a project.\n")
+		return err
+	}
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "WORKSPACE\tPATH\tHUB\tSESSIONS\tUPTIME"); err != nil {
+		return err
+	}
+	for _, e := range live {
+		_, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n",
+			e.Name,
+			shortenHome(e.Cwd),
+			extractPort(e.HubURL),
+			sessions.CountByWorkspace(e.Cwd),
+			humanDuration(time.Since(e.StartedAt)),
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
+}
+
+// renderStatusAllJSON emits a JSON object with a "workspaces" array
+// covering every live registry entry.
+func renderStatusAllJSON(w io.Writer) error {
+	entries, err := registry.List()
+	if err != nil {
+		return err
+	}
+	live := entries[:0]
+	for _, e := range entries {
+		if registry.IsAlive(e) {
+			live = append(live, e)
+		} else {
+			_ = registry.Remove(e.Cwd)
+		}
+	}
+	type row struct {
+		Cwd       string    `json:"cwd"`
+		Name      string    `json:"name"`
+		HubURL    string    `json:"hub_url"`
+		Sessions  int       `json:"sessions"`
+		StartedAt time.Time `json:"started_at"`
+	}
+	rows := make([]row, len(live))
+	for i, e := range live {
+		rows[i] = row{e.Cwd, e.Name, e.HubURL, sessions.CountByWorkspace(e.Cwd), e.StartedAt}
+	}
+	return json.NewEncoder(w).Encode(struct {
+		Workspaces []row `json:"workspaces"`
+	}{rows})
+}
+
+// shortenHome replaces the user's $HOME prefix with ~ for table display.
+func shortenHome(p string) string {
+	if home := os.Getenv("HOME"); home != "" && strings.HasPrefix(p, home) {
+		return "~" + p[len(home):]
+	}
+	return p
+}
+
+// extractPort returns ":8765" given "http://127.0.0.1:8765".
+func extractPort(url string) string {
+	idx := strings.LastIndex(url, ":")
+	if idx < 0 {
+		return url
+	}
+	return url[idx:]
+}
+
+// humanDuration formats a duration as an approximate "Xs/Xm/Xh" string.
+func humanDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	return fmt.Sprintf("%dh", int(d.Hours()))
 }
