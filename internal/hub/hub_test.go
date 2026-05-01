@@ -187,11 +187,26 @@ func waitForPidLive(pidFile string, timeout time.Duration) bool {
 	return false
 }
 
-// mustRun executes cmd in dir and t.Fatalfs on any error.
+// mustRun executes cmd in dir and t.Fatalfs on any error. For `git`
+// invocations, dir is also stamped into GIT_DIR / GIT_WORK_TREE /
+// GIT_CEILING_DIRECTORIES so a test fixture cannot accidentally bind
+// to an ancestor repository's `.git`. See issue #106 for the bug this
+// defends against (test commits leaking into the parent worktree).
 func mustRun(t *testing.T, dir, name string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
+	if name == "git" {
+		cmd.Env = append(os.Environ(),
+			"GIT_CEILING_DIRECTORIES="+dir,
+			"GIT_DIR="+filepath.Join(dir, ".git"),
+			"GIT_WORK_TREE="+dir,
+			"GIT_AUTHOR_NAME=t",
+			"GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t",
+			"GIT_COMMITTER_EMAIL=t@t",
+		)
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%s %v: %v\n%s", name, args, err, out)
 	}

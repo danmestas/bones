@@ -208,11 +208,126 @@ func mustRunIn(t *testing.T, dir, name string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "USER=u")
+	cmd.Env = sandboxedEnv(name, dir)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s %v in %s: %v\n%s", name, args, dir, err, out)
 	}
+}
+
+// TestSandboxedEnv_OverridesAncestorGitDir is the regression test for
+// issue #106. The bug was that test commits leaked into a parent
+// worktree's branch when something pointed git at the wrong .git
+// (cwd race in parallel tests, an inherited GIT_DIR env var, or
+// git's ancestor-walk landing on a parent worktree's git database).
+//
+// This test simulates the smoking-gun case directly: an ancestor
+// repository exists, the test runner's environment leaks GIT_DIR
+// pointing at it, and the fixture runs anyway. With sandboxedEnv's
+// explicit GIT_DIR override, the fixture's commit MUST land in its
+// own tempdir, not in the leaked target.
+//
+// Removing the env-var lines from sandboxedEnv reproduces the
+// original bug — the fixture's commit advances the parent's HEAD.
+func TestSandboxedEnv_OverridesAncestorGitDir(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+
+	// Build an "ancestor" repo whose .git we'll point GIT_DIR at to
+	// simulate the leak.
+	ancestor := t.TempDir()
+	rawGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = ancestor
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=ancestor",
+			"GIT_AUTHOR_EMAIL=a@a",
+			"GIT_COMMITTER_NAME=ancestor",
+			"GIT_COMMITTER_EMAIL=a@a",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	rawGit("init", "-q")
+	must(t, os.WriteFile(filepath.Join(ancestor, "ancestor.txt"), []byte("a"), 0o644))
+	rawGit("add", "ancestor.txt")
+	rawGit("commit", "-q", "-m", "ancestor-init")
+
+	ancestorHead, err := exec.Command("git", "-C", ancestor,
+		"rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("rev-parse ancestor: %v", err)
+	}
+
+	// Smoking-gun setup: leak GIT_DIR pointing at the ancestor's .git
+	// into our process env. Without the sandbox, every subsequent git
+	// command would honor this and operate on the ancestor's repo.
+	t.Setenv("GIT_DIR", filepath.Join(ancestor, ".git"))
+	t.Setenv("GIT_WORK_TREE", ancestor)
+
+	// Now run the standard fixture in a fresh tempdir. mustRunIn calls
+	// sandboxedEnv which is supposed to override the leaked env.
+	dir := t.TempDir()
+	mustRunIn(t, dir, "git", "init", "-q")
+	must(t, os.WriteFile(filepath.Join(dir, "child.txt"), []byte("c"), 0o644))
+	mustRunIn(t, dir, "git", "add", "child.txt")
+	mustRunIn(t, dir, "git", "commit", "-q", "-m", "child-init")
+
+	// Ancestor must be untouched. Use raw git (with our leaked env) so
+	// we read from the ancestor regardless.
+	ancestorHeadAfter, err := exec.Command("git", "-C", ancestor,
+		"rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("rev-parse ancestor after fixture: %v", err)
+	}
+	if string(ancestorHead) != string(ancestorHeadAfter) {
+		t.Errorf(
+			"ancestor HEAD moved — sandbox did not override leaked GIT_DIR.\n"+
+				"  before: %s  after:  %s",
+			ancestorHead, ancestorHeadAfter)
+	}
+
+	// And the child fixture's commit landed in its own tempdir.
+	childGit := filepath.Join(dir, ".git")
+	if _, err := os.Stat(childGit); err != nil {
+		t.Errorf("child .git not created at %s: %v", childGit, err)
+	}
+}
+
+// sandboxedEnv returns the env for a test-fixture command pinned to dir.
+// For `git`, the env defeats repository-discovery walks that previously
+// caused test commits to leak into a parent worktree's branch — issue
+// #106 documents the corruption mode. Three knobs together:
+//
+//   - GIT_CEILING_DIRECTORIES refuses ancestor-walks above dir, so
+//     `git -C dir <verb>` cannot accidentally bind to the test runner's
+//     own repo when dir's .git is missing or partially-initialized.
+//   - GIT_DIR / GIT_WORK_TREE pin the active repo unambiguously. Even
+//     if a verb runs from a different cwd via test-runner cwd races, it
+//     still operates on the dir we own.
+//   - GIT_AUTHOR_/COMMITTER_ make commit identity load-bearing and
+//     overrideable in one place; individual `-c user.name=t` flags stop
+//     mattering, and any leaked commit still attributes to `t <t@t>`
+//     for grep-ability.
+//
+// USER=u is for fossil's identity; harmless for git.
+func sandboxedEnv(name, dir string) []string {
+	env := append(os.Environ(), "USER=u")
+	if name != "git" {
+		return env
+	}
+	return append(env,
+		"GIT_CEILING_DIRECTORIES="+dir,
+		"GIT_DIR="+filepath.Join(dir, ".git"),
+		"GIT_WORK_TREE="+dir,
+		"GIT_AUTHOR_NAME=t",
+		"GIT_AUTHOR_EMAIL=t@t",
+		"GIT_COMMITTER_NAME=t",
+		"GIT_COMMITTER_EMAIL=t@t",
+	)
 }
 
 func equalStringSets(a, b []string) bool {
