@@ -506,6 +506,150 @@ func TestClose_RefusesSuccessWithoutCommit(t *testing.T) {
 	}
 }
 
+// TestClose_RemovesWTOnSuccess pins the fix for #120: a successful
+// close must remove the per-slot worktree directory so it does not
+// accumulate across cycles. KV record + pid file removal are
+// covered by TestClose_DeletesRecordAndPidFile; this test is
+// scoped to the wt path.
+func TestClose_RemovesWTOnSuccess(t *testing.T) {
+	f := newLeaseFixture(t)
+	holdPath := filepath.Join(f.dir, "wtremove", "hello.txt")
+	taskID := string(f.createTask(t, "wtremove-task-1", holdPath))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	first, err := Acquire(ctx, f.info, "wtremove", taskID, AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	wt := SlotWorktree(f.dir, "wtremove")
+	if _, err := os.Stat(wt); err != nil {
+		t.Fatalf("pre-Close wt missing: %v", err)
+	}
+	if err := first.Release(ctx); err != nil {
+		t.Fatalf("Release after Acquire: %v", err)
+	}
+
+	resumed, err := Resume(ctx, f.info, "wtremove", AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if err := resumed.Close(ctx, CloseOpts{
+		CloseTaskOnSuccess: true,
+		NoArtifact:         "test: covers wt-removal path",
+	}); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Errorf("wt should be gone after success Close: stat err=%v", err)
+	}
+}
+
+// TestClose_RetainsWTOnFail pins the asymmetry: a failed close must
+// leave the per-slot worktree on disk so the operator can inspect
+// what the slot left behind. fork results follow the same retention
+// rule by virtue of CloseTaskOnSuccess=false.
+func TestClose_RetainsWTOnFail(t *testing.T) {
+	f := newLeaseFixture(t)
+	holdPath := filepath.Join(f.dir, "wtfail", "hello.txt")
+	taskID := string(f.createTask(t, "wtfail-task-1", holdPath))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	first, err := Acquire(ctx, f.info, "wtfail", taskID, AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if err := first.Release(ctx); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	resumed, err := Resume(ctx, f.info, "wtfail", AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if err := resumed.Close(ctx, CloseOpts{CloseTaskOnSuccess: false}); err != nil {
+		t.Fatalf("Close fail: %v", err)
+	}
+	wt := SlotWorktree(f.dir, "wtfail")
+	if _, err := os.Stat(wt); err != nil {
+		t.Errorf("wt should be retained after fail Close: %v", err)
+	}
+}
+
+// TestClose_KeepWTOnSuccess pins the forensics opt-out: a successful
+// close with CloseOpts.KeepWT=true must retain the worktree even
+// when CloseTaskOnSuccess=true.
+func TestClose_KeepWTOnSuccess(t *testing.T) {
+	f := newLeaseFixture(t)
+	holdPath := filepath.Join(f.dir, "wtkeep", "hello.txt")
+	taskID := string(f.createTask(t, "wtkeep-task-1", holdPath))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	first, err := Acquire(ctx, f.info, "wtkeep", taskID, AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if err := first.Release(ctx); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	resumed, err := Resume(ctx, f.info, "wtkeep", AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if err := resumed.Close(ctx, CloseOpts{
+		CloseTaskOnSuccess: true,
+		NoArtifact:         "test: covers keep-wt path",
+		KeepWT:             true,
+	}); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	wt := SlotWorktree(f.dir, "wtkeep")
+	if _, err := os.Stat(wt); err != nil {
+		t.Errorf("wt should be retained when KeepWT=true: %v", err)
+	}
+}
+
+// TestClose_IdempotentMissingWT pins the close-converges contract
+// for the wt-removal step: a close on a slot whose wt was already
+// removed (e.g. by a crashed prior close, or manual cleanup) must
+// still succeed without error.
+func TestClose_IdempotentMissingWT(t *testing.T) {
+	f := newLeaseFixture(t)
+	holdPath := filepath.Join(f.dir, "wtmissing", "hello.txt")
+	taskID := string(f.createTask(t, "wtmissing-task-1", holdPath))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	first, err := Acquire(ctx, f.info, "wtmissing", taskID, AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if err := first.Release(ctx); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	// Pre-remove the wt so Close must converge through a missing-dir
+	// state rather than treating it as an error.
+	wt := SlotWorktree(f.dir, "wtmissing")
+	if err := os.RemoveAll(wt); err != nil {
+		t.Fatalf("pre-remove wt: %v", err)
+	}
+	resumed, err := Resume(ctx, f.info, "wtmissing", AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if err := resumed.Close(ctx, CloseOpts{
+		CloseTaskOnSuccess: true,
+		NoArtifact:         "test: covers idempotent missing-wt",
+	}); err != nil {
+		t.Fatalf("Close (wt already missing): %v", err)
+	}
+}
+
 // TestClose_AllowsFailWithoutCommit covers the asymmetry: the
 // precondition gates only --result=success. A failed or forked
 // close has no artifact contract — the slot didn't claim to have
