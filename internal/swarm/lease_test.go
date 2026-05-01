@@ -190,6 +190,73 @@ func openVerifySessions(t *testing.T, f *leaseFixture) *Sessions {
 	return sess
 }
 
+// TestAcquire_OpensWorktreeCheckout pins the fix for #117:
+// Acquire must leave the slot worktree as a real fossil checkout
+// containing the trunk's files, not a bare empty directory. The
+// presence of `.fslckout` proves the libfossil CreateCheckout step
+// ran inside Acquire; the readability of the seed file proves the
+// slot can read prior phases' committed artifacts off disk without
+// running a separate pull/sync verb.
+func TestAcquire_OpensWorktreeCheckout(t *testing.T) {
+	f := newLeaseFixture(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Seed the hub so it mirrors a post-`bones up` state. Slot A
+	// acquires, commits a marker file, releases — this advances the
+	// hub's trunk.
+	seedHold := filepath.Join(f.dir, "seed", "seed.txt")
+	seedTask := string(f.createTask(t, "join117-seed-task", seedHold))
+	seedLease, err := Acquire(ctx, f.info, "seed", seedTask, AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("seed Acquire: %v", err)
+	}
+	if err := seedLease.Release(ctx); err != nil {
+		t.Fatalf("seed Release: %v", err)
+	}
+	seedResumed, err := Resume(ctx, f.info, "seed", AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("seed Resume: %v", err)
+	}
+	seedFiles := []coord.File{{
+		Path:    wspath.Must(seedHold),
+		Name:    "seed.txt",
+		Content: []byte("phase1-artifact"),
+	}}
+	if _, err := seedResumed.Commit(ctx, "seed for #117 test", seedFiles); err != nil {
+		t.Fatalf("seed Commit: %v", err)
+	}
+	if err := seedResumed.Release(ctx); err != nil {
+		t.Fatalf("seed final Release: %v", err)
+	}
+
+	// Now slot B acquires against the seeded hub. The wt must contain
+	// both .fslckout and the seeded file readable from disk.
+	holdPath := filepath.Join(f.dir, "join117", "hello.txt")
+	taskID := string(f.createTask(t, "join117-task-1", holdPath))
+	lease, err := Acquire(ctx, f.info, "join117", taskID, AcquireOpts{Hub: f.hub})
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	t.Cleanup(func() { _ = lease.Release(ctx) })
+
+	wt := lease.WT()
+	if wt == "" {
+		t.Fatalf("WT: empty")
+	}
+	if _, err := os.Stat(filepath.Join(wt, ".fslckout")); err != nil {
+		t.Fatalf(".fslckout missing in worktree (Acquire did not open a checkout): %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(wt, "seed.txt"))
+	if err != nil {
+		t.Fatalf("seed.txt missing in slot B worktree: %v", err)
+	}
+	if string(got) != "phase1-artifact" {
+		t.Errorf("seed.txt content: got %q want %q", got, "phase1-artifact")
+	}
+}
+
 // TestAcquire_RefusesActiveLiveSession pins the
 // ErrSessionAlreadyLive path: a live session on the same host
 // without --force must be rejected.

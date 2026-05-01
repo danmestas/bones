@@ -819,6 +819,10 @@ func openLeafAndClaim(
 		_ = leaf.Stop()
 		return nil, nil, fmt.Errorf("swarm.Acquire: mkdir worktree: %w", err)
 	}
+	if err := leaf.OpenWorktree(ctx, leaf.WT()); err != nil {
+		_ = leaf.Stop()
+		return nil, nil, fmt.Errorf("swarm.Acquire: open worktree: %w", err)
+	}
 	claim, err := leaf.Claim(ctx, coord.TaskID(taskID))
 	if err != nil {
 		_ = leaf.Stop()

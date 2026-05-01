@@ -660,6 +660,44 @@ func (l *Leaf) WT() string {
 	return l.wtPath
 }
 
+// OpenWorktree creates a fossil checkout at dir using the leaf's
+// repo handle and extracts trunk's files into it. dir must already
+// exist. The Checkout handle is closed before return: bones doesn't
+// drive commits through it (Leaf.Commit writes through the repo
+// handle directly per the "one *libfossil.Repo per fossil file"
+// invariant); what downstream readers need is the on-disk `.fslckout`
+// plus the materialized files.
+//
+// On a fresh repo with no checkins this is a no-op: libfossil refuses
+// to create a checkout without a checkin, and there are no files to
+// write anyway. The next Acquire after the first slot commits will
+// populate the worktree.
+func (l *Leaf) OpenWorktree(ctx context.Context, dir string) error {
+	assert.NotNil(l, "coord.Leaf.OpenWorktree: receiver is nil")
+	tip, err := l.Tip(ctx)
+	if err != nil {
+		return fmt.Errorf("coord.Leaf.OpenWorktree: probe tip: %w", err)
+	}
+	if tip == "" {
+		return nil
+	}
+	repo := l.agent.Repo()
+	co, err := repo.CreateCheckout(dir, libfossil.CheckoutCreateOpts{})
+	if err != nil {
+		return fmt.Errorf("coord.Leaf.OpenWorktree: create checkout: %w", err)
+	}
+	tipRID, err := repo.ResolveVersion(tip)
+	if err != nil {
+		_ = co.Close()
+		return fmt.Errorf("coord.Leaf.OpenWorktree: resolve tip: %w", err)
+	}
+	if err := co.Extract(tipRID, libfossil.ExtractOpts{}); err != nil {
+		_ = co.Close()
+		return fmt.Errorf("coord.Leaf.OpenWorktree: extract trunk: %w", err)
+	}
+	return co.Close()
+}
+
 // Metadata returns the value associated with key in the harness-supplied
 // metadata map (from LeafConfig.Metadata). Returns "" if the key is
 // absent or if no metadata was provided.
