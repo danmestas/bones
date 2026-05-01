@@ -234,37 +234,48 @@ func TestSandboxedEnv_OverridesAncestorGitDir(t *testing.T) {
 		t.Skip("git not on PATH")
 	}
 
-	// Build an "ancestor" repo whose .git we'll point GIT_DIR at to
-	// simulate the leak.
-	ancestor := t.TempDir()
-	rawGit := func(args ...string) {
+	// pinnedGit runs git with env vars that pin the operation to dir,
+	// overriding any GIT_DIR / GIT_WORK_TREE inherited from the test
+	// runner's parent process (the pre-push hook sets these to the
+	// running repo's .git, which was the smoking gun for #106's
+	// reproduction in CI). This is the "raw" sandbox we use to set up
+	// and inspect the ancestor — distinct from sandboxedEnv, which is
+	// the sandbox the fixture-under-test uses.
+	pinnedGit := func(dir string, args ...string) []byte {
 		t.Helper()
 		cmd := exec.Command("git", args...)
-		cmd.Dir = ancestor
+		cmd.Dir = dir
 		cmd.Env = append(os.Environ(),
+			"USER=u",
+			"GIT_CEILING_DIRECTORIES="+dir,
+			"GIT_DIR="+filepath.Join(dir, ".git"),
+			"GIT_WORK_TREE="+dir,
 			"GIT_AUTHOR_NAME=ancestor",
 			"GIT_AUTHOR_EMAIL=a@a",
 			"GIT_COMMITTER_NAME=ancestor",
 			"GIT_COMMITTER_EMAIL=a@a",
 		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)
 		}
+		return out
 	}
-	rawGit("init", "-q")
-	must(t, os.WriteFile(filepath.Join(ancestor, "ancestor.txt"), []byte("a"), 0o644))
-	rawGit("add", "ancestor.txt")
-	rawGit("commit", "-q", "-m", "ancestor-init")
 
-	ancestorHead, err := exec.Command("git", "-C", ancestor,
-		"rev-parse", "HEAD").Output()
-	if err != nil {
-		t.Fatalf("rev-parse ancestor: %v", err)
-	}
+	// Build an "ancestor" repo whose .git we'll point GIT_DIR at to
+	// simulate the leak.
+	ancestor := t.TempDir()
+	pinnedGit(ancestor, "init", "-q")
+	must(t, os.WriteFile(filepath.Join(ancestor, "ancestor.txt"), []byte("a"), 0o644))
+	pinnedGit(ancestor, "add", "ancestor.txt")
+	pinnedGit(ancestor, "commit", "-q", "-m", "ancestor-init")
+
+	ancestorHead := pinnedGit(ancestor, "rev-parse", "HEAD")
 
 	// Smoking-gun setup: leak GIT_DIR pointing at the ancestor's .git
-	// into our process env. Without the sandbox, every subsequent git
-	// command would honor this and operate on the ancestor's repo.
+	// into our process env. Without sandboxedEnv overriding it, every
+	// subsequent git command — including the fixture-under-test —
+	// would honor this and operate on the ancestor's repo.
 	t.Setenv("GIT_DIR", filepath.Join(ancestor, ".git"))
 	t.Setenv("GIT_WORK_TREE", ancestor)
 
@@ -276,13 +287,9 @@ func TestSandboxedEnv_OverridesAncestorGitDir(t *testing.T) {
 	mustRunIn(t, dir, "git", "add", "child.txt")
 	mustRunIn(t, dir, "git", "commit", "-q", "-m", "child-init")
 
-	// Ancestor must be untouched. Use raw git (with our leaked env) so
-	// we read from the ancestor regardless.
-	ancestorHeadAfter, err := exec.Command("git", "-C", ancestor,
-		"rev-parse", "HEAD").Output()
-	if err != nil {
-		t.Fatalf("rev-parse ancestor after fixture: %v", err)
-	}
+	// Ancestor must be untouched. pinnedGit overrides the leaked env
+	// so this read goes to the ancestor's actual .git regardless.
+	ancestorHeadAfter := pinnedGit(ancestor, "rev-parse", "HEAD")
 	if string(ancestorHead) != string(ancestorHeadAfter) {
 		t.Errorf(
 			"ancestor HEAD moved — sandbox did not override leaked GIT_DIR.\n"+
@@ -544,7 +551,11 @@ func TestApplyPlan_WritesAndDeletesAndStages(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "delete.txt")); !os.IsNotExist(err) {
 		t.Errorf("delete.txt should be gone, got err=%v", err)
 	}
-	out, err := exec.Command("git", "-C", root, "diff", "--staged", "--name-only").Output()
+	// Sandboxed read so inherited GIT_DIR doesn't redirect us to the
+	// test runner's parent repo (issue #106).
+	gitDiff := exec.Command("git", "-C", root, "diff", "--staged", "--name-only")
+	gitDiff.Env = sandboxedEnv("git", root)
+	out, err := gitDiff.Output()
 	if err != nil {
 		t.Fatal(err)
 	}
