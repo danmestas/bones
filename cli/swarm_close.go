@@ -73,14 +73,21 @@ func (c *SwarmCloseCmd) Run(g *libfossilcli.Globals) error {
 		"swarm close: slot=%s task=%s result=%s\n",
 		lease.Slot(), lease.TaskID(), c.Result,
 	)
+	closeFields := map[string]interface{}{
+		"result":  c.Result,
+		"summary": c.Summary,
+	}
+	// Per b61574e, the no-artifact reason must appear in the audit trail
+	// so post-hoc inspection can distinguish legitimate artifact-free closes
+	// from silent precondition violations.
+	if c.NoArtifact != "" {
+		closeFields["no_artifact"] = c.NoArtifact
+	}
 	appendSlotEvent(info.WorkspaceDir, lease.Slot(), logwriter.Event{
 		Timestamp: timeNow(),
 		Slot:      lease.Slot(),
 		Event:     logwriter.EventClose,
-		Fields: map[string]interface{}{
-			"result":  c.Result,
-			"summary": c.Summary,
-		},
+		Fields:    closeFields,
 	})
 	return nil
 }

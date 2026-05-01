@@ -336,11 +336,13 @@ func openOrWait(path string) (*os.File, error) {
 			return nil, err
 		}
 		if time.Now().After(deadline) {
-			// Create parent dir and return empty file handle via os.Open retry.
+			// Create parent dir AND the file itself so --tail can attach to
+			// an empty log and follow appends. Plain os.Open here would
+			// return ENOENT and break --tail when the writer hasn't started.
 			if mkErr := os.MkdirAll(filepath.Dir(path), 0o755); mkErr != nil {
 				return nil, mkErr
 			}
-			return os.Open(path)
+			return os.OpenFile(path, os.O_RDONLY|os.O_CREATE, 0o644)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}

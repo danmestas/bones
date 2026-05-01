@@ -60,9 +60,11 @@ func (c *SwarmStatusCmd) Run(g *libfossilcli.Globals) error {
 
 func (c *SwarmStatusCmd) run(ctx context.Context, info workspace.Info) error {
 	// Emit dispatch context line before the slot table when a manifest exists.
+	// Best-effort: a corrupt or unreadable manifest must not block the operator
+	// from inspecting live sessions (which is exactly when they need status most).
 	if !c.JSON {
 		if err := emitDispatchLine(info.WorkspaceDir); err != nil {
-			return err
+			fmt.Fprintf(os.Stderr, "swarm status: warning: dispatch line: %v\n", err)
 		}
 	}
 	sess, closeSess, err := openSwarmSessions(ctx, info)
