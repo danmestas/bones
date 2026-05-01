@@ -22,8 +22,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danmestas/libfossil"
-	_ "github.com/danmestas/libfossil/db/driver/modernc"
 	"github.com/google/uuid"
 
 	"github.com/danmestas/bones/internal/telemetry"
@@ -115,13 +113,16 @@ func instrumented(
 	return info, err
 }
 
-// Init creates a fresh workspace rooted at cwd, starts a leaf daemon, and
-// returns its connection info. Returns ErrAlreadyInitialized only if a
-// fully-formed workspace (marker dir AND config.json) already exists.
-// An empty or partially-created marker dir is treated as a recoverable
-// state and Init proceeds — this fixes the case where 'bones up' had
-// previously mkdir'd .bones/ without writing config.json. A pre-rename
-// .agent-infra/ marker is silently migrated to .bones/ first.
+// Init scaffolds a fresh workspace at cwd: ensures .bones/ exists, writes
+// agent.id (idempotent — reused if already present), and transparently
+// migrates a pre-ADR-0041 layout if found. Does NOT start the hub —
+// hub.Start runs lazily on first verb that needs it via workspace.Join.
+//
+// Returns ErrLegacyLayout if a pre-ADR-0041 hub is still running and
+// must be torn down via `bones down` before migration can proceed.
+//
+// Init is idempotent: re-invocation against an existing workspace
+// succeeds with the existing agent.id.
 func Init(ctx context.Context, cwd string) (Info, error) {
 	return instrumented(ctx, "init", cwd, func(ctx context.Context) (Info, error) {
 		return initLogic(ctx, cwd)
@@ -132,74 +133,39 @@ func initLogic(ctx context.Context, cwd string) (Info, error) {
 	if err := migrateLegacyMarker(cwd); err != nil {
 		return Info{}, err
 	}
+	if state, err := detectLegacyLayout(cwd); err != nil {
+		return Info{}, err
+	} else if state == legacyLive {
+		return Info{}, ErrLegacyLayout
+	} else if state == legacyDead {
+		if err := migrateLegacyLayout(cwd); err != nil {
+			return Info{}, err
+		}
+	}
+
 	markerDir := filepath.Join(cwd, markerDirName)
-	configPath := filepath.Join(markerDir, "config.json")
-	if _, err := os.Stat(configPath); err == nil {
-		return Info{}, ErrAlreadyInitialized
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return Info{}, fmt.Errorf("stat config: %w", err)
-	}
-
 	if err := os.MkdirAll(markerDir, 0o755); err != nil {
-		return Info{}, fmt.Errorf("mkdir marker: %w", err)
+		return Info{}, fmt.Errorf("mkdir .bones: %w", err)
 	}
 
-	httpPort, err := pickFreePort()
+	// Idempotent: if agent.id already exists, reuse it; otherwise mint.
+	agentID, err := readAgentID(cwd)
 	if err != nil {
-		_ = os.RemoveAll(markerDir)
-		return Info{}, fmt.Errorf("pick http port: %w", err)
-	}
-	natsPort, err := pickFreePort()
-	if err != nil {
-		_ = os.RemoveAll(markerDir)
-		return Info{}, fmt.Errorf("pick nats port: %w", err)
-	}
-
-	repoPath := filepath.Join(markerDir, "repo.fossil")
-	logPath := filepath.Join(markerDir, "leaf.log")
-	cfg := config{
-		Version:     configVersion,
-		AgentID:     uuid.NewString(),
-		NATSURL:     fmt.Sprintf("nats://127.0.0.1:%d", natsPort),
-		LeafHTTPURL: fmt.Sprintf("http://127.0.0.1:%d", httpPort),
-		RepoPath:    repoPath,
-		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+		if !os.IsNotExist(err) {
+			return Info{}, fmt.Errorf("read agent.id: %w", err)
+		}
+		agentID = uuid.NewString()
+		if err := writeAgentID(cwd, agentID); err != nil {
+			return Info{}, fmt.Errorf("write agent.id: %w", err)
+		}
 	}
 
-	slog.DebugContext(ctx, "agent_id generated", "agent_id", cfg.AgentID)
-
-	repo, err := libfossil.Create(repoPath, libfossil.CreateOpts{User: cfg.AgentID})
-	if err != nil {
-		_ = os.RemoveAll(markerDir)
-		return Info{}, fmt.Errorf("create fossil repo: %w", err)
-	}
-	_ = repo.Close()
-
-	// Bind to 127.0.0.1 only — we never want this daemon reachable from
-	// outside localhost by default.
-	pid, err := spawnLeafFunc(ctx, spawnParams{
-		LeafBinary:     leafBinaryPath(),
-		RepoPath:       repoPath,
-		HTTPAddr:       fmt.Sprintf("127.0.0.1:%d", httpPort),
-		NATSClientPort: natsPort,
-		LogPath:        logPath,
-	})
-	if err != nil {
-		_ = os.RemoveAll(markerDir)
-		return Info{}, err
-	}
-	if err := saveConfig(filepath.Join(markerDir, "config.json"), cfg); err != nil {
-		killPID(pid)
-		_ = os.RemoveAll(markerDir)
-		return Info{}, err
-	}
+	slog.DebugContext(ctx, "agent_id ready", "agent_id", agentID)
 
 	return Info{
-		AgentID:      cfg.AgentID,
-		NATSURL:      cfg.NATSURL,
-		LeafHTTPURL:  cfg.LeafHTTPURL,
-		RepoPath:     cfg.RepoPath,
+		AgentID:      agentID,
 		WorkspaceDir: cwd,
+		// NATSURL, LeafHTTPURL, RepoPath populated by Join after hub.Start.
 	}, nil
 }
 

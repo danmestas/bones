@@ -63,20 +63,19 @@ func TestJoinErrorsWhenBothMarkersExist(t *testing.T) {
 	}
 }
 
-// TestInitMigratesLegacyMarker verifies that Init() runs the migration
-// when only a legacy .agent-infra/ exists. The migrated marker is
-// populated with a config.json (the marker-with-config invariant Init
-// now uses to decide already-initialized), so Init treats the post-
-// migration .bones/ as already-initialized — exactly like a real
-// pre-rename workspace would behave.
+// TestInitMigratesLegacyMarker verifies that Init() runs the .agent-infra/
+// → .bones/ rename when only the legacy marker exists. Post-migration,
+// Init scaffolds agent.id and succeeds (Init is idempotent under
+// ADR 0041; it no longer returns ErrAlreadyInitialized).
 func TestInitMigratesLegacyMarker(t *testing.T) {
 	dir := t.TempDir()
 	legacy := filepath.Join(dir, ".agent-infra")
 	if err := os.MkdirAll(legacy, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Drop a populated config.json into the legacy marker so that, post-
-	// migration, .bones/ looks like a real already-initialized workspace.
+	// Drop a populated config.json into the legacy marker so the rename
+	// has something to carry over (the file's content is not interpreted
+	// by post-ADR-0041 Init).
 	cfg := []byte(
 		`{"version":1,"agent_id":"legacy","nats_url":"nats://x",` +
 			`"leaf_http_url":"http://x","repo_path":"/x",` +
@@ -86,12 +85,14 @@ func TestInitMigratesLegacyMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := workspace.Init(context.Background(), dir)
-	if err == nil {
-		t.Fatal("expected ErrAlreadyInitialized after migration of populated marker")
+	if _, err := workspace.Init(context.Background(), dir); err != nil {
+		t.Fatalf("Init: %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, ".bones", "config.json")); statErr != nil {
 		t.Fatalf("expected .bones/config.json after migration: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, ".bones", "agent.id")); statErr != nil {
+		t.Fatalf("expected .bones/agent.id after Init: %v", statErr)
 	}
 	if _, statErr := os.Stat(legacy); !os.IsNotExist(statErr) {
 		t.Fatalf("expected .agent-infra/ removed, got err=%v", statErr)

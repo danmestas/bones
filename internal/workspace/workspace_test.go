@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,8 +13,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/nats-io/nats.go"
 )
 
 func TestPackageBuilds(t *testing.T) {
@@ -117,80 +114,45 @@ func TestWalk_NoMarkerReturnsErrNoWorkspace(t *testing.T) {
 	}
 }
 
-func TestInit_FreshDir(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skip in -short: spawns leaf daemon")
-	}
-	requireLeafBinary(t)
-
+func TestInit_ScaffoldsMinimal(t *testing.T) {
 	dir := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	info, err := Init(ctx, dir)
+	info, err := Init(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	t.Cleanup(func() { killLeafPID(t, filepath.Join(dir, markerDirName, "leaf.pid")) })
-
-	// Healthz reachable
-	resp, err := http.Get(info.LeafHTTPURL + "/healthz")
+	if info.WorkspaceDir != dir {
+		t.Errorf("WorkspaceDir = %q, want %q", info.WorkspaceDir, dir)
+	}
+	if info.AgentID == "" {
+		t.Error("AgentID is empty")
+	}
+	// Agent ID is persisted to .bones/agent.id.
+	persisted, err := readAgentID(dir)
 	if err != nil {
-		t.Fatalf("healthz GET: %v", err)
+		t.Fatalf("readAgentID: %v", err)
 	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != 200 {
-		t.Fatalf("healthz status: got %d, want 200", resp.StatusCode)
+	if persisted != info.AgentID {
+		t.Errorf("agent.id = %q, want %q", persisted, info.AgentID)
 	}
-
-	nc, err := nats.Connect(info.NATSURL, nats.NoReconnect(), nats.Timeout(time.Second))
-	if err != nil {
-		t.Fatalf("connect to returned NATSURL %q: %v", info.NATSURL, err)
-	}
-	nc.Close()
-
-	// PID file written and process alive
-	pidData, err := os.ReadFile(filepath.Join(dir, markerDirName, "leaf.pid"))
-	if err != nil {
-		t.Fatalf("read pid file: %v", err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
-	if err != nil {
-		t.Fatalf("parse pid: %v", err)
-	}
-	if !pidAlive(pid) {
-		t.Fatalf("leaf pid %d not alive", pid)
+	// No leaf processes were started — pids dir should not exist.
+	if _, err := os.Stat(filepath.Join(dir, ".bones", "pids")); !os.IsNotExist(err) {
+		t.Errorf("Init created pids/; expected scaffold-only behavior")
 	}
 }
 
-func TestInit_PersistsSpawnedLeafNATSURL(t *testing.T) {
+func TestInit_Idempotent(t *testing.T) {
 	dir := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	var gotNATSPort int
-	savedSpawn := spawnLeafFunc
-	spawnLeafFunc = func(ctx context.Context, p spawnParams) (int, error) {
-		gotNATSPort = p.NATSClientPort
-		return os.Getpid(), nil
-	}
-	t.Cleanup(func() { spawnLeafFunc = savedSpawn })
-
-	info, err := Init(ctx, dir)
+	first, err := Init(context.Background(), dir)
 	if err != nil {
-		t.Fatalf("Init: %v", err)
+		t.Fatalf("first Init: %v", err)
 	}
-	wantNATSURL := "nats://127.0.0.1:" + strconv.Itoa(gotNATSPort)
-	if info.NATSURL != wantNATSURL {
-		t.Fatalf("Info.NATSURL = %q, want %q", info.NATSURL, wantNATSURL)
-	}
-
-	cfg, err := loadConfig(filepath.Join(dir, markerDirName, "config.json"))
+	second, err := Init(context.Background(), dir)
 	if err != nil {
-		t.Fatalf("loadConfig: %v", err)
+		t.Fatalf("second Init: %v", err)
 	}
-	if cfg.NATSURL != info.NATSURL {
-		t.Fatalf("config NATSURL = %q, want %q", cfg.NATSURL, info.NATSURL)
+	if first.AgentID != second.AgentID {
+		t.Errorf("agent_id changed across Init calls: first=%q second=%q",
+			first.AgentID, second.AgentID)
 	}
 }
 
@@ -216,70 +178,6 @@ func killLeafPID(t *testing.T, pidPath string) {
 		return
 	}
 	_ = proc.Signal(syscall.SIGKILL)
-}
-
-// TestInit_RecoversFromEmptyMarker verifies that an empty .bones/
-// directory (e.g. left by a prior, incomplete `bones up` that mkdir'd
-// the marker without writing config.json) is treated as a recoverable
-// state. Init should proceed and produce a valid config.json — not
-// short-circuit with ErrAlreadyInitialized.
-func TestInit_RecoversFromEmptyMarker(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skip in -short: spawns leaf")
-	}
-	requireLeafBinary(t)
-
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, markerDirName), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	info, err := Init(ctx, dir)
-	if err != nil {
-		t.Fatalf("Init on empty marker: %v", err)
-	}
-	t.Cleanup(func() { killLeafPID(t, filepath.Join(dir, markerDirName, "leaf.pid")) })
-
-	if _, statErr := os.Stat(filepath.Join(dir, markerDirName, "config.json")); statErr != nil {
-		t.Fatalf("expected config.json after recovery: %v", statErr)
-	}
-	if info.AgentID == "" {
-		t.Errorf("expected agent_id after recovery, got empty")
-	}
-}
-
-func TestInit_AlreadyInitialized(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skip in -short: spawns leaf")
-	}
-	requireLeafBinary(t)
-
-	dir := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	info, err := Init(ctx, dir)
-	if err != nil {
-		t.Fatalf("first Init: %v", err)
-	}
-	t.Cleanup(func() { killLeafPID(t, filepath.Join(dir, markerDirName, "leaf.pid")) })
-
-	_, err = Init(ctx, dir)
-	if !errors.Is(err, ErrAlreadyInitialized) {
-		t.Fatalf("second Init: got %v, want ErrAlreadyInitialized", err)
-	}
-
-	// First workspace untouched: config still loads and matches info.
-	cfg, err := loadConfig(filepath.Join(dir, markerDirName, "config.json"))
-	if err != nil {
-		t.Fatalf("loadConfig after second Init: %v", err)
-	}
-	if cfg.AgentID != info.AgentID {
-		t.Errorf("agent id drifted: got %q, want %q", cfg.AgentID, info.AgentID)
-	}
 }
 
 func TestInit_RollbackOnLeafFailure(t *testing.T) {
