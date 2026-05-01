@@ -10,6 +10,7 @@ import (
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
+	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
@@ -74,7 +75,7 @@ func (c *SwarmFanInCmd) resolvePrereqs() (string, string, error) {
 	if err != nil {
 		return "", "", fmt.Errorf("workspace: %w (run `bones init` or `bones up` first)", err)
 	}
-	hubRepo := filepath.Join(info.WorkspaceDir, ".orchestrator", "hub.fossil")
+	hubRepo := hub.HubFossilPath(info.WorkspaceDir)
 	if _, err := os.Stat(hubRepo); err != nil {
 		return "", "", fmt.Errorf("hub repo not found at %s — run `bones up` first", hubRepo)
 	}

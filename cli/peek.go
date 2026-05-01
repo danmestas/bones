@@ -6,11 +6,11 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
+	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
@@ -48,7 +48,7 @@ func (c *PeekCmd) Run(g *libfossilcli.Globals) error {
 		return fmt.Errorf("workspace: %w (run `bones init` first)", err)
 	}
 
-	hubRepo := filepath.Join(info.WorkspaceDir, ".orchestrator", "hub.fossil")
+	hubRepo := hub.HubFossilPath(info.WorkspaceDir)
 	if _, err := os.Stat(hubRepo); err != nil {
 		return fmt.Errorf(
 			"hub repo not found at %s — run `bones up` or `bones hub start` first",

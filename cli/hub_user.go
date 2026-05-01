@@ -5,16 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/danmestas/libfossil"
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
+	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
 // HubUserCmd groups subcommands that manage the fossil user table on
-// the hub repo (.orchestrator/hub.fossil). The table is consulted by
+// the hub repo (.bones/hub.fossil). The table is consulted by
 // every `fossil commit --user X` against that repo, so swarm slots that
 // commit under their own identity (slot-rendering, slot-physics, etc.)
 // must exist here first or fossil rejects the commit with "no such
@@ -106,7 +106,7 @@ func hubRepoPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("workspace: %w (run `bones init` or `bones up` first)", err)
 	}
-	repoPath := filepath.Join(info.WorkspaceDir, ".orchestrator", "hub.fossil")
+	repoPath := hub.HubFossilPath(info.WorkspaceDir)
 	if _, err := os.Stat(repoPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", fmt.Errorf(

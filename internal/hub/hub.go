@@ -287,6 +287,13 @@ type paths struct {
 	fslSettings string
 }
 
+// HubFossilPath returns the on-disk path of the hub fossil for the
+// given workspace root. Use this rather than building the path
+// literally in cli/ so verbs survive future layout changes.
+func HubFossilPath(root string) string {
+	return filepath.Join(root, markerDirName, "hub.fossil")
+}
+
 // newPaths derives the hub layout from the workspace root. The root must
 // exist; the .bones subdirs are created lazily by Start.
 func newPaths(root string) (paths, error) {
