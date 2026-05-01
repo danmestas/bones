@@ -14,10 +14,16 @@ Collapse the parallel workspace-leaf (`.bones/`) and hub-leaf (`.orchestrator/`)
   hub-fossil-url           # recorded HTTP URL (per ADR 0038)
   hub-nats-url             # recorded NATS URL (per ADR 0038)
   agent.id                 # one-line text file: workspace's coord identity
-  leaf.log                 # leaf process stderr/stdout
-  pids/leaf.pid            # the only pid file
+  fossil.log               # fossil-server child stdout/stderr
+  nats.log                 # embedded-NATS server stdout/stderr
+  hub.log                  # combined log when bones runs detached
+  pids/
+    fossil.pid             # fossil-server child pid
+    nats.pid               # bones-process pid (embedded NATS)
   nats-store/jetstream/    # JetStream on-disk state
 ```
+
+The two pid files reflect `internal/hub.Start`'s actual implementation: a fossil-server *child process* and an *embedded* NATS server library inside the bones process. From the user's perspective there is still "one bones running per project" — the multiple pid/log files are an implementation detail of the hub package and live behind the `info.WorkspaceDir` / `hub.FossilURL` / `hub.NATSURL` interface (see information-hiding acceptance criterion).
 
 `config.json` is removed. The fields it held are no longer needed:
 
@@ -66,7 +72,7 @@ A new sentinel `workspace.ErrLegacyLayout` maps to a fresh exit code in `workspa
 
 Behavior: auto-migrate inline, transparently.
 
-**Ordering principle: all moves before any deletes.** Migration steps are ordered so that no destination state is destroyed before all source state has reached its new home. If any step fails, the world is partially migrated but never *lost*.
+**Ordering principle: all moves before any deletes.** Every new-layout filename differs from every legacy `.bones/` filename, so moves never collide with destinations. Steps are ordered so that no destination state is destroyed before all source state has reached its new home. If any step fails, the world is partially migrated but never *lost*.
 
 Steps:
 
@@ -74,11 +80,12 @@ Steps:
 2. Move `.orchestrator/hub.fossil` → `.bones/hub.fossil`.
 3. Move `.orchestrator/hub-fossil-url`, `.orchestrator/hub-nats-url` → `.bones/`.
 4. Move `.orchestrator/nats-store/` → `.bones/nats-store/`.
-5. Move `.orchestrator/leaf.log` → `.bones/leaf.log` (after step 6 finishes — see ordering).
-6. Delete the legacy workspace-leaf files: old `.bones/config.json`, `.bones/repo.fossil`, `.bones/leaf.pid`, `.bones/leaf.log` (the old workspace-leaf log; superseded by step 5's hub-leaf log).
-7. Write `.bones/agent.id` from cached value, or generate fresh UUID if absent.
-8. Rewrite the SessionStart hook entry in the local hook config (location verified during implementation — see Verification Points) from `.orchestrator/scripts/hub-bootstrap.sh` to `bones hub start`.
-9. `rmdir .orchestrator/scripts/` and `rmdir .orchestrator/`.
+5. Move `.orchestrator/fossil.log`, `.orchestrator/nats.log`, `.orchestrator/hub.log` → `.bones/`.
+6. Move `.orchestrator/pids/` → `.bones/pids/`.
+7. Write `.bones/agent.id` from cached value, or generate fresh UUID if absent (idempotent — skip if file exists with valid content).
+8. Delete the legacy workspace-leaf files: old `.bones/config.json`, `.bones/repo.fossil`, `.bones/leaf.pid`, `.bones/leaf.log`.
+9. Rewrite the SessionStart hook entry in `.claude/settings.json` (workspace-local — verified during recon; the file is at `<workspace>/.claude/settings.json`) from `bash .orchestrator/scripts/hub-bootstrap.sh` to `bones hub start`.
+10. `rmdir .orchestrator/scripts/` and `rmdir .orchestrator/` (will succeed only if empty after the moves above; if non-empty, surface the unexpected leftover state).
 
 Print one stderr line: `migrated workspace to .bones/ layout (ADR 0041)`.
 
@@ -175,13 +182,13 @@ Per the brainstorm decision, all 41 references to `.orchestrator/` get updated i
 
 These are unknowns I want to verify in code rather than guess:
 
-1. **SessionStart hook config location.** The hub-bootstrap script is invoked from somewhere — likely `.claude/settings.json` (workspace-local) or the user's global Claude Code config. The migration step 7 only works if it's workspace-local. If it's global, the migrator prints a manual update instruction instead of rewriting silently.
+1. **SessionStart hook config location.** Resolved during recon: workspace-local at `<workspace>/.claude/settings.json`, populated by `mergeSettings` in `cli/orchestrator.go:112` via `addHook(hooks, "SessionStart", "bash .orchestrator/scripts/hub-bootstrap.sh")`. Migration step 9 rewrites it in place.
 
 2. **`info.RepoPath` callers.** Brainstorming verified the only writer is `internal/workspace/spawn.go` (passing to the leaf as `--repo`) — being deleted. Verify *during implementation* there are no other readers via `grep -rn 'info\.RepoPath\|\.RepoPath' .`. If zero readers outside spawn.go: drop the field. If readers exist: keep, document each, point at `.bones/hub.fossil`. The default is delete, not retain.
 
 3. **`bones orchestrator install` skill-template logic.** Verify what the command does today beyond writing scripts (skill template installation, hook entries, etc.) so that the move into `bones up` covers all of it. The deletion of `cli/orchestrator.go` is decided; only the relocation surface needs verification.
 
-4. **Scaffold version stamp.** `internal/scaffoldver/scaffoldver.go` writes a version marker. Verify the path it writes to and update accordingly. The scaffold version drift logic in ADR 0035 must continue to work after the move.
+4. **Scaffold version stamp.** Resolved during recon: `internal/scaffoldver/scaffoldver.go:15` declares `const StampPath = ".bones/scaffold_version"` — already under `.bones/`. No change needed for ADR 0035 compliance.
 
 ## Open scope explicitly out of this PR
 
