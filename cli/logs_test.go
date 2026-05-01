@@ -190,6 +190,9 @@ func TestLogsCmd_Tail_SeesNewEvents(t *testing.T) {
 			output = append(output, sc.Text())
 			mu.Unlock()
 		}
+		mu.Lock()
+		readErr = sc.Err()
+		mu.Unlock()
 	}()
 
 	followerDone := make(chan error, 1)
