@@ -18,6 +18,7 @@ import (
 	natsserver "github.com/nats-io/nats-server/v2/server"
 
 	"github.com/danmestas/bones/internal/registry"
+	"github.com/danmestas/bones/internal/slotgc"
 	"github.com/danmestas/bones/internal/telemetry"
 )
 
@@ -108,6 +109,21 @@ func Start(ctx context.Context, root string, options ...Option) (err error) {
 	// Idempotency: if both pid files point at live processes, we're done.
 	if pidIsLive(p.fossilPid) && pidIsLive(p.natsPid) {
 		return nil
+	}
+
+	// Per-slot GC: remove .bones/swarm/<slot>/ directories whose
+	// leaf.pid points at a dead process. Piggybacks on the most
+	// frequently-run lifecycle event (SessionStart hook → bones hub
+	// start) so stale slot dirs don't accumulate across sessions
+	// (#130). Best-effort: a permission failure on one slot doesn't
+	// block hub start for the rest.
+	if pruned, err := slotgc.PruneDead(p.root); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"hub: swarm gc warning (non-fatal): %v\n", err)
+	} else if len(pruned) > 0 {
+		fmt.Fprintf(os.Stderr,
+			"hub: pruned %d stale slot dir(s): %s\n",
+			len(pruned), strings.Join(pruned, ", "))
 	}
 
 	// Resolve any zero-valued port to the workspace's recorded port
