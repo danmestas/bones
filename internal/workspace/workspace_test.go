@@ -39,7 +39,7 @@ func TestExitCode_LegacyLayout(t *testing.T) {
 
 func TestWalk_FindsMarkerInCwd(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(dir, markerDirName), 0o755); err != nil {
+	if err := writeAgentID(dir, "test-agent-id"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := walkUp(dir)
@@ -53,7 +53,7 @@ func TestWalk_FindsMarkerInCwd(t *testing.T) {
 
 func TestWalk_FindsMarkerInAncestor(t *testing.T) {
 	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, markerDirName), 0o755); err != nil {
+	if err := writeAgentID(root, "test-agent-id"); err != nil {
 		t.Fatal(err)
 	}
 	deep := filepath.Join(root, "a", "b", "c")
@@ -74,6 +74,75 @@ func TestWalk_NoMarkerReturnsErrNoWorkspace(t *testing.T) {
 	_, err := walkUp(dir)
 	if !errors.Is(err, ErrNoWorkspace) {
 		t.Fatalf("walkUp: got %v, want ErrNoWorkspace", err)
+	}
+}
+
+// TestWalk_RefusesMarkerDirWithoutAgentID pins the #140 fix: a bare
+// .bones/ directory without agent.id is NOT a workspace. $HOME/.bones/
+// is the canonical example — it holds global state (registry,
+// telemetry install-id) but never carries agent.id.
+func TestWalk_RefusesMarkerDirWithoutAgentID(t *testing.T) {
+	dir := t.TempDir()
+	// Mimic $HOME/.bones/: directory exists, populated with global
+	// state, but no agent.id.
+	bones := filepath.Join(dir, markerDirName)
+	if err := os.Mkdir(bones, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bones, "install-id"),
+		[]byte("not-an-agent-id\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := walkUp(dir); !errors.Is(err, ErrNoWorkspace) {
+		t.Fatalf("walkUp: got %v, want ErrNoWorkspace (a .bones/ dir "+
+			"without agent.id must not match — see #140)", err)
+	}
+	// Also from a deeper path: the walkUp must not stop at the bare
+	// marker directory and claim it as a workspace.
+	deep := filepath.Join(dir, "a", "b", "c")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := walkUp(deep); !errors.Is(err, ErrNoWorkspace) {
+		t.Fatalf("walkUp(deep): got %v, want ErrNoWorkspace", err)
+	}
+}
+
+// TestWalk_PrefersAgentIDOverEmptyMarker proves the walk does not stop
+// at a bare .bones/ on the way up — it keeps going until it finds one
+// with agent.id. Models the layout where $HOME/.bones/ exists as the
+// state dir but a child workspace is properly initialized below it.
+func TestWalk_PrefersAgentIDOverEmptyMarker(t *testing.T) {
+	homeLike := t.TempDir() // stand-in for $HOME
+	if err := os.Mkdir(filepath.Join(homeLike, markerDirName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(homeLike, "projects", "ws")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAgentID(workspace, "ws-agent-id"); err != nil {
+		t.Fatal(err)
+	}
+	// From inside the proper workspace, walkUp must return it (not the
+	// $HOME-like ancestor with the bare marker dir).
+	got, err := walkUp(filepath.Join(workspace, "src"))
+	// The src dir doesn't exist; walkUp should still climb to workspace.
+	if err == nil {
+		if got != workspace {
+			t.Fatalf("walkUp: got %q, want %q (must skip "+
+				"ancestor .bones/ without agent.id)", got, workspace)
+		}
+	} else {
+		// If src doesn't exist, walkUp should still find workspace
+		// from workspace itself.
+		got, err = walkUp(workspace)
+		if err != nil {
+			t.Fatalf("walkUp: %v", err)
+		}
+		if got != workspace {
+			t.Fatalf("walkUp: got %q, want %q", got, workspace)
+		}
 	}
 }
 

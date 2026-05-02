@@ -92,6 +92,11 @@ func buildLiveFixture(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	must(t, os.MkdirAll(filepath.Join(dir, ".bones"), 0o755))
+	// agent.id is the workspace marker required by workspace.FindRoot
+	// (issue #140). Without it, runApplyPreflight's walkUp would fail
+	// even though the tests want to exercise apply against this dir.
+	must(t, os.WriteFile(filepath.Join(dir, ".bones", "agent.id"),
+		[]byte("apply-test-agent-id\n"), 0o644))
 
 	hubFossil := filepath.Join(dir, ".bones", "hub.fossil")
 	mustRun(t, "fossil", "new", "--admin-user", "u", hubFossil)
@@ -122,6 +127,10 @@ func TestApplyPreflight_NoWorkspace(t *testing.T) {
 func TestApplyPreflight_NoHubFossil(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, ".bones"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".bones", "agent.id"),
+		[]byte("test-agent-id\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, err := runApplyPreflight(dir)
@@ -619,6 +628,11 @@ func setupApplyFixture(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, ".bones"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// agent.id marker required by workspace.FindRoot (issue #140).
+	if err := os.WriteFile(filepath.Join(dir, ".bones", "agent.id"),
+		[]byte("apply-fixture-agent-id\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, ".bones", "hub.fossil"),
