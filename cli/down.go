@@ -15,6 +15,7 @@ import (
 	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/registry"
 	"github.com/danmestas/bones/internal/sessions"
+	"github.com/danmestas/bones/internal/slotgc"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
@@ -164,6 +165,8 @@ type downAction struct {
 func planDown(root string, c *DownCmd) []downAction {
 	var plan []downAction
 	plan = append(plan, planStopHub(root, c)...)
+	plan = append(plan, planKillSwarmLeaves(root, c)...)
+	plan = append(plan, planReapOrphans()...)
 	plan = append(plan, planRemoveRegistry(root)...)
 	plan = append(plan, planRemoveGitHook(root)...)
 	plan = append(plan, planRemoveBonesDir(root)...)
@@ -172,6 +175,77 @@ func planDown(root string, c *DownCmd) []downAction {
 	plan = append(plan, planRemoveAgentsMD(root)...)
 	plan = append(plan, planRemoveHooks(root, c)...)
 	plan = append(plan, planRemoveFossilMarkers(root)...)
+	return plan
+}
+
+// planKillSwarmLeaves enumerates .bones/swarm/<slot>/leaf.pid files
+// for processes still alive and queues SIGTERM→SIGKILL for each.
+// Pre-fix, hub.Stop only signaled fossil/nats; swarm leaves spawned
+// for parallel slots survived bones down as orphans (#138 item 2).
+//
+// Suppressed by --keep-hub: keeping the hub means keeping its leaves
+// too. Best-effort: failures don't block the rest of teardown.
+func planKillSwarmLeaves(root string, c *DownCmd) []downAction {
+	if c.KeepHub {
+		return nil
+	}
+	live, err := slotgc.LiveSlots(root)
+	if err != nil || len(live) == 0 {
+		return nil
+	}
+	plan := make([]downAction, 0, len(live))
+	for _, slot := range live {
+		desc := fmt.Sprintf("kill swarm leaf %s (pid %d)", slot.Name, slot.PID)
+		s := slot
+		plan = append(plan, downAction{
+			description: desc,
+			do: func() error {
+				if !slotgc.Kill(s.PID) {
+					return fmt.Errorf("pid %d still alive after SIGKILL "+
+						"escalation", s.PID)
+				}
+				return nil
+			},
+		})
+	}
+	return plan
+}
+
+// planReapOrphans signals + removes registry entries for any cross-
+// workspace orphan: a hub PID still alive on this host whose
+// workspace cwd is gone (deleted, trashed, or missing the agent.id
+// marker). Without this, `bones down` only cleaned up its own
+// workspace, leaving stale entries from removed/renamed sibling
+// workspaces to pile up and produce phantom doctor warnings (#138
+// item 6). Best-effort; per-entry failures are aggregated as
+// continuation-class errors.
+//
+// Self-protection: an orphan entry whose HubPID matches our own
+// process is never reaped. registry.Reap would SIGTERM-then-SIGKILL
+// the calling process, killing bones down before it could remove
+// the entry. This shouldn't happen in production (hubs run in their
+// own detached child) but the guard is cheap insurance and is
+// load-bearing for tests that register workspaces under the test
+// process's own pid.
+func planReapOrphans() []downAction {
+	orphans, err := registry.Orphans()
+	if err != nil || len(orphans) == 0 {
+		return nil
+	}
+	self := os.Getpid()
+	plan := make([]downAction, 0, len(orphans))
+	for _, o := range orphans {
+		if o.HubPID == self {
+			continue
+		}
+		desc := fmt.Sprintf("reap orphan registry entry %s (pid %d, workspace gone)",
+			o.Name, o.HubPID)
+		entry := o
+		plan = append(plan, downAction{
+			description: desc,
+			do:          func() error { return registry.Reap(entry) },
+		})
+	}
 	return plan
 }
 

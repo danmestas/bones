@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -502,6 +504,151 @@ func TestResolveDownRoot_NoMarkerFallsBackToCwd(t *testing.T) {
 	got := resolveDownRoot(root)
 	if got != root {
 		t.Errorf("resolveDownRoot: got %q, want %q (cwd fallback)", got, root)
+	}
+}
+
+// TestPlanKillSwarmLeaves_QueuesLiveSlots pins #138 item 2: a
+// workspace with .bones/swarm/<slot>/leaf.pid pointing at a live
+// process must produce a kill action in the down plan. Pre-fix,
+// hub.Stop only signaled fossil/nats; swarm leaves orphaned.
+func TestPlanKillSwarmLeaves_QueuesLiveSlots(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, ".bones", "swarm", "rendering"))
+	if err := os.WriteFile(
+		filepath.Join(root, ".bones", "swarm", "rendering", "leaf.pid"),
+		[]byte(strconv.Itoa(os.Getpid())+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	plan := planKillSwarmLeaves(root, &DownCmd{})
+	if len(plan) != 1 {
+		t.Fatalf("expected 1 kill action, got %d", len(plan))
+	}
+	if !strings.Contains(plan[0].description, "rendering") {
+		t.Errorf("plan description missing slot name: %s", plan[0].description)
+	}
+	if !strings.Contains(plan[0].description,
+		strconv.Itoa(os.Getpid())) {
+		t.Errorf("plan description missing pid: %s", plan[0].description)
+	}
+}
+
+// TestPlanKillSwarmLeaves_NoOpWhenKeepHub pins the --keep-hub
+// suppression: keeping the hub means keeping its leaves too.
+func TestPlanKillSwarmLeaves_NoOpWhenKeepHub(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, ".bones", "swarm", "rendering"))
+	if err := os.WriteFile(
+		filepath.Join(root, ".bones", "swarm", "rendering", "leaf.pid"),
+		[]byte(strconv.Itoa(os.Getpid())+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if plan := planKillSwarmLeaves(root, &DownCmd{KeepHub: true}); plan != nil {
+		t.Errorf("expected nil under --keep-hub, got %d actions", len(plan))
+	}
+}
+
+// TestPlanKillSwarmLeaves_SkipsDeadPids: a dead-pid slot is the
+// concern of slotgc.PruneDead (separately invoked elsewhere); kill
+// shouldn't waste signals on it.
+func TestPlanKillSwarmLeaves_SkipsDeadPids(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, ".bones", "swarm", "stale"))
+	if err := os.WriteFile(
+		filepath.Join(root, ".bones", "swarm", "stale", "leaf.pid"),
+		[]byte("999999\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if plan := planKillSwarmLeaves(root, &DownCmd{}); plan != nil {
+		t.Errorf("dead-pid slot should not be queued for kill; "+
+			"got %d actions", len(plan))
+	}
+}
+
+// TestPlanReapOrphans_QueuesCrossWorkspaceOrphans pins #138 item 6:
+// down enumerates registry orphans (other workspaces with alive
+// hub pid but vanished cwd) and queues reap actions for each. Pre-
+// fix, stale entries accumulated indefinitely.
+//
+// Uses a real subprocess pid (not os.Getpid) because the planReap
+// self-protection guard skips entries whose HubPID matches the
+// calling process — so a self-pid orphan would be silently filtered
+// and the test wouldn't exercise the queueing path.
+func TestPlanReapOrphans_QueuesCrossWorkspaceOrphans(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// Spawn a real child whose pid is alive but is not us. `sleep`
+	// is portable enough for POSIX hosts; skip on Windows.
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot spawn sleep child: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+	childPID := cmd.Process.Pid
+
+	// One alive: registry entry, real workspace dir with agent.id.
+	// IsOrphan returns false → not queued for reap.
+	aliveWS := t.TempDir()
+	mkdir(t, filepath.Join(aliveWS, ".bones"))
+	if err := os.WriteFile(filepath.Join(aliveWS, ".bones", "agent.id"),
+		[]byte("alive\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Write(registry.Entry{
+		Cwd: aliveWS, Name: "alive", HubPID: childPID,
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed alive: %v", err)
+	}
+
+	// One orphan: registry entry, child pid alive, but workspace dir
+	// missing (the IsOrphan signal). Must be queued for reap.
+	orphanWS := filepath.Join(t.TempDir(), "deleted-out-from-under")
+	if err := registry.Write(registry.Entry{
+		Cwd: orphanWS, Name: "orphan", HubPID: childPID,
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed orphan: %v", err)
+	}
+
+	plan := planReapOrphans()
+	if len(plan) != 1 {
+		t.Fatalf("expected exactly 1 reap action (the orphan), got %d:\n%v",
+			len(plan), plan)
+	}
+	if !strings.Contains(plan[0].description, "orphan") {
+		t.Errorf("plan should target the orphan; got %q", plan[0].description)
+	}
+}
+
+// TestPlanReapOrphans_SkipsSelfPID pins the suicide-prevention
+// guard: an orphan entry whose HubPID is the calling process's pid
+// must not be queued for reap. Without this, `bones down` would
+// SIGTERM-then-SIGKILL its own process before it could finish the
+// teardown plan. Production code shouldn't ever land in this shape
+// (hubs run in detached children) but tests register workspaces
+// under os.Getpid() routinely, and the guard is cheap insurance.
+func TestPlanReapOrphans_SkipsSelfPID(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	// Plant a self-pid orphan: workspace dir doesn't exist (orphan
+	// signal #1), pid is alive (we're alive), would normally reap.
+	if err := registry.Write(registry.Entry{
+		Cwd:       filepath.Join(t.TempDir(), "vanished-ws"),
+		Name:      "self-pid-orphan",
+		HubPID:    os.Getpid(),
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if plan := planReapOrphans(); len(plan) != 0 {
+		t.Errorf("self-pid orphan must not be queued for reap; got %d actions",
+			len(plan))
 	}
 }
 

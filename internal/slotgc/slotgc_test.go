@@ -83,6 +83,40 @@ func TestDeadSlots_MissingPidFileSkipped(t *testing.T) {
 	}
 }
 
+// TestLiveSlots_ListsAliveOnes pins the inverse of DeadSlots: only
+// slots whose leaf.pid points at an alive process are reported.
+func TestLiveSlots_ListsAliveOnes(t *testing.T) {
+	root := t.TempDir()
+	makeSlot(t, root, "alive", os.Getpid())
+	makeSlot(t, root, "dead", 999_999)
+
+	live, err := LiveSlots(root)
+	if err != nil {
+		t.Fatalf("LiveSlots: %v", err)
+	}
+	if len(live) != 1 || live[0].Name != "alive" || live[0].PID != os.Getpid() {
+		t.Errorf("expected one live slot at self pid, got %+v", live)
+	}
+}
+
+func TestLiveSlots_NoSwarmRoot(t *testing.T) {
+	live, err := LiveSlots(t.TempDir())
+	if err != nil {
+		t.Fatalf("LiveSlots: %v", err)
+	}
+	if len(live) != 0 {
+		t.Errorf("expected empty, got %+v", live)
+	}
+}
+
+// TestKill_ReturnsTrueOnDeadPid: Kill on a known-dead pid is a
+// graceful no-op and reports success without sending signals.
+func TestKill_ReturnsTrueOnDeadPid(t *testing.T) {
+	if !Kill(999_999) {
+		t.Errorf("Kill on dead pid should return true (already gone)")
+	}
+}
+
 // TestPruneDead_RemovesDeadSlots pins the write side: dead slot
 // dirs are os.RemoveAll'd; live slots stay; missing-pid slots stay.
 func TestPruneDead_RemovesDeadSlots(t *testing.T) {
