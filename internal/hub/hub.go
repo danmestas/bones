@@ -52,6 +52,12 @@ const natsBootstrapAttempts = 3
 // each round (1s, 2s, 4s).
 const natsBootstrapBackoff = 1 * time.Second
 
+// stopGrace bounds how long Stop waits between SIGTERM and SIGKILL.
+// Mirrors registry.Reap: short by design, since hub processes hold
+// ports + unlinked fossil inodes we want released ASAP. Long enough
+// for a healthy hub to flush WAL and exit cleanly on TERM.
+var stopGrace = 2 * time.Second
+
 // Start brings up the orchestrator hub: a Fossil repository at
 // .bones/hub.fossil seeded from git-tracked files, a Fossil HTTP
 // server on the chosen port, and an embedded NATS JetStream server.
@@ -148,14 +154,22 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 	// Fresh-start detection (ADR 0023): if no fossil PID is alive,
 	// wipe stale checkout state so each session starts from a clean
 	// substrate. Working-tree files are untouched.
+	//
+	// SQLite -shm and -wal sidecars are part of "stale checkout state":
+	// when a prior run crashed mid-seed, libfossil leaves a 0-byte WAL
+	// and a populated SHM. The next CreateWithEnv hits
+	// SQLITE_IOERR_SHORT_READ (522) on those orphan blocks. See #138.
 	if !pidIsLive(p.fossilPid) {
-		for _, path := range []string{p.hubRepo, p.fslckout, p.fslSettings} {
-			_ = os.RemoveAll(path)
-		}
+		removeRepoAndSidecars(p)
 	}
 
 	if _, err := os.Stat(p.hubRepo); errors.Is(err, os.ErrNotExist) {
-		if err := seedHubRepo(p); err != nil {
+		if err := seedHubRepoFunc(p); err != nil {
+			// Roll back any partial repo state — libfossil may have
+			// created hub.fossil and/or its -shm/-wal sidecars before
+			// the schema apply step that failed. Leaving those in
+			// place poisons the next bones hub start (#138).
+			removeRepoAndSidecars(p)
 			return fmt.Errorf("hub: seed: %w", err)
 		}
 	}
@@ -282,15 +296,19 @@ func spawnDetachedChild(p paths, o opts) error {
 	return nil
 }
 
-// Stop sends SIGTERM to the processes recorded in the pid files written
-// by Start and removes those pid files. Missing pid files or stale pids
-// are not an error: Stop is idempotent so callers can shut down without
-// first checking whether Start has run.
+// Stop terminates the processes recorded in the pid files written by
+// Start and removes those pid files. SIGTERM first; if the process is
+// still alive after stopGrace, SIGKILL. Pid files are only removed
+// once the process is confirmed dead so a follow-up Start cannot
+// mistake an orphan-still-alive for "nothing to clean up" (#138).
 //
-// As a safety, Stop will not signal the calling process. If the recorded
-// pid is the same as os.Getpid(), Stop only removes the pid file. The
-// foreground Start has its own ctx-cancellation path; signaling self
-// would terminate the caller before it could clean up.
+// Missing pid files or stale pids are not an error: Stop is idempotent
+// so callers can shut down without first checking whether Start ran.
+//
+// As a safety, Stop will not signal the calling process. If the
+// recorded pid matches os.Getpid(), Stop only removes the pid file.
+// The foreground Start has its own ctx-cancellation path; signaling
+// self would terminate the caller before it could clean up.
 func Stop(root string) (err error) {
 	p, err := newPaths(root)
 	if err != nil {
@@ -304,15 +322,13 @@ func Stop(root string) (err error) {
 	// Both servers share a single child process in the detached model,
 	// so the two pid files typically reference the same pid. Dedup so
 	// we only signal once.
-	signaled := make(map[int]struct{})
+	handled := make(map[int]struct{})
 	for _, pidFile := range []string{p.fossilPid, p.natsPid} {
 		pid, ok := readPid(pidFile)
 		if ok && pid != self {
-			if _, done := signaled[pid]; !done {
-				if proc, err := os.FindProcess(pid); err == nil {
-					_ = proc.Signal(syscall.SIGTERM)
-				}
-				signaled[pid] = struct{}{}
+			if _, done := handled[pid]; !done {
+				terminateProcess(pid)
+				handled[pid] = struct{}{}
 			}
 		}
 		_ = os.Remove(pidFile)
@@ -322,6 +338,36 @@ func Stop(root string) (err error) {
 	_ = os.Remove(p.fossilURL)
 	_ = os.Remove(p.natsURL)
 	return nil
+}
+
+// terminateProcess sends SIGTERM, polls until stopGrace elapses, and
+// escalates to SIGKILL if the process is still alive. Returns once
+// the process is dead or the post-KILL wait expires; callers treat
+// the result as best-effort. Mirrors registry.Reap so behavior is
+// consistent across the two kill paths.
+func terminateProcess(pid int) {
+	if !pidIntIsLive(pid) {
+		return
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return
+	}
+	_ = proc.Signal(syscall.SIGTERM)
+	deadline := time.Now().Add(stopGrace)
+	for time.Now().Before(deadline) {
+		if !pidIntIsLive(pid) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	_ = proc.Signal(syscall.SIGKILL)
+	for range 20 {
+		if !pidIntIsLive(pid) {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 // paths holds every filesystem location the hub touches. Pulled into a
@@ -389,6 +435,17 @@ func pidIsLive(pidFile string) bool {
 	if !ok {
 		return false
 	}
+	return pidIntIsLive(pid)
+}
+
+// pidIntIsLive reports whether pid names a live process. Same probe
+// pidIsLive uses, but takes the pid directly so callers that already
+// have an integer (e.g., the Stop escalator) don't round-trip through
+// a pid file.
+func pidIntIsLive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return false
@@ -424,6 +481,28 @@ func writePid(pidFile string, pid int) error {
 // Returns an error if the working tree has no git-tracked files, since
 // committing nothing would produce a checkout with an empty tip and the
 // orchestrator workflow assumes a non-empty session base.
+
+// seedHubRepoFunc is a package-level seam over seedHubRepo so tests can
+// inject failure modes (e.g., to verify rollback of partially-created
+// SQLite sidecars). Production code reaches the real implementation.
+var seedHubRepoFunc = seedHubRepo
+
+// removeRepoAndSidecars deletes the hub.fossil file and its SQLite
+// -shm / -wal sidecars together. The three travel as a unit: deleting
+// only hub.fossil leaves the sidecars to poison the next CreateWithEnv
+// with SQLITE_IOERR_SHORT_READ (522). See #138.
+func removeRepoAndSidecars(p paths) {
+	for _, path := range []string{
+		p.hubRepo,
+		p.hubRepo + "-shm",
+		p.hubRepo + "-wal",
+		p.fslckout,
+		p.fslSettings,
+	} {
+		_ = os.RemoveAll(path)
+	}
+}
+
 func seedHubRepo(p paths) error {
 	r, err := libfossil.Create(p.hubRepo, libfossil.CreateOpts{User: "orchestrator"})
 	if err != nil {
