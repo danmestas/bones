@@ -30,6 +30,7 @@ type HubCmd struct {
 	Start HubStartCmd `cmd:"" help:"Start the embedded Fossil hub + NATS server"`
 	Stop  HubStopCmd  `cmd:"" help:"Stop the embedded Fossil hub + NATS server"`
 	User  HubUserCmd  `cmd:"" help:"Manage fossil users in the hub repo"`
+	Reap  HubReapCmd  `cmd:"" help:"Terminate orphan hub processes (ADR 0043)"`
 }
 
 // HubStartCmd wires `bones hub start` flags to hub.Start.

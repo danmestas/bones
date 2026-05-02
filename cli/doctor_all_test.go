@@ -6,12 +6,30 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/danmestas/bones/internal/registry"
 )
+
+// makeFakeWorkspace builds a minimal valid bones workspace under
+// t.TempDir() — directory + .bones/agent.id marker — so registry
+// entries pointing at it don't get flagged as orphans by ADR 0043's
+// orphan check during doctor tests.
+func makeFakeWorkspace(t *testing.T, name string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), name)
+	if err := os.MkdirAll(filepath.Join(dir, ".bones"), 0o755); err != nil {
+		t.Fatalf("makeFakeWorkspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".bones", "agent.id"),
+		[]byte("test"), 0o644); err != nil {
+		t.Fatalf("makeFakeWorkspace marker: %v", err)
+	}
+	return dir
+}
 
 func TestDoctorAllRendersSummary(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
@@ -20,11 +38,16 @@ func TestDoctorAllRendersSummary(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	// Build real workspace dirs with markers so the new orphan check
+	// (ADR 0043) doesn't flag them. The test cares about renderer
+	// output, not orphan-detection semantics.
+	fooDir := makeFakeWorkspace(t, "foo")
+	barDir := makeFakeWorkspace(t, "bar")
 	now := time.Now().UTC()
 	for _, e := range []registry.Entry{
-		{Cwd: "/foo", Name: "foo", HubURL: srv.URL, NATSURL: "nats://x",
+		{Cwd: fooDir, Name: "foo", HubURL: srv.URL, NATSURL: "nats://x",
 			HubPID: os.Getpid(), StartedAt: now},
-		{Cwd: "/bar", Name: "bar", HubURL: srv.URL, NATSURL: "nats://x",
+		{Cwd: barDir, Name: "bar", HubURL: srv.URL, NATSURL: "nats://x",
 			HubPID: os.Getpid(), StartedAt: now},
 	} {
 		if err := registry.Write(e); err != nil {
@@ -64,9 +87,10 @@ func TestDoctorAllVerboseShowsDetails(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	wkDir := makeFakeWorkspace(t, "wk")
 	now := time.Now().UTC()
 	if err := registry.Write(registry.Entry{
-		Cwd: "/wk", Name: "wk", HubURL: srv.URL, NATSURL: "nats://x",
+		Cwd: wkDir, Name: "wk", HubURL: srv.URL, NATSURL: "nats://x",
 		HubPID: os.Getpid(), StartedAt: now,
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -87,8 +111,9 @@ func TestDoctorAllJSON(t *testing.T) {
 		w.WriteHeader(200)
 	}))
 	defer srv.Close()
+	xDir := makeFakeWorkspace(t, "x")
 	if err := registry.Write(registry.Entry{
-		Cwd: "/x", Name: "x", HubURL: srv.URL, HubPID: os.Getpid(), StartedAt: time.Now().UTC(),
+		Cwd: xDir, Name: "x", HubURL: srv.URL, HubPID: os.Getpid(), StartedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}

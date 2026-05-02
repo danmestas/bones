@@ -15,6 +15,7 @@ import (
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
 	"github.com/danmestas/bones/internal/githook"
+	"github.com/danmestas/bones/internal/registry"
 	"github.com/danmestas/bones/internal/scaffoldver"
 	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/telemetry"
@@ -185,6 +186,7 @@ func runBypassReportTo(w io.Writer, cwd string) (warns int, err error) {
 	if checkBonesScaffoldedHooks(w, cwd) {
 		warns++
 	}
+	warns += checkOrphanHubs(w)
 
 	switch tip, head, drifted := fossilDrift(cwd); {
 	case tip == "" && head == "":
@@ -288,6 +290,32 @@ func checkBonesScaffoldedHooks(w io.Writer, cwd string) bool {
 	}
 	_, _ = fmt.Fprintln(w, "  OK    .claude/settings.json has bones-owned hook entries")
 	return false
+}
+
+// checkOrphanHubs reads the cross-workspace registry and reports
+// any orphan hub processes — alive PIDs whose workspace directory
+// no longer exists or has been trashed (per ADR 0043). Returns the
+// number of WARN-class findings emitted (one per orphan).
+func checkOrphanHubs(w io.Writer) int {
+	orphans, err := registry.Orphans()
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "  WARN  orphan-hub registry read: %v\n", err)
+		return 1
+	}
+	if len(orphans) == 0 {
+		_, _ = fmt.Fprintln(w, "  OK    no orphan hub processes registered")
+		return 0
+	}
+	for _, e := range orphans {
+		age := "?"
+		if !e.StartedAt.IsZero() {
+			age = time.Since(e.StartedAt).Round(time.Second).String()
+		}
+		_, _ = fmt.Fprintf(w,
+			"  WARN  orphan hub: pid=%d cwd=%s age=%s — run `bones hub reap` to terminate\n",
+			e.HubPID, e.Cwd, age)
+	}
+	return len(orphans)
 }
 
 // hookCommandPresent walks hooks[event] and reports whether any
