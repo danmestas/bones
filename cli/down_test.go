@@ -192,15 +192,12 @@ func TestRemoveBonesHooks_LegacyStopHook(t *testing.T) {
 	}
 }
 
-// TestRemoveBonesHooks_StripsBonesHubStart: post-ADR-0041 the
-// SessionStart hook command is "bones hub start" (not the legacy
-// hub-bootstrap.sh). bones down must prune that entry while leaving
-// other co-located SessionStart hooks (like task-priming) intact.
-//
-// Schema mirrors what mergeSettings actually writes: each
-// SessionStart entry is a {matcher, hooks: [{command, type, ...}]}
-// group, not a flat hook map.
-func TestRemoveBonesHooks_StripsBonesHubStart(t *testing.T) {
+// TestRemoveBonesHooks_StripsAllBonesOwned pins the post-ADR-0042
+// invariant: bones down removes every hook entry bones up installs —
+// `bones hub start`, `bones tasks prime --json` under SessionStart,
+// and `bones tasks prime --json` under PreCompact. User-authored
+// hooks at the same events are preserved (covered by a sibling test).
+func TestRemoveBonesHooks_StripsAllBonesOwned(t *testing.T) {
 	dir := t.TempDir()
 	settings := filepath.Join(dir, "settings.json")
 	body := `{
@@ -211,6 +208,14 @@ func TestRemoveBonesHooks_StripsBonesHubStart(t *testing.T) {
         "hooks": [
           {"command": "bones tasks prime --json", "type": "command", "timeout": 10},
           {"command": "bones hub start", "type": "command", "timeout": 10}
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"command": "bones tasks prime --json", "type": "command", "timeout": 10}
         ]
       }
     ]
@@ -230,8 +235,40 @@ func TestRemoveBonesHooks_StripsBonesHubStart(t *testing.T) {
 	if strings.Contains(s, "bones hub start") {
 		t.Errorf("settings still contains 'bones hub start':\n%s", s)
 	}
-	if !strings.Contains(s, "bones tasks prime --json") {
-		t.Errorf("prime hook stripped:\n%s", s)
+	if strings.Contains(s, "bones tasks prime --json") {
+		t.Errorf("settings still contains 'bones tasks prime --json':\n%s", s)
+	}
+}
+
+// TestRemoveBonesHooks_PreservesUserAuthoredHooks pins the
+// non-clobber invariant: bones down strips only its own commands;
+// other entries at the same SessionStart/PreCompact events stay.
+func TestRemoveBonesHooks_PreservesUserAuthoredHooks(t *testing.T) {
+	dir := t.TempDir()
+	settings := filepath.Join(dir, "settings.json")
+	body := `{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"command": "bones tasks prime --json", "type": "command", "timeout": 10},
+          {"command": "bones hub start", "type": "command", "timeout": 10},
+          {"command": "echo my-custom-hook", "type": "command", "timeout": 10}
+        ]
+      }
+    ]
+  }
+}`
+	if err := os.WriteFile(settings, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := removeBonesHooks(settings); err != nil {
+		t.Fatalf("removeBonesHooks: %v", err)
+	}
+	got, _ := os.ReadFile(settings)
+	if !strings.Contains(string(got), "echo my-custom-hook") {
+		t.Errorf("user-authored hook stripped:\n%s", got)
 	}
 }
 
@@ -292,6 +329,12 @@ func TestPlanDown_FullInstall(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(dir, ".claude", "settings.json"),
 		`{"hooks":{}}`)
+	// AGENTS.md (bones-managed) + CLAUDE.md symlink — added in ADR 0042.
+	writeFile(t, filepath.Join(dir, "AGENTS.md"),
+		"# Agent Guidance for this Workspace\n\n## Agent Setup (REQUIRED)\n")
+	if err := os.Symlink("AGENTS.md", filepath.Join(dir, "CLAUDE.md")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
 
 	plan := planDown(dir, &DownCmd{})
 	descs := make([]string, len(plan))
@@ -307,11 +350,28 @@ func TestPlanDown_FullInstall(t *testing.T) {
 		".claude/skills/orchestrator",
 		".claude/skills/subagent",
 		".claude/skills/uninstall-bones",
+		"AGENTS.md",
+		"CLAUDE.md",
 		".claude/settings.json",
 	}
 	for _, w := range wants {
 		if !strings.Contains(joined, w) {
 			t.Errorf("plan missing action for %q:\n%s", w, joined)
+		}
+	}
+}
+
+// TestPlanRemoveAgentsMD_PreservesUserAuthored pins that an
+// AGENTS.md without the bones marker is left in place — bones down
+// only removes its own scaffolded copy.
+func TestPlanRemoveAgentsMD_PreservesUserAuthored(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "AGENTS.md"),
+		"# My Project\n\nNot bones-managed.\n")
+	plan := planRemoveAgentsMD(dir)
+	for _, a := range plan {
+		if strings.Contains(a.description, "AGENTS.md") {
+			t.Errorf("user-authored AGENTS.md should not be in removal plan: %q", a.description)
 		}
 	}
 }

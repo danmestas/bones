@@ -14,21 +14,141 @@ func TestScaffoldOrchestrator_FreshWorkspace(t *testing.T) {
 	if err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
+	// Per ADR 0042: AGENTS.md (universal channel) + CLAUDE.md symlink
+	// + Claude-format hooks. Skill markdown trees are NOT scaffolded.
 	for _, want := range []string{
-		".claude/skills/orchestrator/SKILL.md",
-		".claude/skills/subagent/SKILL.md",
-		".claude/skills/uninstall-bones/SKILL.md",
+		"AGENTS.md",
+		"CLAUDE.md",
 		".claude/settings.json",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, want)); err != nil {
 			t.Errorf("missing %s: %v", want, err)
 		}
 	}
-	// Per ADR 0041, .orchestrator/scripts/ is no longer scaffolded.
-	if _, err := os.Stat(filepath.Join(dir, ".orchestrator")); err == nil {
-		t.Errorf(".orchestrator/ should not be scaffolded post-ADR-0041")
+	for _, gone := range []string{
+		".claude/skills/orchestrator",
+		".claude/skills/subagent",
+		".claude/skills/uninstall-bones",
+		".orchestrator", // pre-ADR-0041
+	} {
+		if _, err := os.Stat(filepath.Join(dir, gone)); err == nil {
+			t.Errorf("%s should not be scaffolded post-ADR-0042", gone)
+		}
+	}
+	// CLAUDE.md must be a symlink pointing at AGENTS.md.
+	if target, err := os.Readlink(filepath.Join(dir, "CLAUDE.md")); err != nil {
+		t.Errorf("CLAUDE.md not a symlink: %v", err)
+	} else if target != "AGENTS.md" {
+		t.Errorf("CLAUDE.md target: got %q want %q", target, "AGENTS.md")
+	}
+	// AGENTS.md must carry the bones marker and the required directive section.
+	agents, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+	if !strings.Contains(string(agents), "# Agent Guidance for this Workspace") {
+		t.Errorf("AGENTS.md missing bones marker")
+	}
+	if !strings.Contains(string(agents), "## Agent Setup (REQUIRED)") {
+		t.Errorf("AGENTS.md missing required directive section")
 	}
 	verifyHooks(t, filepath.Join(dir, ".claude", "settings.json"))
+}
+
+// TestScaffoldOrchestrator_Idempotent_AGENTSandCLAUDE pins idempotency
+// for the new artifacts: re-running scaffold on a workspace where
+// AGENTS.md and CLAUDE.md already exist (from a prior run) yields no
+// content diff.
+func TestScaffoldOrchestrator_Idempotent_AGENTSandCLAUDE(t *testing.T) {
+	dir := t.TempDir()
+	if err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatal(err)
+	}
+	firstAgents, _ := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	firstClaude, _ := os.Readlink(filepath.Join(dir, "CLAUDE.md"))
+	if err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatal(err)
+	}
+	secondAgents, _ := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	secondClaude, _ := os.Readlink(filepath.Join(dir, "CLAUDE.md"))
+	if string(firstAgents) != string(secondAgents) {
+		t.Errorf("AGENTS.md changed on re-scaffold")
+	}
+	if firstClaude != secondClaude {
+		t.Errorf("CLAUDE.md symlink target changed on re-scaffold: %q -> %q",
+			firstClaude, secondClaude)
+	}
+}
+
+// TestScaffoldOrchestrator_WipesLegacyBonesSkills pins the migration
+// path: existing .claude/skills/{orchestrator,subagent,uninstall-bones}/
+// directories from pre-ADR-0042 installs are removed when the new
+// scaffold runs.
+func TestScaffoldOrchestrator_WipesLegacyBonesSkills(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range legacyBonesSkills {
+		path := filepath.Join(dir, ".claude", "skills", name)
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		skillPath := filepath.Join(path, "SKILL.md")
+		if err := os.WriteFile(skillPath, []byte("legacy\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatalf("scaffoldOrchestrator: %v", err)
+	}
+	for _, name := range legacyBonesSkills {
+		if _, err := os.Stat(filepath.Join(dir, ".claude", "skills", name)); err == nil {
+			t.Errorf("legacy bones skill %q not removed", name)
+		}
+	}
+}
+
+// TestScaffoldOrchestrator_PreservesUserAuthoredSkills pins that
+// non-bones-owned skill directories under .claude/skills/ are left
+// alone by the migration.
+func TestScaffoldOrchestrator_PreservesUserAuthoredSkills(t *testing.T) {
+	dir := t.TempDir()
+	userSkill := filepath.Join(dir, ".claude", "skills", "my-custom-skill")
+	if err := os.MkdirAll(userSkill, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillPath := filepath.Join(userSkill, "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(userSkill); err != nil {
+		t.Errorf("user-authored skill should be preserved: %v", err)
+	}
+}
+
+// TestScaffoldOrchestrator_RefusesUserAuthoredAgentsMD pins the safety
+// against clobbering: if AGENTS.md exists without the bones marker,
+// scaffold returns an error rather than overwriting.
+func TestScaffoldOrchestrator_RefusesUserAuthoredAgentsMD(t *testing.T) {
+	dir := t.TempDir()
+	usersAgents := "# My Project\n\nProject-specific agent guidance.\n"
+	agentsPath := filepath.Join(dir, "AGENTS.md")
+	if err := os.WriteFile(agentsPath, []byte(usersAgents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := scaffoldOrchestrator(dir)
+	if err == nil {
+		t.Fatal("expected error when AGENTS.md is user-authored")
+	}
+	if !strings.Contains(err.Error(), "not bones-managed") {
+		t.Errorf("error should mention bones-managed; got: %v", err)
+	}
+	// User's AGENTS.md content is intact.
+	got, _ := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if string(got) != usersAgents {
+		t.Errorf("user AGENTS.md modified: %q", got)
+	}
 }
 
 func TestScaffoldOrchestrator_Idempotent(t *testing.T) {
@@ -402,22 +522,22 @@ func TestScaffoldOrchestrator_PreservesUnrelatedSessionEndHook(t *testing.T) {
 	}
 }
 
-func TestScaffoldOrchestrator_SkillHasADR0023Completion(t *testing.T) {
+// TestScaffoldOrchestrator_AgentsMDHasADR0023Completion pins that the
+// AGENTS.md content (which absorbs the orchestrator skill prose post-
+// ADR-0042) still includes the `fossil update` completion step from
+// ADR 0023.
+func TestScaffoldOrchestrator_AgentsMDHasADR0023Completion(t *testing.T) {
 	dir := t.TempDir()
 	if err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
-	skill, err := os.ReadFile(
-		filepath.Join(dir, ".claude", "skills", "orchestrator", "SKILL.md"),
-	)
+	agents, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{
-		"fossil update",
-	} {
-		if !strings.Contains(string(skill), want) {
-			t.Errorf("orchestrator SKILL.md missing %q (ADR 0023)", want)
+	for _, want := range []string{"fossil update"} {
+		if !strings.Contains(string(agents), want) {
+			t.Errorf("AGENTS.md missing %q (ADR 0023)", want)
 		}
 	}
 }

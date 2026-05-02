@@ -163,6 +163,7 @@ func planDown(root string, c *DownCmd) []downAction {
 	plan = append(plan, planRemoveBonesDir(root)...)
 	plan = append(plan, planRemoveOrchestrator(root, c)...)
 	plan = append(plan, planRemoveSkills(root, c)...)
+	plan = append(plan, planRemoveAgentsMD(root)...)
 	plan = append(plan, planRemoveHooks(root, c)...)
 	plan = append(plan, planRemoveFossilMarkers(root)...)
 	return plan
@@ -261,6 +262,43 @@ func planRemoveSkills(root string, c *DownCmd) []downAction {
 	return plan
 }
 
+// planRemoveAgentsMD removes the bones-managed AGENTS.md and the
+// CLAUDE.md symlink (or its file fallback). Per ADR 0042 these are
+// the harness-agnostic guidance channel; they pair with the hook
+// entries removed by planRemoveHooks. AGENTS.md is removed only if
+// it was bones-managed (first line matches the bones marker) — a
+// user-authored AGENTS.md is left in place so we don't clobber
+// project-specific guidance.
+func planRemoveAgentsMD(root string) []downAction {
+	var plan []downAction
+	agentsPath := filepath.Join(root, "AGENTS.md")
+	if data, err := os.ReadFile(agentsPath); err == nil && bonesOwnedAgentsMD(data) {
+		plan = append(plan, downAction{
+			description: "remove " + agentsPath,
+			do:          func() error { return os.Remove(agentsPath) },
+		})
+	}
+	// CLAUDE.md is unconditionally bones-managed when AGENTS.md is —
+	// it's a symlink we wrote pointing at AGENTS.md (or a file fallback
+	// with the same content on platforms that don't support symlinks).
+	// Remove it only if it points at AGENTS.md or contains the bones
+	// marker; an unrelated CLAUDE.md (user-authored, e.g. an older
+	// project convention) is preserved.
+	claudePath := filepath.Join(root, "CLAUDE.md")
+	if target, err := os.Readlink(claudePath); err == nil && target == "AGENTS.md" {
+		plan = append(plan, downAction{
+			description: "remove " + claudePath,
+			do:          func() error { return os.Remove(claudePath) },
+		})
+	} else if data, err := os.ReadFile(claudePath); err == nil && bonesOwnedAgentsMD(data) {
+		plan = append(plan, downAction{
+			description: "remove " + claudePath,
+			do:          func() error { return os.Remove(claudePath) },
+		})
+	}
+	return plan
+}
+
 func planRemoveHooks(root string, c *DownCmd) []downAction {
 	if c.KeepHooks {
 		return nil
@@ -323,8 +361,10 @@ func removeBonesHooks(path string) error {
 	if hooks == nil {
 		return nil
 	}
-	pruneHookEvent(hooks, "SessionStart", "hub-bootstrap.sh") // legacy
-	pruneHookEvent(hooks, "SessionStart", "bones hub start")  // current (ADR 0041)
+	pruneHookEvent(hooks, "SessionStart", "hub-bootstrap.sh")         // legacy
+	pruneHookEvent(hooks, "SessionStart", "bones hub start")          // current (ADR 0041)
+	pruneHookEvent(hooks, "SessionStart", "bones tasks prime --json") // task priming
+	pruneHookEvent(hooks, "PreCompact", "bones tasks prime --json")   // task priming
 	// Current installs land under SessionEnd; the legacy Stop event
 	// is also pruned so workspaces installed before the migration
 	// are still cleaned up by `bones down`.

@@ -2,10 +2,9 @@ package cli
 
 import (
 	"bufio"
-	"embed"
+	_ "embed"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,18 +13,40 @@ import (
 	"github.com/danmestas/bones/internal/version"
 )
 
-//go:embed all:templates/orchestrator/skills
-var orchestratorTemplates embed.FS
+//go:embed templates/orchestrator/AGENTS.md
+var agentsMDTemplate []byte
 
-// scaffoldOrchestrator scaffolds the orchestrator skills and Claude Code
-// hooks into the workspace at root. Per ADR 0041 the legacy bash scripts
-// (.orchestrator/scripts/) are no longer scaffolded — the hub auto-starts
-// via `bones hub start`. Idempotent: re-running yields no diff against
-// an already-installed workspace.
+// agentsMDMarker is the first line of the bones-managed AGENTS.md
+// template. scaffoldOrchestrator uses it to tell whether an existing
+// AGENTS.md is bones-owned (safe to overwrite) or user-authored
+// (refuse and surface a merge instruction).
+const agentsMDMarker = "# Agent Guidance for this Workspace"
+
+// legacyBonesSkills are the per-skill directories `bones up` used to
+// scaffold under .claude/skills/ before ADR 0042. They are wiped on
+// every `bones up` so the workspace converges on the AGENTS.md model.
+// User-authored skills under .claude/skills/ that don't match these
+// names are left alone.
+var legacyBonesSkills = []string{"orchestrator", "subagent", "uninstall-bones"}
+
+// scaffoldOrchestrator scaffolds the AGENTS.md universal channel and
+// Claude-format hooks into the workspace at root. Per ADR 0042 the
+// pre-existing per-skill markdown trees under .claude/skills/{orchestrator,
+// subagent, uninstall-bones}/ are NOT scaffolded — their content lives
+// in AGENTS.md as prose. The hooks file remains the canonical hook spec;
+// non-Claude harnesses are directed by AGENTS.md to translate it.
+//
+// Idempotent: re-running yields no diff against an already-installed
+// workspace.
 func scaffoldOrchestrator(root string) error {
-	if err := copyTree(orchestratorTemplates, "templates/orchestrator/skills",
-		filepath.Join(root, ".claude", "skills"), 0o644); err != nil {
-		return fmt.Errorf("skills: %w", err)
+	if err := removeLegacyBonesSkills(root); err != nil {
+		return fmt.Errorf("legacy skills cleanup: %w", err)
+	}
+	if err := writeAgentsMD(root); err != nil {
+		return fmt.Errorf("agents.md: %w", err)
+	}
+	if err := linkClaudeMD(root); err != nil {
+		return fmt.Errorf("claude.md symlink: %w", err)
 	}
 	if err := mergeSettings(filepath.Join(root, ".claude", "settings.json")); err != nil {
 		return fmt.Errorf("settings: %w", err)
@@ -39,36 +60,91 @@ func scaffoldOrchestrator(root string) error {
 	return nil
 }
 
-func copyTree(fsys embed.FS, src, dst string, defaultMode fs.FileMode) error {
-	return fs.WalkDir(fsys, src, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+// removeLegacyBonesSkills removes the three pre-ADR-0042 bones-owned
+// skill directories under .claude/skills/ if present. User-authored
+// skills under .claude/skills/ are not touched. Missing directories
+// are not an error — the function is best-effort idempotent.
+func removeLegacyBonesSkills(root string) error {
+	skillsDir := filepath.Join(root, ".claude", "skills")
+	for _, name := range legacyBonesSkills {
+		path := filepath.Join(skillsDir, name)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			continue
 		}
-		if d.IsDir() {
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("remove %s: %w", path, err)
+		}
+	}
+	// If .claude/skills is now empty (only contained bones-owned dirs),
+	// remove it too. Non-empty directories stay — user content is theirs.
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
 			return nil
 		}
-		rel, err := filepath.Rel(src, p)
-		if err != nil {
-			return err
-		}
-		out := filepath.Join(dst, rel)
-		mode := defaultMode
-		if filepath.Ext(p) == ".sh" {
-			mode = 0o755
-		}
-		return copyFile(fsys, p, out, mode)
-	})
+		return err
+	}
+	if len(entries) == 0 {
+		_ = os.Remove(skillsDir)
+	}
+	return nil
 }
 
-func copyFile(fsys embed.FS, src, dst string, mode fs.FileMode) error {
-	data, err := fsys.ReadFile(src)
-	if err != nil {
+// writeAgentsMD writes the bones-managed AGENTS.md template to the
+// workspace root. If an AGENTS.md already exists and starts with the
+// bones marker, it is overwritten (idempotent re-scaffold). If it
+// exists without the marker, the file is user-authored and we refuse
+// with a message that points at the merge path.
+func writeAgentsMD(root string) error {
+	path := filepath.Join(root, "AGENTS.md")
+	if existing, err := os.ReadFile(path); err == nil {
+		if !bonesOwnedAgentsMD(existing) {
+			return fmt.Errorf("AGENTS.md exists and is not bones-managed; "+
+				"merge bones content manually or remove %s and re-run", path)
+		}
+	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
+	return os.WriteFile(path, agentsMDTemplate, 0o644)
+}
+
+// bonesOwnedAgentsMD reports whether the given AGENTS.md content was
+// written by bones. The marker is the first non-empty line; we accept
+// it appearing within the first few lines so a stray trailing newline
+// or BOM does not falsely flag the file as user-authored.
+func bonesOwnedAgentsMD(content []byte) bool {
+	first := strings.SplitN(string(content), "\n", 4)
+	for _, line := range first {
+		if strings.TrimSpace(line) == agentsMDMarker {
+			return true
+		}
 	}
-	return os.WriteFile(dst, data, mode)
+	return false
+}
+
+// linkClaudeMD creates CLAUDE.md as a symbolic link to AGENTS.md per
+// the agents.md spec migration recipe. Idempotent: an existing symlink
+// pointing at AGENTS.md is left alone; an existing symlink pointing
+// elsewhere or a regular file there is replaced (CLAUDE.md is bones-
+// managed in this workspace once AGENTS.md is). Workspaces on platforms
+// without symlink support fall back to a regular-file copy with the
+// same content.
+func linkClaudeMD(root string) error {
+	target := "AGENTS.md"
+	link := filepath.Join(root, "CLAUDE.md")
+	if cur, err := os.Readlink(link); err == nil && cur == target {
+		return nil
+	}
+	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove existing CLAUDE.md: %w", err)
+	}
+	if err := os.Symlink(target, link); err == nil {
+		return nil
+	}
+	// Fallback: write a regular file with the same content. Less ideal
+	// (drifts on AGENTS.md edits), but symlinks are unsupported on some
+	// filesystems (e.g. older Windows volumes without developer mode).
+	return os.WriteFile(link, agentsMDTemplate, 0o644)
 }
 
 // mergeSettings idempotently installs the SessionStart + PreCompact
