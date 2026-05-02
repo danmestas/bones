@@ -350,6 +350,7 @@ func ensureGitignoreEntries(dir string) error {
 		".fslckout",
 		".fossil-settings/",
 		".bones/",
+		"chat.fossil",
 	}
 
 	existing := map[string]bool{}

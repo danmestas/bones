@@ -570,7 +570,7 @@ func TestEnsureGitignoreEntries_FreshFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{".fslckout", ".fossil-settings/", ".bones/"} {
+	for _, want := range []string{".fslckout", ".fossil-settings/", ".bones/", "chat.fossil"} {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("missing %q\n%s", want, data)
 		}
