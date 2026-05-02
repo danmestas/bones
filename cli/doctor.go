@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -178,6 +179,13 @@ func runBypassReportTo(w io.Writer, cwd string) (warns int, err error) {
 		_, _ = fmt.Fprintf(w, "  OK    scaffold version v%s matches binary\n", stamp)
 	}
 
+	if checkAgentsMD(w, cwd) {
+		warns++
+	}
+	if checkBonesScaffoldedHooks(w, cwd) {
+		warns++
+	}
+
 	switch tip, head, drifted := fossilDrift(cwd); {
 	case tip == "" && head == "":
 		_, _ = fmt.Fprintln(w, "  INFO  no git or fossil state to compare")
@@ -196,6 +204,113 @@ func runBypassReportTo(w io.Writer, cwd string) (warns int, err error) {
 		_, _ = fmt.Fprintln(w, "  OK    fossil tip == git HEAD")
 	}
 	return warns, nil
+}
+
+// checkAgentsMD reports on AGENTS.md state per ADR 0042: when the
+// scaffold version stamp says bones up has run, AGENTS.md must exist,
+// be bones-managed (first line marker), and carry the required Agent
+// Setup section. Returns true if a WARN was emitted.
+func checkAgentsMD(w io.Writer, cwd string) bool {
+	path := filepath.Join(cwd, "AGENTS.md")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		stamp, _ := scaffoldver.Read(cwd)
+		if stamp == "" {
+			_, _ = fmt.Fprintln(w, "  INFO  no AGENTS.md (workspace not yet scaffolded)")
+			return false
+		}
+		_, _ = fmt.Fprintln(w,
+			"  WARN  AGENTS.md missing — run `bones up` to install (ADR 0042)")
+		return true
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "  WARN  AGENTS.md read: %v\n", err)
+		return true
+	}
+	if !bonesOwnedAgentsMD(data) {
+		_, _ = fmt.Fprintln(w,
+			"  INFO  AGENTS.md present but not bones-managed — bones content out of scope")
+		return false
+	}
+	if !strings.Contains(string(data), "## Agent Setup (REQUIRED)") {
+		_, _ = fmt.Fprintln(w,
+			"  WARN  AGENTS.md missing required `## Agent Setup (REQUIRED)` section — "+
+				"run `bones up` to refresh")
+		return true
+	}
+	_, _ = fmt.Fprintln(w, "  OK    AGENTS.md scaffolded with bones-required sections")
+	return false
+}
+
+// checkBonesScaffoldedHooks verifies the Claude-format hooks bones up
+// installs (`bones hub start`, `bones tasks prime --json` x2). When
+// .claude/ exists at all, all three entries must be present in
+// settings.json. When .claude/ is absent, the check is silent — bones
+// supports harnesses with no .claude/ directory via AGENTS.md.
+// Returns true if a WARN was emitted.
+func checkBonesScaffoldedHooks(w io.Writer, cwd string) bool {
+	claudeDir := filepath.Join(cwd, ".claude")
+	if info, err := os.Stat(claudeDir); err != nil || !info.IsDir() {
+		return false
+	}
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		_, _ = fmt.Fprintf(w,
+			"  WARN  .claude/settings.json missing — run `bones up` to install hooks\n")
+		return true
+	}
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		_, _ = fmt.Fprintf(w, "  WARN  .claude/settings.json parse: %v\n", err)
+		return true
+	}
+	hooks, _ := root["hooks"].(map[string]any)
+	want := []struct {
+		event string
+		cmd   string
+	}{
+		{"SessionStart", "bones hub start"},
+		{"SessionStart", "bones tasks prime --json"},
+		{"PreCompact", "bones tasks prime --json"},
+	}
+	var missing []string
+	for _, h := range want {
+		if !hookCommandPresent(hooks, h.event, h.cmd) {
+			missing = append(missing, h.event+":"+h.cmd)
+		}
+	}
+	if len(missing) > 0 {
+		_, _ = fmt.Fprintf(w,
+			"  WARN  .claude/settings.json missing bones hooks: %s — run `bones up` to refresh\n",
+			strings.Join(missing, ", "))
+		return true
+	}
+	_, _ = fmt.Fprintln(w, "  OK    .claude/settings.json has bones-owned hook entries")
+	return false
+}
+
+// hookCommandPresent walks hooks[event] and reports whether any
+// hook entry's command exactly matches cmd.
+func hookCommandPresent(hooks map[string]any, event, cmd string) bool {
+	groups, _ := hooks[event].([]any)
+	for _, g := range groups {
+		gm, ok := g.(map[string]any)
+		if !ok {
+			continue
+		}
+		entries, _ := gm["hooks"].([]any)
+		for _, e := range entries {
+			em, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			if c, _ := em["command"].(string); c == cmd {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // fossilDrift reads the fossil trunk tip marker and git HEAD; it
