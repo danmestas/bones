@@ -123,15 +123,19 @@ func bonesOwnedAgentsMD(content []byte) bool {
 }
 
 // linkClaudeMD creates CLAUDE.md as a symbolic link to AGENTS.md per
-// the agents.md spec migration recipe. Idempotent: an existing symlink
-// pointing at AGENTS.md is left alone; an existing symlink pointing
-// elsewhere or a regular file there is replaced (CLAUDE.md is bones-
-// managed in this workspace once AGENTS.md is). Workspaces on platforms
-// without symlink support fall back to a regular-file copy with the
-// same content.
+// the agents.md spec migration recipe. Mirrors writeAgentsMD's safety
+// gate: pre-existing user content is refused, never silently destroyed
+// (issue #139). Bones-managed shapes — a symlink to AGENTS.md, or a
+// regular-file fallback carrying the bones marker — are recognized and
+// replaced idempotently. Workspaces on platforms without symlink
+// support land on the regular-file fallback with the AGENTS.md content.
 func linkClaudeMD(root string) error {
 	target := "AGENTS.md"
 	link := filepath.Join(root, "CLAUDE.md")
+
+	if err := requireBonesOwnedClaudeMD(link, target); err != nil {
+		return err
+	}
 	if cur, err := os.Readlink(link); err == nil && cur == target {
 		return nil
 	}
@@ -145,6 +149,35 @@ func linkClaudeMD(root string) error {
 	// (drifts on AGENTS.md edits), but symlinks are unsupported on some
 	// filesystems (e.g. older Windows volumes without developer mode).
 	return os.WriteFile(link, agentsMDTemplate, 0o644)
+}
+
+// requireBonesOwnedClaudeMD returns an error if CLAUDE.md exists in a
+// shape bones did not produce. The four bones-recognized shapes are:
+// (1) absent, (2) symlink whose target is AGENTS.md, (3) regular file
+// whose first lines carry the bones marker (the fallback path on
+// symlink-unsupported filesystems). Any other shape — symlink to a
+// different target, regular file without the marker — is treated as
+// user content and refused.
+func requireBonesOwnedClaudeMD(link, target string) error {
+	if cur, err := os.Readlink(link); err == nil {
+		if cur == target {
+			return nil
+		}
+		return fmt.Errorf("CLAUDE.md is a symlink to %q, not bones-managed; "+
+			"merge bones content manually or remove %s and re-run", cur, link)
+	}
+	data, err := os.ReadFile(link)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read CLAUDE.md: %w", err)
+	}
+	if bonesOwnedAgentsMD(data) {
+		return nil
+	}
+	return fmt.Errorf("CLAUDE.md exists and is not bones-managed; "+
+		"merge bones content into AGENTS.md or remove %s and re-run", link)
 }
 
 // mergeSettings idempotently installs the SessionStart + PreCompact
