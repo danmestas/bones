@@ -305,6 +305,29 @@ func spawnDetachedChild(p paths, o opts) error {
 			err, hubLogTail(p))
 	}
 
+	// False-positive readiness defense (#138 item 1): the TCP probes
+	// above pass when SOMETHING responds on the configured ports, not
+	// when our child is the responder. If another process already
+	// owned fossilPort/natsPort, our child's bind failed, our child
+	// exited, but the probes succeeded against the unrelated process.
+	// Without this check, joinLogic would proceed thinking the hub is
+	// up, then every verb downstream fails mysteriously against the
+	// foreign service.
+	//
+	// Verify the recorded fossil pid matches our child. The child
+	// writes p.fossilPid as part of startFossil, so by the time the
+	// fossil port responds, the file should exist with the child's
+	// pid. Mismatch (or missing) means port collision or a crashed
+	// child that never wrote the file.
+	if recorded, ok := readPid(p.fossilPid); !ok || recorded != cmd.Process.Pid {
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("hub: fossil port %s responded but %s does not "+
+			"name our child (pid %d, recorded %d) — likely port "+
+			"collision; another service is bound to the port%s",
+			fossilAddr, p.fossilPid, cmd.Process.Pid, recorded,
+			hubLogTail(p))
+	}
+
 	// Release the child so it isn't reaped when we return.
 	if err := cmd.Process.Release(); err != nil {
 		return fmt.Errorf("hub: release child: %w", err)
