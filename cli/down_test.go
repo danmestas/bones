@@ -567,6 +567,72 @@ func TestPlanKillSwarmLeaves_SkipsDeadPids(t *testing.T) {
 	}
 }
 
+// TestPlanKillSwarmLeaves_LegacyLeafPID pins #138 item 3: a
+// pre-ADR-0041 .bones/leaf.pid pointing at a live process is
+// queued for kill. Old bones versions spawned `leaf --repo
+// .../repo.fossil` and recorded the pid here; the post-ADR-0041
+// migration removes the substrate files but never killed this
+// orphan. Now we do.
+//
+// Uses a real `sleep 30` subprocess pid (legacyLeafPID skips
+// self-pid via the `pid != os.Getpid()` guard, so a self-pid
+// fixture would silently produce zero actions).
+func TestPlanKillSwarmLeaves_LegacyLeafPID(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, ".bones"))
+
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot spawn sleep child: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+	pid := cmd.Process.Pid
+
+	if err := os.WriteFile(filepath.Join(root, ".bones", "leaf.pid"),
+		[]byte(strconv.Itoa(pid)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	plan := planKillSwarmLeaves(root, &DownCmd{})
+	if len(plan) != 1 {
+		t.Fatalf("expected 1 kill action for legacy leaf.pid, got %d", len(plan))
+	}
+	if !strings.Contains(plan[0].description, "legacy") {
+		t.Errorf("plan description should name the legacy path; got %q",
+			plan[0].description)
+	}
+	if !strings.Contains(plan[0].description, strconv.Itoa(pid)) {
+		t.Errorf("plan description missing pid: %q", plan[0].description)
+	}
+}
+
+// TestLegacyLeafPID_DeadPidIgnored: a stale .bones/leaf.pid (pid
+// already dead — this is the post-migration steady state) returns
+// (0, false) so planKillSwarmLeaves doesn't queue a no-op kill.
+func TestLegacyLeafPID_DeadPidIgnored(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, ".bones"))
+	if err := os.WriteFile(filepath.Join(root, ".bones", "leaf.pid"),
+		[]byte("999999\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if pid, ok := legacyLeafPID(root); ok {
+		t.Errorf("dead pid should report ok=false; got pid=%d ok=true", pid)
+	}
+}
+
+// TestLegacyLeafPID_AbsentFileIgnored: the steady state on a fresh
+// post-ADR-0041 workspace — no .bones/leaf.pid file exists — must
+// return (0, false), not error.
+func TestLegacyLeafPID_AbsentFileIgnored(t *testing.T) {
+	if pid, ok := legacyLeafPID(t.TempDir()); ok {
+		t.Errorf("absent file should report ok=false; got pid=%d", pid)
+	}
+}
+
 // TestPlanReapOrphans_QueuesCrossWorkspaceOrphans pins #138 item 6:
 // down enumerates registry orphans (other workspaces with alive
 // hub pid but vanished cwd) and queues reap actions for each. Pre-
