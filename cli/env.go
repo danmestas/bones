@@ -13,24 +13,18 @@ import (
 // walkUpToBones returns (workspaceRoot, true) if a bones-initialized
 // workspace exists at startDir or any ancestor; otherwise ("", false).
 //
-// Looks for .bones/agent.id rather than just .bones/ — agent.id is written
-// by workspace.Init and is unique to a workspace, while bare .bones/ also
-// matches the user-level state directory at $HOME/.bones/ (registry,
-// telemetry install-id, telemetry-acknowledged). Distinguishing by the
-// agent.id marker prevents `bones env` from misclassifying any cwd inside
-// $HOME as the workspace named after $HOME.
+// Thin wrapper over workspace.FindRoot: a single source of truth for
+// "where is the workspace root" so this helper cannot drift from
+// internal/workspace.walkUp. Both require .bones/agent.id (not just
+// .bones/) so $HOME/.bones/ — the global state dir for the cross-
+// workspace registry and telemetry — is not misidentified as a
+// workspace. See issue #140.
 func walkUpToBones(startDir string) (string, bool) {
-	dir := startDir
-	for {
-		if _, err := os.Stat(filepath.Join(dir, ".bones", "agent.id")); err == nil {
-			return dir, true
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", false
-		}
-		dir = parent
+	root, err := workspace.FindRoot(startDir)
+	if err != nil {
+		return "", false
 	}
+	return root, true
 }
 
 // resolveWorkspaceName returns the human display name for the workspace

@@ -25,18 +25,25 @@ func FindRoot(start string) (string, error) {
 	return walkUp(start)
 }
 
-// walkUp searches from start upward for a directory containing markerDirName.
-// Returns the path of the directory containing it, or ErrNoWorkspace if the
-// filesystem root is reached without finding one.
+// walkUp searches from start upward for a workspace marker directory
+// (.bones/agent.id). Returns the workspace root, or ErrNoWorkspace if
+// the filesystem root is reached without finding one.
+//
+// The agent.id marker (not just the .bones/ directory) is the canonical
+// workspace signal: $HOME/.bones/ is a global state directory used for
+// the cross-workspace registry and telemetry install-id, and matching
+// it as a workspace would cause `bones status` and other workspace.Join
+// callers to mistakenly resolve to $HOME when invoked from any
+// subdirectory of $HOME without a closer .bones/agent.id marker. See
+// issue #140.
 func walkUp(start string) (string, error) {
 	cur, err := filepath.Abs(start)
 	if err != nil {
 		return "", fmt.Errorf("absolute path: %w", err)
 	}
-	for i := 0; i < maxWalkUpDepth; i++ {
-		candidate := filepath.Join(cur, markerDirName)
-		info, err := os.Stat(candidate)
-		if err == nil && info.IsDir() {
+	for range maxWalkUpDepth {
+		marker := filepath.Join(cur, markerDirName, agentIDFile)
+		if _, err := os.Stat(marker); err == nil {
 			return cur, nil
 		}
 		parent := filepath.Dir(cur)

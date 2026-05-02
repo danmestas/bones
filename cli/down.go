@@ -2,13 +2,14 @@ package cli
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/registry"
 	"github.com/danmestas/bones/internal/sessions"
+	"github.com/danmestas/bones/internal/slotgc"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
@@ -91,13 +93,20 @@ func (c *DownCmd) runAll() error {
 	return firstErr
 }
 
-// resolveDownRoot returns the workspace root to operate on. Tries
-// workspace.Join first to walk up to a marker, falls back to cwd
+// resolveDownRoot returns the workspace root to operate on. Walks up
+// from cwd looking for the .bones/agent.id marker; falls back to cwd
 // when no workspace exists (still useful for partial installs).
+//
+// Uses workspace.FindRoot (read-only) rather than workspace.Join: Join
+// would lazy-start the hub, which is the opposite of what `bones down`
+// wants. Without this, running `bones down` against a workspace where
+// the hub is already stopped would spin a fresh hub up just to ask
+// permission to tear it down — and on non-TTY (no `--yes`) the prompt
+// aborts immediately, leaving the user with a hub that wasn't running
+// before they ran `down` (#138 item 7).
 func resolveDownRoot(cwd string) string {
-	info, err := workspace.Join(context.Background(), cwd)
-	if err == nil {
-		return info.WorkspaceDir
+	if root, err := workspace.FindRoot(cwd); err == nil {
+		return root
 	}
 	return cwd
 }
@@ -158,6 +167,8 @@ type downAction struct {
 func planDown(root string, c *DownCmd) []downAction {
 	var plan []downAction
 	plan = append(plan, planStopHub(root, c)...)
+	plan = append(plan, planKillSwarmLeaves(root, c)...)
+	plan = append(plan, planReapOrphans()...)
 	plan = append(plan, planRemoveRegistry(root)...)
 	plan = append(plan, planRemoveGitHook(root)...)
 	plan = append(plan, planRemoveBonesDir(root)...)
@@ -166,6 +177,137 @@ func planDown(root string, c *DownCmd) []downAction {
 	plan = append(plan, planRemoveAgentsMD(root)...)
 	plan = append(plan, planRemoveHooks(root, c)...)
 	plan = append(plan, planRemoveFossilMarkers(root)...)
+	return plan
+}
+
+// planKillSwarmLeaves enumerates .bones/swarm/<slot>/leaf.pid files
+// for processes still alive and queues SIGTERM→SIGKILL for each.
+// Pre-fix, hub.Stop only signaled fossil/nats; swarm leaves spawned
+// for parallel slots survived bones down as orphans (#138 item 2).
+//
+// Also covers legacy pre-ADR-0041 leaves: a workspace migrated from
+// the old layout may have a stale .bones/leaf.pid pointing at a live
+// process spawned by an older bones version. Current bones never
+// re-spawns these (they came from the EdgeSync `leaf --repo
+// .../repo.fossil` exec path that the post-ADR-0041 architecture
+// removed), so the only way they get killed is during teardown
+// (#138 item 3).
+//
+// Suppressed by --keep-hub: keeping the hub means keeping its leaves
+// too. Best-effort: failures don't block the rest of teardown.
+func planKillSwarmLeaves(root string, c *DownCmd) []downAction {
+	if c.KeepHub {
+		return nil
+	}
+	live, err := slotgc.LiveSlots(root)
+	if err != nil {
+		live = nil
+	}
+	plan := make([]downAction, 0, len(live)+1)
+	for _, slot := range live {
+		desc := fmt.Sprintf("kill swarm leaf %s (pid %d)", slot.Name, slot.PID)
+		s := slot
+		plan = append(plan, downAction{
+			description: desc,
+			do: func() error {
+				if !slotgc.Kill(s.PID) {
+					return fmt.Errorf("pid %d still alive after SIGKILL "+
+						"escalation", s.PID)
+				}
+				return nil
+			},
+		})
+	}
+	// Legacy leaf.pid (#138 item 3): pre-ADR-0041 workspaces wrote a
+	// single leaf.pid at .bones/leaf.pid for the workspace-wide leaf
+	// process. After migration (workspace.migrateLegacyLayout) the file
+	// is removed but the process is not killed — old bones versions
+	// spawned it via `leaf --repo .../repo.fossil` which survives the
+	// migration as an orphan. Detect via legacyLeafPID and kill before
+	// the .bones/ removal action wipes the rest.
+	if pid, ok := legacyLeafPID(root); ok && pid != os.Getpid() {
+		plan = append(plan, downAction{
+			description: fmt.Sprintf("kill legacy workspace leaf "+
+				"(.bones/leaf.pid → pid %d)", pid),
+			do: func() error {
+				if !slotgc.Kill(pid) {
+					return fmt.Errorf("legacy leaf pid %d still alive after "+
+						"SIGKILL escalation", pid)
+				}
+				return nil
+			},
+		})
+	}
+	if len(plan) == 0 {
+		return nil
+	}
+	return plan
+}
+
+// legacyLeafPID returns the pid recorded in .bones/leaf.pid (the
+// pre-ADR-0041 workspace-leaf marker) if the file exists and points
+// at a live process. Returns (0, false) on any read/parse failure or
+// dead pid. Used by planKillSwarmLeaves to clean up orphans surviving
+// the layout migration.
+func legacyLeafPID(root string) (int, bool) {
+	path := filepath.Join(root, ".bones", "leaf.pid")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	s := strings.TrimSpace(string(data))
+	pid, err := strconv.Atoi(s)
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	// FindProcess + signal-0 probe matches slotgc.pidAlive's logic; we
+	// re-derive instead of importing the helper because slotgc's is
+	// unexported.
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return 0, false
+	}
+	if err := proc.Signal(syscall.Signal(0)); err != nil {
+		return 0, false
+	}
+	return pid, true
+}
+
+// planReapOrphans signals + removes registry entries for any cross-
+// workspace orphan: a hub PID still alive on this host whose
+// workspace cwd is gone (deleted, trashed, or missing the agent.id
+// marker). Without this, `bones down` only cleaned up its own
+// workspace, leaving stale entries from removed/renamed sibling
+// workspaces to pile up and produce phantom doctor warnings (#138
+// item 6). Best-effort; per-entry failures are aggregated as
+// continuation-class errors.
+//
+// Self-protection: an orphan entry whose HubPID matches our own
+// process is never reaped. registry.Reap would SIGTERM-then-SIGKILL
+// the calling process, killing bones down before it could remove
+// the entry. This shouldn't happen in production (hubs run in their
+// own detached child) but the guard is cheap insurance and is
+// load-bearing for tests that register workspaces under the test
+// process's own pid.
+func planReapOrphans() []downAction {
+	orphans, err := registry.Orphans()
+	if err != nil || len(orphans) == 0 {
+		return nil
+	}
+	self := os.Getpid()
+	plan := make([]downAction, 0, len(orphans))
+	for _, o := range orphans {
+		if o.HubPID == self {
+			continue
+		}
+		desc := fmt.Sprintf("reap orphan registry entry %s (pid %d, workspace gone)",
+			o.Name, o.HubPID)
+		entry := o
+		plan = append(plan, downAction{
+			description: desc,
+			do:          func() error { return registry.Reap(entry) },
+		})
+	}
 	return plan
 }
 

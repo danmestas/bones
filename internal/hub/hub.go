@@ -117,6 +117,25 @@ func Start(ctx context.Context, root string, options ...Option) (err error) {
 		return nil
 	}
 
+	// Seed precondition (#138 item 9): a fresh hub start needs at least
+	// one git-tracked file to seed the hub fossil from. Without this
+	// check the parent spawns a detached child, the child crashes inside
+	// seedHubRepo with "no git-tracked files to seed from", and the
+	// parent waits the full readyTimeout (15s) for a TCP probe that will
+	// never succeed before surfacing the real error from hub.log. Skip
+	// the check on detach re-entry: the parent already ran it.
+	if !isDetachChild {
+		needsSeed := false
+		if _, statErr := os.Stat(p.hubRepo); errors.Is(statErr, os.ErrNotExist) {
+			needsSeed = true
+		}
+		if needsSeed {
+			if err := checkSeedPrecondition(p.root); err != nil {
+				return err
+			}
+		}
+	}
+
 	// Per-slot GC: remove .bones/swarm/<slot>/ directories whose
 	// leaf.pid points at a dead process. Piggybacks on the most
 	// frequently-run lifecycle event (SessionStart hook → bones hub
@@ -284,6 +303,29 @@ func spawnDetachedChild(p paths, o opts) error {
 		_ = cmd.Process.Kill()
 		return fmt.Errorf("hub: nats child not ready: %w%s",
 			err, hubLogTail(p))
+	}
+
+	// False-positive readiness defense (#138 item 1): the TCP probes
+	// above pass when SOMETHING responds on the configured ports, not
+	// when our child is the responder. If another process already
+	// owned fossilPort/natsPort, our child's bind failed, our child
+	// exited, but the probes succeeded against the unrelated process.
+	// Without this check, joinLogic would proceed thinking the hub is
+	// up, then every verb downstream fails mysteriously against the
+	// foreign service.
+	//
+	// Verify the recorded fossil pid matches our child. The child
+	// writes p.fossilPid as part of startFossil, so by the time the
+	// fossil port responds, the file should exist with the child's
+	// pid. Mismatch (or missing) means port collision or a crashed
+	// child that never wrote the file.
+	if recorded, ok := readPid(p.fossilPid); !ok || recorded != cmd.Process.Pid {
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("hub: fossil port %s responded but %s does not "+
+			"name our child (pid %d, recorded %d) — likely port "+
+			"collision; another service is bound to the port%s",
+			fossilAddr, p.fossilPid, cmd.Process.Pid, recorded,
+			hubLogTail(p))
 	}
 
 	// Release the child so it isn't reaped when we return.
@@ -573,6 +615,34 @@ func seedHubRepo(p paths) error {
 	})
 	if err != nil {
 		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// ErrSeedPrecondition is returned by Start when the workspace has no
+// git-tracked files for seedHubRepo to commit. Surfaced before the
+// parent spawns the detached child so the user sees the real error
+// (and an actionable next step) without waiting out the TCP-probe
+// readyTimeout. See #138 item 9.
+var ErrSeedPrecondition = errors.New(
+	"no git-tracked files to seed hub fossil from; commit at least one " +
+		"file (`git add . && git commit -m init`) before running " +
+		"bones hub start")
+
+// checkSeedPrecondition validates that seedHubRepo will succeed before
+// the hub is spawned. Today the only precondition is that the
+// workspace has at least one git-tracked file; future preconditions
+// (e.g., libfossil version compatibility) belong here too.
+func checkSeedPrecondition(root string) error {
+	files, err := gitTrackedFiles(root)
+	if err != nil {
+		// Not a git repo, or git unavailable. Pass through with a
+		// hub: prefix; the underlying error message already names
+		// `git ls-files` which is enough for the user to act on.
+		return fmt.Errorf("hub: seed precondition: %w", err)
+	}
+	if len(files) == 0 {
+		return ErrSeedPrecondition
 	}
 	return nil
 }

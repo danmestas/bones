@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -450,6 +452,269 @@ func TestRunDown_DryRun(t *testing.T) {
 	}
 	if !dirExists(filepath.Join(dir, ".bones")) {
 		t.Errorf(".bones/ removed during --dry-run")
+	}
+}
+
+// TestResolveDownRoot_DoesNotAutoStartHub pins the #138 item 7 fix:
+// `bones down` must NOT lazy-start the hub when resolving the
+// workspace root. Pre-fix, resolveDownRoot called workspace.Join,
+// which auto-starts the hub via hubStartFunc when none is healthy.
+// On a workspace where the hub was already stopped that meant
+// `bones down` would spin a fresh hub up just to ask permission to
+// tear it down — and on non-TTY (no --yes) the prompt aborts
+// immediately, leaving a hub that wasn't running before.
+//
+// Post-fix, resolveDownRoot calls workspace.FindRoot (read-only) so no
+// hub start is attempted at all.
+func TestResolveDownRoot_DoesNotAutoStartHub(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".bones"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".bones", "agent.id"),
+		[]byte("test-agent-id\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := resolveDownRoot(root)
+	if got != root {
+		t.Errorf("resolveDownRoot: got %q, want %q", got, root)
+	}
+
+	// Hub state files must NOT have been created. workspace.Join would
+	// have written hub-fossil-url and hub-nats-url and started a leaf;
+	// FindRoot writes nothing. Asserting on the URL files is the most
+	// direct way to catch the regression — any future caller change
+	// that re-routes through workspace.Join would land bytes here.
+	for _, name := range []string{"hub-fossil-url", "hub-nats-url"} {
+		path := filepath.Join(root, ".bones", name)
+		if _, err := os.Stat(path); err == nil {
+			t.Errorf("resolveDownRoot must not auto-start hub; "+
+				"found %s (#138 item 7)", path)
+		} else if !os.IsNotExist(err) {
+			t.Errorf("stat %s: unexpected error: %v", path, err)
+		}
+	}
+}
+
+// TestResolveDownRoot_NoMarkerFallsBackToCwd: outside any workspace,
+// resolveDownRoot returns cwd so partial-install cleanups still work.
+func TestResolveDownRoot_NoMarkerFallsBackToCwd(t *testing.T) {
+	root := t.TempDir()
+	got := resolveDownRoot(root)
+	if got != root {
+		t.Errorf("resolveDownRoot: got %q, want %q (cwd fallback)", got, root)
+	}
+}
+
+// TestPlanKillSwarmLeaves_QueuesLiveSlots pins #138 item 2: a
+// workspace with .bones/swarm/<slot>/leaf.pid pointing at a live
+// process must produce a kill action in the down plan. Pre-fix,
+// hub.Stop only signaled fossil/nats; swarm leaves orphaned.
+func TestPlanKillSwarmLeaves_QueuesLiveSlots(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, ".bones", "swarm", "rendering"))
+	if err := os.WriteFile(
+		filepath.Join(root, ".bones", "swarm", "rendering", "leaf.pid"),
+		[]byte(strconv.Itoa(os.Getpid())+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	plan := planKillSwarmLeaves(root, &DownCmd{})
+	if len(plan) != 1 {
+		t.Fatalf("expected 1 kill action, got %d", len(plan))
+	}
+	if !strings.Contains(plan[0].description, "rendering") {
+		t.Errorf("plan description missing slot name: %s", plan[0].description)
+	}
+	if !strings.Contains(plan[0].description,
+		strconv.Itoa(os.Getpid())) {
+		t.Errorf("plan description missing pid: %s", plan[0].description)
+	}
+}
+
+// TestPlanKillSwarmLeaves_NoOpWhenKeepHub pins the --keep-hub
+// suppression: keeping the hub means keeping its leaves too.
+func TestPlanKillSwarmLeaves_NoOpWhenKeepHub(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, ".bones", "swarm", "rendering"))
+	if err := os.WriteFile(
+		filepath.Join(root, ".bones", "swarm", "rendering", "leaf.pid"),
+		[]byte(strconv.Itoa(os.Getpid())+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if plan := planKillSwarmLeaves(root, &DownCmd{KeepHub: true}); plan != nil {
+		t.Errorf("expected nil under --keep-hub, got %d actions", len(plan))
+	}
+}
+
+// TestPlanKillSwarmLeaves_SkipsDeadPids: a dead-pid slot is the
+// concern of slotgc.PruneDead (separately invoked elsewhere); kill
+// shouldn't waste signals on it.
+func TestPlanKillSwarmLeaves_SkipsDeadPids(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, ".bones", "swarm", "stale"))
+	if err := os.WriteFile(
+		filepath.Join(root, ".bones", "swarm", "stale", "leaf.pid"),
+		[]byte("999999\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if plan := planKillSwarmLeaves(root, &DownCmd{}); plan != nil {
+		t.Errorf("dead-pid slot should not be queued for kill; "+
+			"got %d actions", len(plan))
+	}
+}
+
+// TestPlanKillSwarmLeaves_LegacyLeafPID pins #138 item 3: a
+// pre-ADR-0041 .bones/leaf.pid pointing at a live process is
+// queued for kill. Old bones versions spawned `leaf --repo
+// .../repo.fossil` and recorded the pid here; the post-ADR-0041
+// migration removes the substrate files but never killed this
+// orphan. Now we do.
+//
+// Uses a real `sleep 30` subprocess pid (legacyLeafPID skips
+// self-pid via the `pid != os.Getpid()` guard, so a self-pid
+// fixture would silently produce zero actions).
+func TestPlanKillSwarmLeaves_LegacyLeafPID(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, ".bones"))
+
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot spawn sleep child: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+	pid := cmd.Process.Pid
+
+	if err := os.WriteFile(filepath.Join(root, ".bones", "leaf.pid"),
+		[]byte(strconv.Itoa(pid)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	plan := planKillSwarmLeaves(root, &DownCmd{})
+	if len(plan) != 1 {
+		t.Fatalf("expected 1 kill action for legacy leaf.pid, got %d", len(plan))
+	}
+	if !strings.Contains(plan[0].description, "legacy") {
+		t.Errorf("plan description should name the legacy path; got %q",
+			plan[0].description)
+	}
+	if !strings.Contains(plan[0].description, strconv.Itoa(pid)) {
+		t.Errorf("plan description missing pid: %q", plan[0].description)
+	}
+}
+
+// TestLegacyLeafPID_DeadPidIgnored: a stale .bones/leaf.pid (pid
+// already dead — this is the post-migration steady state) returns
+// (0, false) so planKillSwarmLeaves doesn't queue a no-op kill.
+func TestLegacyLeafPID_DeadPidIgnored(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, ".bones"))
+	if err := os.WriteFile(filepath.Join(root, ".bones", "leaf.pid"),
+		[]byte("999999\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if pid, ok := legacyLeafPID(root); ok {
+		t.Errorf("dead pid should report ok=false; got pid=%d ok=true", pid)
+	}
+}
+
+// TestLegacyLeafPID_AbsentFileIgnored: the steady state on a fresh
+// post-ADR-0041 workspace — no .bones/leaf.pid file exists — must
+// return (0, false), not error.
+func TestLegacyLeafPID_AbsentFileIgnored(t *testing.T) {
+	if pid, ok := legacyLeafPID(t.TempDir()); ok {
+		t.Errorf("absent file should report ok=false; got pid=%d", pid)
+	}
+}
+
+// TestPlanReapOrphans_QueuesCrossWorkspaceOrphans pins #138 item 6:
+// down enumerates registry orphans (other workspaces with alive
+// hub pid but vanished cwd) and queues reap actions for each. Pre-
+// fix, stale entries accumulated indefinitely.
+//
+// Uses a real subprocess pid (not os.Getpid) because the planReap
+// self-protection guard skips entries whose HubPID matches the
+// calling process — so a self-pid orphan would be silently filtered
+// and the test wouldn't exercise the queueing path.
+func TestPlanReapOrphans_QueuesCrossWorkspaceOrphans(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// Spawn a real child whose pid is alive but is not us. `sleep`
+	// is portable enough for POSIX hosts; skip on Windows.
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot spawn sleep child: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+	childPID := cmd.Process.Pid
+
+	// One alive: registry entry, real workspace dir with agent.id.
+	// IsOrphan returns false → not queued for reap.
+	aliveWS := t.TempDir()
+	mkdir(t, filepath.Join(aliveWS, ".bones"))
+	if err := os.WriteFile(filepath.Join(aliveWS, ".bones", "agent.id"),
+		[]byte("alive\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Write(registry.Entry{
+		Cwd: aliveWS, Name: "alive", HubPID: childPID,
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed alive: %v", err)
+	}
+
+	// One orphan: registry entry, child pid alive, but workspace dir
+	// missing (the IsOrphan signal). Must be queued for reap.
+	orphanWS := filepath.Join(t.TempDir(), "deleted-out-from-under")
+	if err := registry.Write(registry.Entry{
+		Cwd: orphanWS, Name: "orphan", HubPID: childPID,
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed orphan: %v", err)
+	}
+
+	plan := planReapOrphans()
+	if len(plan) != 1 {
+		t.Fatalf("expected exactly 1 reap action (the orphan), got %d:\n%v",
+			len(plan), plan)
+	}
+	if !strings.Contains(plan[0].description, "orphan") {
+		t.Errorf("plan should target the orphan; got %q", plan[0].description)
+	}
+}
+
+// TestPlanReapOrphans_SkipsSelfPID pins the suicide-prevention
+// guard: an orphan entry whose HubPID is the calling process's pid
+// must not be queued for reap. Without this, `bones down` would
+// SIGTERM-then-SIGKILL its own process before it could finish the
+// teardown plan. Production code shouldn't ever land in this shape
+// (hubs run in detached children) but tests register workspaces
+// under os.Getpid() routinely, and the guard is cheap insurance.
+func TestPlanReapOrphans_SkipsSelfPID(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	// Plant a self-pid orphan: workspace dir doesn't exist (orphan
+	// signal #1), pid is alive (we're alive), would normally reap.
+	if err := registry.Write(registry.Entry{
+		Cwd:       filepath.Join(t.TempDir(), "vanished-ws"),
+		Name:      "self-pid-orphan",
+		HubPID:    os.Getpid(),
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if plan := planReapOrphans(); len(plan) != 0 {
+		t.Errorf("self-pid orphan must not be queued for reap; got %d actions",
+			len(plan))
 	}
 }
 

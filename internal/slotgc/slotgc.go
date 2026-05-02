@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // DeadSlots lists slot names under .bones/swarm/<slot>/ whose
@@ -75,6 +76,84 @@ func PruneDead(workspaceDir string) ([]string, error) {
 		pruned = append(pruned, slot)
 	}
 	return pruned, firstErr
+}
+
+// LiveSlots lists slot names under .bones/swarm/<slot>/ whose leaf.pid
+// references a still-alive process. Inverse of DeadSlots; the caller
+// uses this to enumerate processes that bones down should reap. Slots
+// without a pid file are skipped (no leaf to kill).
+//
+// Read-only. Returns nil + nil when the swarm root doesn't exist.
+func LiveSlots(workspaceDir string) ([]Slot, error) {
+	swarmRoot := filepath.Join(workspaceDir, ".bones", "swarm")
+	entries, err := os.ReadDir(swarmRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("slotgc.LiveSlots: read %s: %w", swarmRoot, err)
+	}
+	var live []Slot
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		slot := e.Name()
+		pidFile := filepath.Join(swarmRoot, slot, "leaf.pid")
+		pid, ok := readPidFile(pidFile)
+		if !ok {
+			continue
+		}
+		if !pidAlive(pid) {
+			continue
+		}
+		live = append(live, Slot{Name: slot, PID: pid})
+	}
+	return live, nil
+}
+
+// Slot pairs a slot name with the pid of its live leaf. Returned by
+// LiveSlots so cli/down can render a meaningful plan and signal each
+// pid in turn.
+type Slot struct {
+	Name string
+	PID  int
+}
+
+// killGrace bounds how long Kill waits between SIGTERM and SIGKILL.
+// Mirrors hub.stopGrace and registry.reapGrace so the three kill paths
+// have consistent behavior; orphan leaves don't hold state worth
+// flushing — they hold ports + unlinked fossil inodes we want released.
+var killGrace = 2 * time.Second
+
+// Kill terminates pid using the same SIGTERM → poll → SIGKILL pattern
+// as hub.terminateProcess and registry.Reap. Returns true if the
+// process is gone by the time Kill returns. Best-effort: callers
+// treat a false return as "still alive after escalation, give up".
+func Kill(pid int) bool {
+	if !pidAlive(pid) {
+		return true
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	_ = proc.Signal(syscall.SIGTERM)
+	deadline := time.Now().Add(killGrace)
+	for time.Now().Before(deadline) {
+		if !pidAlive(pid) {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	_ = proc.Signal(syscall.SIGKILL)
+	for range 20 {
+		if !pidAlive(pid) {
+			return true
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return !pidAlive(pid)
 }
 
 // readPidFile parses leaf.pid as a single integer. Returns
