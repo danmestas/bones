@@ -184,6 +184,25 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 	return nil
 }
 
+// hubLogTail reads the last N lines (capped to ~2KB) of hub.log and
+// returns them prefixed with a newline + section header, ready for
+// concatenation into an error message. Returns "" when hub.log is
+// missing or empty so callers don't get an empty trailing section.
+// Used to surface in-child seed/start failures to the parent's
+// stderr, which is what SessionStart hooks actually capture.
+func hubLogTail(p paths) string {
+	const maxBytes = 2048
+	logPath := filepath.Join(p.orchDir, "hub.log")
+	data, err := os.ReadFile(logPath)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	if len(data) > maxBytes {
+		data = data[len(data)-maxBytes:]
+	}
+	return "\n--- " + logPath + " (tail) ---\n" + string(data)
+}
+
 // spawnDetachedChild re-execs the current binary as a foreground hub
 // child, redirects its stdout/stderr to .bones/hub.log, and
 // returns once the child has bound both ports. On readiness failure,
@@ -219,16 +238,22 @@ func spawnDetachedChild(p paths, o opts) error {
 	}
 
 	// The child writes pid files itself. Probe both ports until the
-	// child reports ready.
+	// child reports ready. On failure, surface the tail of hub.log
+	// alongside the timeout — without this the SessionStart hook
+	// attaches "fossil child not ready: timeout" with no hint at the
+	// real cause (#127), which is typically a seed failure logged in
+	// hub.log only.
 	fossilAddr := fmt.Sprintf("127.0.0.1:%d", o.fossilPort)
 	natsAddr := fmt.Sprintf("127.0.0.1:%d", o.natsPort)
 	if err := waitForTCP(fossilAddr, readyTimeout); err != nil {
 		_ = cmd.Process.Kill()
-		return fmt.Errorf("hub: fossil child not ready: %w", err)
+		return fmt.Errorf("hub: fossil child not ready: %w%s",
+			err, hubLogTail(p))
 	}
 	if err := waitForTCP(natsAddr, readyTimeout); err != nil {
 		_ = cmd.Process.Kill()
-		return fmt.Errorf("hub: nats child not ready: %w", err)
+		return fmt.Errorf("hub: nats child not ready: %w%s",
+			err, hubLogTail(p))
 	}
 
 	// Release the child so it isn't reaped when we return.
