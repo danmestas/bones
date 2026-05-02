@@ -34,6 +34,7 @@ type CLI struct {
 
 	// Tooling — used by humans authoring plans/skills.
 	ValidatePlan bonescli.ValidatePlanCmd `cmd:"" group:"tooling" help:"Validate plan"`
+	Plan         bonescli.PlanCmd         `cmd:"" group:"tooling" help:"Plan workflow operations"`
 	Peek         bonescli.PeekCmd         `cmd:"" group:"tooling" help:"Browse hub via fossil ui"`
 	Telemetry    bonescli.TelemetryCmd    `cmd:"" group:"tooling" help:"Manage usage telemetry"`
 
