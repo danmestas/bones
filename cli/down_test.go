@@ -453,6 +453,58 @@ func TestRunDown_DryRun(t *testing.T) {
 	}
 }
 
+// TestResolveDownRoot_DoesNotAutoStartHub pins the #138 item 7 fix:
+// `bones down` must NOT lazy-start the hub when resolving the
+// workspace root. Pre-fix, resolveDownRoot called workspace.Join,
+// which auto-starts the hub via hubStartFunc when none is healthy.
+// On a workspace where the hub was already stopped that meant
+// `bones down` would spin a fresh hub up just to ask permission to
+// tear it down — and on non-TTY (no --yes) the prompt aborts
+// immediately, leaving a hub that wasn't running before.
+//
+// Post-fix, resolveDownRoot calls workspace.FindRoot (read-only) so no
+// hub start is attempted at all.
+func TestResolveDownRoot_DoesNotAutoStartHub(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".bones"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".bones", "agent.id"),
+		[]byte("test-agent-id\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := resolveDownRoot(root)
+	if got != root {
+		t.Errorf("resolveDownRoot: got %q, want %q", got, root)
+	}
+
+	// Hub state files must NOT have been created. workspace.Join would
+	// have written hub-fossil-url and hub-nats-url and started a leaf;
+	// FindRoot writes nothing. Asserting on the URL files is the most
+	// direct way to catch the regression — any future caller change
+	// that re-routes through workspace.Join would land bytes here.
+	for _, name := range []string{"hub-fossil-url", "hub-nats-url"} {
+		path := filepath.Join(root, ".bones", name)
+		if _, err := os.Stat(path); err == nil {
+			t.Errorf("resolveDownRoot must not auto-start hub; "+
+				"found %s (#138 item 7)", path)
+		} else if !os.IsNotExist(err) {
+			t.Errorf("stat %s: unexpected error: %v", path, err)
+		}
+	}
+}
+
+// TestResolveDownRoot_NoMarkerFallsBackToCwd: outside any workspace,
+// resolveDownRoot returns cwd so partial-install cleanups still work.
+func TestResolveDownRoot_NoMarkerFallsBackToCwd(t *testing.T) {
+	root := t.TempDir()
+	got := resolveDownRoot(root)
+	if got != root {
+		t.Errorf("resolveDownRoot: got %q, want %q (cwd fallback)", got, root)
+	}
+}
+
 // TestDownAllInvokesPerWorkspace: runAll with --yes tears down every
 // registered workspace and removes their registry entries.
 func TestDownAllInvokesPerWorkspace(t *testing.T) {

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -91,13 +90,20 @@ func (c *DownCmd) runAll() error {
 	return firstErr
 }
 
-// resolveDownRoot returns the workspace root to operate on. Tries
-// workspace.Join first to walk up to a marker, falls back to cwd
+// resolveDownRoot returns the workspace root to operate on. Walks up
+// from cwd looking for the .bones/agent.id marker; falls back to cwd
 // when no workspace exists (still useful for partial installs).
+//
+// Uses workspace.FindRoot (read-only) rather than workspace.Join: Join
+// would lazy-start the hub, which is the opposite of what `bones down`
+// wants. Without this, running `bones down` against a workspace where
+// the hub is already stopped would spin a fresh hub up just to ask
+// permission to tear it down — and on non-TTY (no `--yes`) the prompt
+// aborts immediately, leaving the user with a hub that wasn't running
+// before they ran `down` (#138 item 7).
 func resolveDownRoot(cwd string) string {
-	info, err := workspace.Join(context.Background(), cwd)
-	if err == nil {
-		return info.WorkspaceDir
+	if root, err := workspace.FindRoot(cwd); err == nil {
+		return root
 	}
 	return cwd
 }
