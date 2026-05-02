@@ -790,3 +790,114 @@ func TestScaffoldOrchestrator_MigratesLegacyBootstrap(t *testing.T) {
 		t.Errorf("bones hub start missing after migration:\n%s", body)
 	}
 }
+
+// TestLinkClaudeMD_RefusesUserAuthoredFile pins the safety against
+// clobbering a pre-existing user-authored CLAUDE.md (issue #139).
+// Mirrors the existing AGENTS.md guard in writeAgentsMD: the marker
+// is the ownership signal; absence means the file is the user's.
+func TestLinkClaudeMD_RefusesUserAuthoredFile(t *testing.T) {
+	dir := t.TempDir()
+	usersClaude := "# My project rules\n\nNever do X. Always do Y.\n"
+	claudePath := filepath.Join(dir, "CLAUDE.md")
+	if err := os.WriteFile(claudePath, []byte(usersClaude), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := linkClaudeMD(dir)
+	if err == nil {
+		t.Fatal("expected error when CLAUDE.md is user-authored")
+	}
+	if !strings.Contains(err.Error(), "not bones-managed") {
+		t.Errorf("error should mention bones-managed; got: %v", err)
+	}
+	got, _ := os.ReadFile(claudePath)
+	if string(got) != usersClaude {
+		t.Errorf("user CLAUDE.md content modified:\nwant %q\ngot  %q", usersClaude, got)
+	}
+}
+
+// TestLinkClaudeMD_RefusesUnrelatedSymlink pins that a CLAUDE.md
+// symlinked to something other than AGENTS.md is treated as user
+// content. Users do create deliberate symlinks (e.g. CLAUDE.md ->
+// docs/agent-rules.md); silently retargeting them is data loss.
+func TestLinkClaudeMD_RefusesUnrelatedSymlink(t *testing.T) {
+	dir := t.TempDir()
+	otherTarget := filepath.Join(dir, "elsewhere.md")
+	if err := os.WriteFile(otherTarget, []byte("user target"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	claudePath := filepath.Join(dir, "CLAUDE.md")
+	if err := os.Symlink("elsewhere.md", claudePath); err != nil {
+		t.Fatal(err)
+	}
+	err := linkClaudeMD(dir)
+	if err == nil {
+		t.Fatal("expected error when CLAUDE.md is a symlink to a non-AGENTS.md target")
+	}
+	if !strings.Contains(err.Error(), "not bones-managed") {
+		t.Errorf("error should mention bones-managed; got: %v", err)
+	}
+	target, rerr := os.Readlink(claudePath)
+	if rerr != nil {
+		t.Fatalf("symlink replaced with regular file: %v", rerr)
+	}
+	if target != "elsewhere.md" {
+		t.Errorf("symlink target changed: got %q want %q", target, "elsewhere.md")
+	}
+}
+
+// TestLinkClaudeMD_AcceptsBonesOwnedFallback covers the
+// symlink-unsupported-fs branch: linkClaudeMD writes the AGENTS.md
+// content as a regular file. A subsequent run sees that regular file
+// (carrying the bones marker) and treats it as bones-managed
+// (idempotent re-scaffold).
+func TestLinkClaudeMD_AcceptsBonesOwnedFallback(t *testing.T) {
+	dir := t.TempDir()
+	claudePath := filepath.Join(dir, "CLAUDE.md")
+	if err := os.WriteFile(claudePath, agentsMDTemplate, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := linkClaudeMD(dir); err != nil {
+		t.Errorf("linkClaudeMD on bones-owned fallback file: %v", err)
+	}
+}
+
+// TestScaffoldOrchestrator_RefusesUserAuthoredCLAUDE is the full-path
+// integration: scaffoldOrchestrator must refuse when CLAUDE.md is
+// user-authored, and the user's content is left intact. Without this,
+// `bones up` silently destroys user instructions on first install.
+func TestScaffoldOrchestrator_RefusesUserAuthoredCLAUDE(t *testing.T) {
+	dir := t.TempDir()
+	usersClaude := "When the user corrects you, stop and re-read their message.\n"
+	claudePath := filepath.Join(dir, "CLAUDE.md")
+	if err := os.WriteFile(claudePath, []byte(usersClaude), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := scaffoldOrchestrator(dir)
+	if err == nil {
+		t.Fatal("expected error when CLAUDE.md is user-authored")
+	}
+	got, _ := os.ReadFile(claudePath)
+	if string(got) != usersClaude {
+		t.Errorf("user CLAUDE.md content modified by scaffold:\nwant %q\ngot  %q",
+			usersClaude, got)
+	}
+}
+
+// TestScaffoldOrchestrator_AGENTSNonEmpty pins that AGENTS.md after a
+// fresh scaffold is not zero bytes. Catches the secondary
+// empty-AGENTS.md sub-bug observed in the issue #139 reproduction:
+// a workspace can end up with a 0-byte AGENTS.md and a CLAUDE.md
+// symlink to it, which silently delivers empty agent guidance.
+func TestScaffoldOrchestrator_AGENTSNonEmpty(t *testing.T) {
+	dir := t.TempDir()
+	if err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatalf("scaffoldOrchestrator: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("stat AGENTS.md: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Fatal("AGENTS.md is empty after scaffold")
+	}
+}

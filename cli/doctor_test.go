@@ -14,6 +14,10 @@ import (
 
 // TestRunBypassReportToNoGit checks that a dir without .git emits INFO (not Fix).
 func TestRunBypassReportToNoGit(t *testing.T) {
+	// Isolate from any pre-existing ~/.bones/workspaces/ registry on the
+	// dev host. checkOrphanHubs reads $HOME-rooted state; a stale entry
+	// there would emit an unrelated WARN and fail this test.
+	t.Setenv("HOME", t.TempDir())
 	var buf bytes.Buffer
 	tmp := t.TempDir()
 	warns, err := runBypassReportTo(&buf, tmp)
