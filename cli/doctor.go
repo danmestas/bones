@@ -17,6 +17,7 @@ import (
 	"github.com/danmestas/bones/internal/githook"
 	"github.com/danmestas/bones/internal/registry"
 	"github.com/danmestas/bones/internal/scaffoldver"
+	"github.com/danmestas/bones/internal/slotgc"
 	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/telemetry"
 	"github.com/danmestas/bones/internal/version"
@@ -187,6 +188,7 @@ func runBypassReportTo(w io.Writer, cwd string) (warns int, err error) {
 		warns++
 	}
 	warns += checkOrphanHubs(w)
+	warns += checkStaleSlotDirs(w, cwd)
 
 	switch tip, head, drifted := fossilDrift(cwd); {
 	case tip == "" && head == "":
@@ -316,6 +318,28 @@ func checkOrphanHubs(w io.Writer) int {
 			e.HubPID, e.Cwd, age)
 	}
 	return len(orphans)
+}
+
+// checkStaleSlotDirs reports per-slot directories under
+// .bones/swarm/<slot>/ whose leaf.pid points at a dead process.
+// Read-only; the operator can clear them by running `bones hub
+// start` (which triggers a GC pass) or by `rm -rf` on the named
+// directories. Returns the number of WARN findings emitted.
+func checkStaleSlotDirs(w io.Writer, cwd string) int {
+	dead, err := slotgc.DeadSlots(cwd)
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "  WARN  slot dir scan: %v\n", err)
+		return 1
+	}
+	if len(dead) == 0 {
+		return 0
+	}
+	for _, slot := range dead {
+		_, _ = fmt.Fprintf(w,
+			"  WARN  stale slot dir .bones/swarm/%s — run `bones hub start` to GC\n",
+			slot)
+	}
+	return len(dead)
 }
 
 // hookCommandPresent walks hooks[event] and reports whether any
