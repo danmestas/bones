@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 
 	"github.com/danmestas/bones/internal/githook"
+	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/telemetry"
 	"github.com/danmestas/bones/internal/workspace"
 )
@@ -66,7 +68,41 @@ func runUp(cwd string, verbose bool) (err error) {
 	} else {
 		fmt.Printf("up: ready at %s\n", wsDir)
 	}
+	printHubStatus(os.Stdout, wsDir)
 	return nil
+}
+
+// printHubStatus reflects the workspace's current hub state to w
+// without spawning anything. Per ADR 0041 the hub starts lazily on
+// the first verb that needs it, so a fresh `bones up` lands with no
+// hub running and the operator otherwise has no signal that the
+// scaffold actually completed (#138 item 11).
+//
+// Three shapes:
+//
+//	hub: running at <fossil-url> / <nats-url> (pid=N)
+//	hub: previously recorded at <fossil-url> / <nats-url> — will
+//	    restart on next verb
+//	hub: not yet started — will start on next session (SessionStart
+//	    hook) or first verb that needs it
+//
+// Read-only: no pid signaling, no spawning. Safe to call from any
+// command that has just touched workspace state.
+func printHubStatus(w io.Writer, root string) {
+	fossilURL := hub.FossilURL(root)
+	natsURL := hub.NATSURL(root)
+	if fossilURL == "" || natsURL == "" {
+		_, _ = fmt.Fprintln(w, "up: hub: not yet started — will start on "+
+			"next session (SessionStart hook) or first verb that needs it")
+		return
+	}
+	if pid, ok := hub.IsRunning(root); ok {
+		_, _ = fmt.Fprintf(w, "up: hub: running at %s / %s (pid=%d)\n",
+			fossilURL, natsURL, pid)
+		return
+	}
+	_, _ = fmt.Fprintf(w, "up: hub: previously recorded at %s / %s — "+
+		"will restart on next verb\n", fossilURL, natsURL)
 }
 
 // initOrJoinWorkspace returns workspace.Info for cwd, creating the

@@ -439,6 +439,28 @@ func HubFossilPath(root string) string {
 	return filepath.Join(root, markerDirName, "hub.fossil")
 }
 
+// IsRunning reports whether a hub for the workspace at root is
+// currently running. Returns (pid, true) when both fossil.pid and
+// nats.pid exist and name live processes; (0, false) otherwise.
+//
+// Read-only. Used by cli/up to print accurate post-scaffold status
+// without spawning anything (per ADR 0041 the hub is started lazily
+// on first verb, not by `bones up`).
+func IsRunning(root string) (int, bool) {
+	p, err := newPaths(root)
+	if err != nil {
+		return 0, false
+	}
+	pid, ok := readPid(p.fossilPid)
+	if !ok || !pidIntIsLive(pid) {
+		return 0, false
+	}
+	if !pidIsLive(p.natsPid) {
+		return 0, false
+	}
+	return pid, true
+}
+
 // newPaths derives the hub layout from the workspace root. The root must
 // exist; the .bones subdirs are created lazily by Start.
 func newPaths(root string) (paths, error) {
