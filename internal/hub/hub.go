@@ -117,6 +117,25 @@ func Start(ctx context.Context, root string, options ...Option) (err error) {
 		return nil
 	}
 
+	// Seed precondition (#138 item 9): a fresh hub start needs at least
+	// one git-tracked file to seed the hub fossil from. Without this
+	// check the parent spawns a detached child, the child crashes inside
+	// seedHubRepo with "no git-tracked files to seed from", and the
+	// parent waits the full readyTimeout (15s) for a TCP probe that will
+	// never succeed before surfacing the real error from hub.log. Skip
+	// the check on detach re-entry: the parent already ran it.
+	if !isDetachChild {
+		needsSeed := false
+		if _, statErr := os.Stat(p.hubRepo); errors.Is(statErr, os.ErrNotExist) {
+			needsSeed = true
+		}
+		if needsSeed {
+			if err := checkSeedPrecondition(p.root); err != nil {
+				return err
+			}
+		}
+	}
+
 	// Per-slot GC: remove .bones/swarm/<slot>/ directories whose
 	// leaf.pid points at a dead process. Piggybacks on the most
 	// frequently-run lifecycle event (SessionStart hook → bones hub
@@ -573,6 +592,34 @@ func seedHubRepo(p paths) error {
 	})
 	if err != nil {
 		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// ErrSeedPrecondition is returned by Start when the workspace has no
+// git-tracked files for seedHubRepo to commit. Surfaced before the
+// parent spawns the detached child so the user sees the real error
+// (and an actionable next step) without waiting out the TCP-probe
+// readyTimeout. See #138 item 9.
+var ErrSeedPrecondition = errors.New(
+	"no git-tracked files to seed hub fossil from; commit at least one " +
+		"file (`git add . && git commit -m init`) before running " +
+		"bones hub start")
+
+// checkSeedPrecondition validates that seedHubRepo will succeed before
+// the hub is spawned. Today the only precondition is that the
+// workspace has at least one git-tracked file; future preconditions
+// (e.g., libfossil version compatibility) belong here too.
+func checkSeedPrecondition(root string) error {
+	files, err := gitTrackedFiles(root)
+	if err != nil {
+		// Not a git repo, or git unavailable. Pass through with a
+		// hub: prefix; the underlying error message already names
+		// `git ls-files` which is enough for the user to act on.
+		return fmt.Errorf("hub: seed precondition: %w", err)
+	}
+	if len(files) == 0 {
+		return ErrSeedPrecondition
 	}
 	return nil
 }
