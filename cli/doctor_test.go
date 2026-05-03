@@ -32,6 +32,45 @@ func TestRunBypassReportToNoGit(t *testing.T) {
 	if strings.Contains(out, "Fix:") {
 		t.Fatalf("expected no Fix in INFO-only output, got:\n%s", out)
 	}
+	// Fresh fixture has no .bones/agent.id either, so the new
+	// scaffold-incomplete WARN (#147) must NOT fire.
+	if strings.Contains(out, "scaffold incomplete") {
+		t.Errorf("scaffold-incomplete WARN should not fire on a fresh, "+
+			"never-up workspace:\n%s", out)
+	}
+}
+
+// TestRunBypassReportToScaffoldIncomplete pins #147: a workspace whose
+// `.bones/agent.id` marker is present but whose scaffold_version stamp
+// is absent reports a scaffold-incomplete WARN. This is the
+// half-installed state left by a failed `bones up`.
+func TestRunBypassReportToScaffoldIncomplete(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	tmp := t.TempDir()
+	if err := os.MkdirAll(tmp+"/.bones", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmp+"/.bones/agent.id",
+		[]byte("test-agent\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Note: no scaffold_version stamp.
+
+	var buf bytes.Buffer
+	warns, err := runBypassReportTo(&buf, tmp)
+	if err != nil {
+		t.Fatalf("runBypassReportTo: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "scaffold incomplete") {
+		t.Errorf("expected scaffold-incomplete WARN; got:\n%s", out)
+	}
+	if !strings.Contains(out, "bones up") {
+		t.Errorf("WARN should direct user to `bones up`:\n%s", out)
+	}
+	if warns < 1 {
+		t.Errorf("expected at least 1 warn, got %d", warns)
+	}
 }
 
 // TestFormatSwarmSessionsStale checks that a stale session emits WARN + Fix.

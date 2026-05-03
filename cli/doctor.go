@@ -169,6 +169,15 @@ func runBypassReportTo(w io.Writer, cwd string) (warns int, err error) {
 	case stampErr != nil:
 		_, _ = fmt.Fprintf(w, "  WARN  scaffold stamp read: %v\n", stampErr)
 		warns++
+	case stamp == "" && workspaceMarkerPresent(cwd):
+		// .bones/agent.id present but stamp absent: bones up step 1
+		// completed and step 2 (scaffold) did not. SessionStart hooks
+		// were never installed; agents operate without context priming
+		// (#147). Distinguish from a fresh workspace (no marker, no
+		// stamp) which is just informational.
+		_, _ = fmt.Fprintln(w,
+			"  WARN  scaffold incomplete — re-run `bones up`")
+		warns++
 	case stamp == "":
 		_, _ = fmt.Fprintln(w, "  INFO  no scaffold version stamp — `bones up` to write one")
 	case scaffoldver.Drifted(stamp, version.Get()):
@@ -292,6 +301,15 @@ func checkBonesScaffoldedHooks(w io.Writer, cwd string) bool {
 	}
 	_, _ = fmt.Fprintln(w, "  OK    .claude/settings.json has bones-owned hook entries")
 	return false
+}
+
+// workspaceMarkerPresent reports whether `.bones/agent.id` exists at
+// root. The marker is the load-bearing "step 1 of bones up succeeded"
+// signal — its presence with a missing scaffold_version stamp means
+// scaffold (step 2) failed mid-flight (#147 / #146).
+func workspaceMarkerPresent(root string) bool {
+	_, err := os.Stat(filepath.Join(root, ".bones", "agent.id"))
+	return err == nil
 }
 
 // checkOrphanHubs reads the cross-workspace registry and reports
