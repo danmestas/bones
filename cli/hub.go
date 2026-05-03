@@ -86,12 +86,19 @@ func warnScaffoldDrift(cwd string) {
 }
 
 // HubStopCmd wires `bones hub stop` to hub.Stop. Idempotent.
-type HubStopCmd struct{}
+//
+// --force overrides the active-slot safety check (#157). Without it,
+// stop refuses when any .bones/swarm/<slot>/leaf.pid points at a live
+// process, since restarting the hub on a different port would silently
+// break those leaves' cached NATS URLs.
+type HubStopCmd struct {
+	Force bool `name:"force" help:"stop even when swarm slots are active (#157)"`
+}
 
 func (c *HubStopCmd) Run(g *libfossilcli.Globals) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("cwd: %w", err)
 	}
-	return hub.Stop(cwd)
+	return hub.Stop(cwd, hub.WithForce(c.Force))
 }

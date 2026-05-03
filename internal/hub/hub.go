@@ -344,6 +344,30 @@ func spawnDetachedChild(p paths, o opts) error {
 	return nil
 }
 
+// StopOption configures Stop. Passed variadically so existing callers
+// using Stop(root) continue to compile without change.
+type StopOption func(*stopOpts)
+
+type stopOpts struct {
+	force bool
+}
+
+// WithForce overrides Stop's safety check that refuses a teardown
+// while any swarm slot has a live leaf process (#157). With
+// force=true, Stop proceeds regardless and the operator owns any
+// active leaves that lose their cached NATS URL when the hub
+// restarts on a different port. bones down passes WithForce(true)
+// since it is an explicit destructive teardown that has already
+// confirmed with the operator.
+func WithForce(force bool) StopOption {
+	return func(o *stopOpts) { o.force = force }
+}
+
+// ErrActiveSlots is returned by Stop when one or more swarm slots
+// have live leaf processes that would be silently disconnected by
+// tearing the hub down (#157). Use WithForce to override.
+var ErrActiveSlots = errors.New("hub: active swarm slots present")
+
 // Stop terminates the processes recorded in the pid files written by
 // Start and removes those pid files. SIGTERM first; if the process is
 // still alive after stopGrace, SIGKILL. Pid files are only removed
@@ -357,7 +381,24 @@ func spawnDetachedChild(p paths, o opts) error {
 // recorded pid matches os.Getpid(), Stop only removes the pid file.
 // The foreground Start has its own ctx-cancellation path; signaling
 // self would terminate the caller before it could clean up.
-func Stop(root string) (err error) {
+//
+// Active-slot guard (#157): without WithForce, Stop refuses if any
+// .bones/swarm/<slot>/leaf.pid points at a live process. That guard
+// surfaces ErrActiveSlots wrapped with the slot names so the operator
+// can close them first or pass --force.
+//
+// URL files (.bones/hub-{fossil,nats}-url) are preserved across Stop
+// so the next Start re-reads the previously-bound port via
+// resolvePorts. When the port is still free, the new hub binds the
+// same port and active leaves' cached NATS URLs keep working. Full
+// teardown (bones down) clears the URL files separately by removing
+// the entire .bones directory.
+func Stop(root string, options ...StopOption) (err error) {
+	so := stopOpts{}
+	for _, fn := range options {
+		fn(&so)
+	}
+
 	p, err := newPaths(root)
 	if err != nil {
 		return err
@@ -365,6 +406,19 @@ func Stop(root string) (err error) {
 
 	_, end := telemetry.RecordCommand(context.Background(), "hub.stop")
 	defer func() { end(err) }()
+
+	if !so.force {
+		if names, listErr := activeSlotNames(root); listErr != nil {
+			// Best-effort: a missing or unreadable swarm dir must not
+			// block stop. Log and proceed as if no slots were active.
+			fmt.Fprintf(os.Stderr,
+				"hub: warning: could not enumerate active slots: %v\n", listErr)
+		} else if len(names) > 0 {
+			return fmt.Errorf(
+				"%w: %s — close them first or pass --force",
+				ErrActiveSlots, strings.Join(names, ", "))
+		}
+	}
 
 	self := os.Getpid()
 	// Both servers share a single child process in the detached model,
@@ -381,11 +435,23 @@ func Stop(root string) (err error) {
 		}
 		_ = os.Remove(pidFile)
 	}
-	// Clear the recorded URL files so subsequent FossilURL/NATSURL
-	// callers see the hub as down.
-	_ = os.Remove(p.fossilURL)
-	_ = os.Remove(p.natsURL)
 	return nil
+}
+
+// activeSlotNames returns the names of swarm slots whose leaf.pid
+// points at a still-alive process. Wraps slotgc.LiveSlots so Stop's
+// active-slot check shares a single source of truth with bones down's
+// orphan reaping (#157).
+func activeSlotNames(root string) ([]string, error) {
+	live, err := slotgc.LiveSlots(root)
+	if err != nil {
+		return nil, fmt.Errorf("list active slots: %w", err)
+	}
+	names := make([]string, 0, len(live))
+	for _, s := range live {
+		names = append(names, s.Name)
+	}
+	return names, nil
 }
 
 // terminateProcess sends SIGTERM, polls until stopGrace elapses, and
