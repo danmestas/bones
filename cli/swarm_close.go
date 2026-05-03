@@ -24,14 +24,22 @@ import (
 // record (already closed) is not an error so re-running close
 // after a crash converges.
 type SwarmCloseCmd struct {
-	Slot       string `name:"slot" help:"slot (defaults to single active slot on host)"`
-	Result     string `name:"result" default:"success" help:"success|fail|fork"`
-	Summary    string `name:"summary" default:"swarm close" help:"final summary"`
-	Branch     string `name:"branch" help:"only with --result=fork: branch name"`
-	Rev        string `name:"rev" help:"only with --result=fork: rev"`
-	HubURL     string `name:"hub-url" help:"override hub fossil HTTP URL"`
-	NoArtifact string `name:"no-artifact" help:"reason for closing success without a commit"`
-	KeepWT     bool   `name:"keep-wt" help:"retain wt dir on success (default: remove)"`
+	Slot    string `name:"slot" help:"slot (defaults to single active slot on host)"`
+	Result  string `name:"result" default:"success" help:"success|fail|fork"`
+	Summary string `name:"summary" default:"swarm close" help:"final summary"`
+	Branch  string `name:"branch" help:"only with --result=fork: branch name"`
+	Rev     string `name:"rev" help:"only with --result=fork: rev"`
+	HubURL  string `name:"hub-url" help:"override hub fossil HTTP URL"`
+	// SubstrateError / SubstrateFault expose the dispatch.ResultMessage
+	// substrate fields added in #159 so a wrapper or orchestrator can
+	// signal explicitly that bones (not the agent) hit a failure on
+	// the close path. The flags are separate from --summary because
+	// --summary is the agent's intent and must reach darken verbatim;
+	// these markers are bones-side observations.
+	SubstrateError string `name:"substrate-error" help:"free-text substrate failure (#159)"`
+	SubstrateFault string `name:"substrate-fault" help:"substrate fault category (#159)"`
+	NoArtifact     string `name:"no-artifact" help:"reason for closing success without a commit"`
+	KeepWT         bool   `name:"keep-wt" help:"retain wt dir on success (default: remove)"`
 }
 
 func (c *SwarmCloseCmd) Run(g *libfossilcli.Globals) error {
@@ -124,10 +132,12 @@ func (c *SwarmCloseCmd) postResult(
 	}
 	defer func() { _ = co.Close() }()
 	msg := dispatch.ResultMessage{
-		Kind:    dispatch.ResultKind(c.Result),
-		Summary: c.Summary,
-		Branch:  c.Branch,
-		Rev:     c.Rev,
+		Kind:           dispatch.ResultKind(c.Result),
+		Summary:        c.Summary,
+		Branch:         c.Branch,
+		Rev:            c.Rev,
+		SubstrateError: c.SubstrateError,
+		SubstrateFault: c.SubstrateFault,
 	}
 	if err := co.Post(ctx, taskID, []byte(dispatch.FormatResult(msg))); err != nil {
 		return fmt.Errorf("post result: %w", err)
