@@ -192,6 +192,15 @@ fail/fork, releases the claim only — task stays open for human
 inspection. `wt/` and `leaf.fossil` stay for forensics until
 explicit `bones swarm prune <slot>`.
 
+**Success-close salvage trail.** Before destroying `wt/` on
+success-close (without `--keep-wt`), bones copies any files in the
+worktree to `.bones/recovery/<slot>-<unix-ts>/`. The recovery dir is
+not auto-pruned — the operator decides when to clean it. The "success
+cleans" contract still holds: `wt/` is unconditionally removed; the
+recovery dir is the salvage trail for cases where files were left
+behind (commit failed earlier, files written after the last commit,
+etc.) so the destroy doesn't silently lose work.
+
 **`swarm status` / `swarm cwd` / `swarm tasks`** — read-only.
 `status` iterates `bones-swarm-sessions` and combines KV
 `last_renewed` with a local PID probe (when `host` matches). `cwd`

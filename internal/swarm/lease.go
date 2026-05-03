@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -672,6 +673,24 @@ func (l *ResumedLease) Close(ctx context.Context, opts CloseOpts) error {
 	}
 	l.teardown()
 	if opts.CloseTaskOnSuccess && !opts.KeepWT {
+		// #156 safety net: copy wt/ contents into
+		// .bones/recovery/<slot>-<unix-ts>/ before destroying so a
+		// successful close that nonetheless leaves uncommitted files
+		// behind (commit failed earlier, agent wrote files post-commit,
+		// etc.) doesn't silently lose them. ADR 0028's "success cleans"
+		// contract still holds — wt is removed unconditionally below;
+		// the recovery dir is the salvage trail, not a replacement
+		// worktree.
+		if path, count, err := preserveWorktree(
+			l.info.WorkspaceDir, l.slot, l.now(),
+		); err != nil {
+			fmt.Fprintf(os.Stderr,
+				"swarm.ResumedLease.Close: warning: preserve wt failed: %v\n", err)
+		} else if count > 0 {
+			fmt.Fprintf(os.Stderr,
+				"swarm.ResumedLease.Close: preserved %d file(s) at %s (#156)\n",
+				count, path)
+		}
 		// Best-effort idempotent removal: missing wt is fine. A
 		// permission-style error would propagate via os.RemoveAll's
 		// own retry semantics; in practice the slot's leaf is the
@@ -1085,6 +1104,123 @@ func writePidFile(workspaceDir, slot string) error {
 	}
 	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o644); err != nil {
 		return fmt.Errorf("write pid file: %w", err)
+	}
+	return nil
+}
+
+// preserveWorktree copies the slot's wt/ contents into
+// .bones/recovery/<slot>-<unix-ts>/ before a success-close destroys
+// the worktree (#156). Returns the destination path and the count of
+// files copied; ("", 0, nil) when wt is missing or has no files
+// (callers branch on count > 0 to decide whether to print the
+// operator-visible "preserved N files" notice).
+//
+// Best-effort intent: an error here must not block the close. The
+// caller logs and proceeds — the alternative (refusing to close, or
+// destroying without preserving) is worse than partial salvage.
+//
+// Recovery dirs are not auto-pruned; the operator decides when to
+// clean .bones/recovery/. This is the safety-net contract: if bones
+// destroyed work, a copy is on disk until the operator says otherwise.
+func preserveWorktree(workspaceDir, slot string, now time.Time) (string, int, error) {
+	wt := SlotWorktree(workspaceDir, slot)
+	info, err := os.Stat(wt)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", 0, nil
+	}
+	if err != nil {
+		return "", 0, fmt.Errorf("stat wt: %w", err)
+	}
+	if !info.IsDir() {
+		return "", 0, nil
+	}
+
+	count, err := countFiles(wt)
+	if err != nil {
+		return "", 0, fmt.Errorf("walk wt: %w", err)
+	}
+	if count == 0 {
+		return "", 0, nil
+	}
+
+	recoveryName := fmt.Sprintf("%s-%d", slot, now.Unix())
+	recoveryDir := filepath.Join(workspaceDir, ".bones", "recovery", recoveryName)
+	if err := os.MkdirAll(recoveryDir, 0o755); err != nil {
+		return "", 0, fmt.Errorf("mkdir recovery: %w", err)
+	}
+
+	if err := copyTree(wt, recoveryDir); err != nil {
+		return recoveryDir, 0, fmt.Errorf("copy wt: %w", err)
+	}
+	return recoveryDir, count, nil
+}
+
+// countFiles walks root and returns the number of regular files. Used
+// by preserveWorktree to decide whether the recovery copy is worth
+// doing — an empty wt has nothing to salvage.
+func countFiles(root string) (int, error) {
+	count := 0
+	err := filepath.WalkDir(root, func(_ string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !d.IsDir() {
+			count++
+		}
+		return nil
+	})
+	return count, err
+}
+
+// copyTree mirrors src into dst, creating subdirectories and copying
+// regular files with their permission bits preserved. Symlinks and
+// other non-regular files are skipped — the slot worktree is a leaf
+// checkout that does not currently produce them, and silently
+// dereferencing a symlink target into a recovery copy could mislead
+// the operator about what was actually preserved.
+func copyTree(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		return copyFile(path, target, info.Mode().Perm())
+	})
+}
+
+// copyFile is a stdlib-only file copy that preserves the source mode
+// bits. Stops short of full os.Chown / mtime preservation since the
+// recovery dir is for salvage inspection, not bit-perfect mirroring.
+func copyFile(src, dst string, perm os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = out.Close() }()
+	if _, err := io.Copy(out, in); err != nil {
+		return err
 	}
 	return nil
 }
