@@ -151,13 +151,23 @@ When the user explicitly asks to remove bones from this project, prefer:
 bones down              # confirms before removing
 ```
 
-`bones down` is the supported uninstaller. It stops the hub, removes `.bones/`, removes this AGENTS.md and the CLAUDE.md symlink, removes the bones-owned hook entries from `.claude/settings.json` (leaving unrelated hooks intact), and removes the Fossil checkout markers (`.fslckout`, `.fossil-settings/`).
+`bones down` is the supported uninstaller. It stops the hub, removes `.bones/`, removes the bones-owned files (this AGENTS.md and the CLAUDE.md symlink/fallback), removes the bones-owned hook entries from `.claude/settings.json` (leaving unrelated hooks intact), and removes the Fossil checkout markers (`.fslckout`, `.fossil-settings/`).
+
+If the workspace had a user-authored CLAUDE.md or AGENTS.md when `bones up` ran, bones did not overwrite it — instead a marker-delimited block was appended:
+
+```
+<!-- BONES:BEGIN -->
+…bones content…
+<!-- BONES:END -->
+```
+
+`bones down` strips that block and leaves the user's content otherwise byte-for-byte unchanged.
 
 Manual fallback (only if `bones down` fails or the user wants to inspect each step):
 
 1. `bones hub stop` — idempotent
 2. `rm -rf .bones/` — workspace state
-3. `rm -f AGENTS.md CLAUDE.md` — this file and its symlink
+3. For each of `AGENTS.md` and `CLAUDE.md`: if the file is bones-owned (whole file, or a CLAUDE.md symlink to AGENTS.md), `rm -f` it; otherwise delete the `<!-- BONES:BEGIN --> … <!-- BONES:END -->` block (markers and all) and leave the rest
 4. Edit `.claude/settings.json` to remove the bones-owned hook entries (the ones whose `command` is `bones hub start` or `bones tasks prime --json`); leave unrelated hooks alone
 5. `rm -rf .fslckout .fossil-settings/` — Fossil checkout (working files are not stored here)
 6. Optionally remove `.fslckout`, `.fossil-settings/`, `.bones/` lines from `.gitignore`

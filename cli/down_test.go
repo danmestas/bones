@@ -364,8 +364,9 @@ func TestPlanDown_FullInstall(t *testing.T) {
 }
 
 // TestPlanRemoveAgentsMD_PreservesUserAuthored pins that an
-// AGENTS.md without the bones marker is left in place — bones down
-// only removes its own scaffolded copy.
+// AGENTS.md without the bones marker AND without a managed block is
+// left out of the removal plan entirely — bones down does not touch
+// untouched user files.
 func TestPlanRemoveAgentsMD_PreservesUserAuthored(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "AGENTS.md"),
@@ -375,6 +376,78 @@ func TestPlanRemoveAgentsMD_PreservesUserAuthored(t *testing.T) {
 		if strings.Contains(a.description, "AGENTS.md") {
 			t.Errorf("user-authored AGENTS.md should not be in removal plan: %q", a.description)
 		}
+	}
+}
+
+// TestPlanRemoveAgentsMD_StripsBlockFromUserAuthored pins the
+// managed-section teardown contract for AGENTS.md (issue #145):
+// when the user-authored file contains a bones block, down strips the
+// block in place and leaves the user content otherwise intact.
+func TestPlanRemoveAgentsMD_StripsBlockFromUserAuthoredAGENTS(t *testing.T) {
+	dir := t.TempDir()
+	agentsPath := filepath.Join(dir, "AGENTS.md")
+	user := "# My Project\n\nUser content.\n"
+	writeFile(t, agentsPath, user)
+	if err := upsertManagedBlock(agentsPath, "bones contract body"); err != nil {
+		t.Fatalf("seed managed block: %v", err)
+	}
+
+	plan := planRemoveAgentsMD(dir)
+	stripFound := false
+	for _, a := range plan {
+		if strings.Contains(a.description, "AGENTS.md") &&
+			strings.Contains(a.description, "strip") {
+			stripFound = true
+			if err := a.do(); err != nil {
+				t.Fatalf("strip action returned error: %v", err)
+			}
+		}
+		if strings.Contains(a.description, "AGENTS.md") &&
+			strings.Contains(a.description, "remove") {
+			t.Errorf("user-authored AGENTS.md should be stripped, not removed: %q", a.description)
+		}
+	}
+	if !stripFound {
+		t.Fatalf("expected strip action for user-authored AGENTS.md; plan=%v", plan)
+	}
+	got, _ := os.ReadFile(agentsPath)
+	if string(got) != user {
+		t.Errorf("user AGENTS.md not restored after strip:\nwant %q\ngot  %q", user, got)
+	}
+}
+
+// TestPlanRemoveAgentsMD_StripsBlockFromUserAuthoredCLAUDE pins the
+// same contract for CLAUDE.md.
+func TestPlanRemoveAgentsMD_StripsBlockFromUserAuthoredCLAUDE(t *testing.T) {
+	dir := t.TempDir()
+	claudePath := filepath.Join(dir, "CLAUDE.md")
+	user := "# My rules\n\nKeep me.\n"
+	writeFile(t, claudePath, user)
+	if err := upsertManagedBlock(claudePath, "bones pointer body"); err != nil {
+		t.Fatalf("seed managed block: %v", err)
+	}
+
+	plan := planRemoveAgentsMD(dir)
+	stripFound := false
+	for _, a := range plan {
+		if strings.Contains(a.description, "CLAUDE.md") &&
+			strings.Contains(a.description, "strip") {
+			stripFound = true
+			if err := a.do(); err != nil {
+				t.Fatalf("strip action returned error: %v", err)
+			}
+		}
+		if strings.Contains(a.description, "CLAUDE.md") &&
+			strings.Contains(a.description, "remove") {
+			t.Errorf("user-authored CLAUDE.md should be stripped, not removed: %q", a.description)
+		}
+	}
+	if !stripFound {
+		t.Fatalf("expected strip action for user-authored CLAUDE.md; plan=%v", plan)
+	}
+	got, _ := os.ReadFile(claudePath)
+	if string(got) != user {
+		t.Errorf("user CLAUDE.md not restored after strip:\nwant %q\ngot  %q", user, got)
 	}
 }
 

@@ -127,27 +127,29 @@ func TestScaffoldOrchestrator_PreservesUserAuthoredSkills(t *testing.T) {
 	}
 }
 
-// TestScaffoldOrchestrator_RefusesUserAuthoredAgentsMD pins the safety
-// against clobbering: if AGENTS.md exists without the bones marker,
-// scaffold returns an error rather than overwriting.
-func TestScaffoldOrchestrator_RefusesUserAuthoredAgentsMD(t *testing.T) {
+// TestScaffoldOrchestrator_AppendsBlockToUserAuthoredAGENTS pins the
+// new managed-section behavior: if AGENTS.md exists without the bones
+// marker, scaffold succeeds and appends a bones-managed block at the
+// end of the file. User content above the block is preserved
+// byte-for-byte.
+func TestScaffoldOrchestrator_AppendsBlockToUserAuthoredAGENTS(t *testing.T) {
 	dir := t.TempDir()
 	usersAgents := "# My Project\n\nProject-specific agent guidance.\n"
 	agentsPath := filepath.Join(dir, "AGENTS.md")
 	if err := os.WriteFile(agentsPath, []byte(usersAgents), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := scaffoldOrchestrator(dir)
-	if err == nil {
-		t.Fatal("expected error when AGENTS.md is user-authored")
+	if err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatalf("scaffoldOrchestrator on user-authored AGENTS.md: %v", err)
 	}
-	if !strings.Contains(err.Error(), "not bones-managed") {
-		t.Errorf("error should mention bones-managed; got: %v", err)
+	got, _ := os.ReadFile(agentsPath)
+	if !strings.HasPrefix(string(got), usersAgents) {
+		t.Errorf("user AGENTS.md prefix lost:\nwant prefix %q\ngot %q",
+			usersAgents, got)
 	}
-	// User's AGENTS.md content is intact.
-	got, _ := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
-	if string(got) != usersAgents {
-		t.Errorf("user AGENTS.md modified: %q", got)
+	if !strings.Contains(string(got), bonesBlockBegin) ||
+		!strings.Contains(string(got), bonesBlockEnd) {
+		t.Errorf("managed block missing from AGENTS.md:\n%s", got)
 	}
 }
 
@@ -791,34 +793,99 @@ func TestScaffoldOrchestrator_MigratesLegacyBootstrap(t *testing.T) {
 	}
 }
 
-// TestLinkClaudeMD_RefusesUserAuthoredFile pins the safety against
-// clobbering a pre-existing user-authored CLAUDE.md (issue #139).
-// Mirrors the existing AGENTS.md guard in writeAgentsMD: the marker
-// is the ownership signal; absence means the file is the user's.
-func TestLinkClaudeMD_RefusesUserAuthoredFile(t *testing.T) {
+// TestLinkClaudeMD_AppendsBlockToUserAuthoredFile pins the
+// managed-section behavior (issue #145): a user-authored CLAUDE.md is
+// preserved byte-for-byte at the top of the file and a bones-managed
+// block delimited by bonesBlockBegin / bonesBlockEnd is appended at
+// the end. The user-rules-protection contract from #139 (never
+// silently destroy user content) is preserved by requiring the prefix
+// to match exactly.
+func TestLinkClaudeMD_AppendsBlockToUserAuthoredFile(t *testing.T) {
 	dir := t.TempDir()
 	usersClaude := "# My project rules\n\nNever do X. Always do Y.\n"
 	claudePath := filepath.Join(dir, "CLAUDE.md")
 	if err := os.WriteFile(claudePath, []byte(usersClaude), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := linkClaudeMD(dir)
-	if err == nil {
-		t.Fatal("expected error when CLAUDE.md is user-authored")
-	}
-	if !strings.Contains(err.Error(), "not bones-managed") {
-		t.Errorf("error should mention bones-managed; got: %v", err)
+	if err := linkClaudeMD(dir); err != nil {
+		t.Fatalf("linkClaudeMD on user-authored CLAUDE.md: %v", err)
 	}
 	got, _ := os.ReadFile(claudePath)
-	if string(got) != usersClaude {
-		t.Errorf("user CLAUDE.md content modified:\nwant %q\ngot  %q", usersClaude, got)
+	if !strings.HasPrefix(string(got), usersClaude) {
+		t.Errorf("user CLAUDE.md prefix lost:\nwant prefix %q\ngot %q",
+			usersClaude, got)
+	}
+	if !strings.Contains(string(got), bonesBlockBegin) ||
+		!strings.Contains(string(got), bonesBlockEnd) {
+		t.Errorf("managed block missing from CLAUDE.md:\n%s", got)
+	}
+	// File still a regular file, not a symlink.
+	if _, err := os.Readlink(claudePath); err == nil {
+		t.Errorf("CLAUDE.md should remain a regular file, not be replaced with a symlink")
+	}
+}
+
+// TestLinkClaudeMD_IdempotentUserAuthored pins idempotency for the
+// managed-section path: re-running over a workspace where the block
+// already exists produces a byte-identical file.
+func TestLinkClaudeMD_IdempotentUserAuthored(t *testing.T) {
+	dir := t.TempDir()
+	usersClaude := "# My project rules\n\nKeep this prose.\n"
+	claudePath := filepath.Join(dir, "CLAUDE.md")
+	if err := os.WriteFile(claudePath, []byte(usersClaude), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := linkClaudeMD(dir); err != nil {
+		t.Fatalf("first linkClaudeMD: %v", err)
+	}
+	first, _ := os.ReadFile(claudePath)
+	if err := linkClaudeMD(dir); err != nil {
+		t.Fatalf("second linkClaudeMD: %v", err)
+	}
+	second, _ := os.ReadFile(claudePath)
+	if string(first) != string(second) {
+		t.Errorf("re-render not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}
+
+// TestLinkClaudeMD_PreservesUserEditsAboveBlock pins the contract that
+// user edits made above the managed block survive a re-run. Only the
+// content between the markers belongs to bones; everything else is the
+// user's.
+func TestLinkClaudeMD_PreservesUserEditsAboveBlock(t *testing.T) {
+	dir := t.TempDir()
+	claudePath := filepath.Join(dir, "CLAUDE.md")
+	if err := os.WriteFile(claudePath, []byte("# Original\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := linkClaudeMD(dir); err != nil {
+		t.Fatalf("first linkClaudeMD: %v", err)
+	}
+	// User edits above the block — adds a new line of prose.
+	current, _ := os.ReadFile(claudePath)
+	edited := strings.Replace(string(current), "# Original\n",
+		"# Original\n\nA new user-written line.\n", 1)
+	if err := os.WriteFile(claudePath, []byte(edited), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := linkClaudeMD(dir); err != nil {
+		t.Fatalf("second linkClaudeMD: %v", err)
+	}
+	got, _ := os.ReadFile(claudePath)
+	if !strings.Contains(string(got), "A new user-written line.") {
+		t.Errorf("user edit above the block was clobbered:\n%s", got)
+	}
+	if !strings.Contains(string(got), bonesBlockBegin) {
+		t.Errorf("managed block missing after re-render:\n%s", got)
 	}
 }
 
 // TestLinkClaudeMD_RefusesUnrelatedSymlink pins that a CLAUDE.md
-// symlinked to something other than AGENTS.md is treated as user
-// content. Users do create deliberate symlinks (e.g. CLAUDE.md ->
-// docs/agent-rules.md); silently retargeting them is data loss.
+// symlinked to something other than AGENTS.md is refused (the
+// managed-section model only handles regular files; following arbitrary
+// symlinks could write outside the workspace). Users with deliberate
+// symlinks (e.g. CLAUDE.md -> docs/agent-rules.md) get a clear error
+// directing them to replace the symlink with a regular file.
 func TestLinkClaudeMD_RefusesUnrelatedSymlink(t *testing.T) {
 	dir := t.TempDir()
 	otherTarget := filepath.Join(dir, "elsewhere.md")
@@ -832,9 +899,6 @@ func TestLinkClaudeMD_RefusesUnrelatedSymlink(t *testing.T) {
 	err := linkClaudeMD(dir)
 	if err == nil {
 		t.Fatal("expected error when CLAUDE.md is a symlink to a non-AGENTS.md target")
-	}
-	if !strings.Contains(err.Error(), "not bones-managed") {
-		t.Errorf("error should mention bones-managed; got: %v", err)
 	}
 	target, rerr := os.Readlink(claudePath)
 	if rerr != nil {
@@ -861,25 +925,27 @@ func TestLinkClaudeMD_AcceptsBonesOwnedFallback(t *testing.T) {
 	}
 }
 
-// TestScaffoldOrchestrator_RefusesUserAuthoredCLAUDE is the full-path
-// integration: scaffoldOrchestrator must refuse when CLAUDE.md is
-// user-authored, and the user's content is left intact. Without this,
-// `bones up` silently destroys user instructions on first install.
-func TestScaffoldOrchestrator_RefusesUserAuthoredCLAUDE(t *testing.T) {
+// TestScaffoldOrchestrator_AppendsBlockToUserAuthoredCLAUDE is the
+// full-path integration for issue #145: `bones up` against a workspace
+// with a user-authored CLAUDE.md must succeed, preserve the user's
+// content, and append the bones-managed block.
+func TestScaffoldOrchestrator_AppendsBlockToUserAuthoredCLAUDE(t *testing.T) {
 	dir := t.TempDir()
 	usersClaude := "When the user corrects you, stop and re-read their message.\n"
 	claudePath := filepath.Join(dir, "CLAUDE.md")
 	if err := os.WriteFile(claudePath, []byte(usersClaude), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err := scaffoldOrchestrator(dir)
-	if err == nil {
-		t.Fatal("expected error when CLAUDE.md is user-authored")
+	if err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatalf("scaffoldOrchestrator on user-authored CLAUDE.md: %v", err)
 	}
 	got, _ := os.ReadFile(claudePath)
-	if string(got) != usersClaude {
-		t.Errorf("user CLAUDE.md content modified by scaffold:\nwant %q\ngot  %q",
+	if !strings.HasPrefix(string(got), usersClaude) {
+		t.Errorf("user CLAUDE.md prefix lost:\nwant prefix %q\ngot %q",
 			usersClaude, got)
+	}
+	if !strings.Contains(string(got), bonesBlockBegin) {
+		t.Errorf("managed block missing from CLAUDE.md after scaffold:\n%s", got)
 	}
 }
 
@@ -899,5 +965,131 @@ func TestScaffoldOrchestrator_AGENTSNonEmpty(t *testing.T) {
 	}
 	if info.Size() == 0 {
 		t.Fatal("AGENTS.md is empty after scaffold")
+	}
+}
+
+// TestUpsertManagedBlock_AppendsAndReplaces verifies the helper's two
+// codepaths: append a block when none exists, and replace the block in
+// place when one does. User content above the block is preserved
+// byte-for-byte across both runs.
+func TestUpsertManagedBlock_AppendsAndReplaces(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "F.md")
+	user := "# User\n\nUser line.\n"
+	if err := os.WriteFile(path, []byte(user), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertManagedBlock(path, "first body"); err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+	first, _ := os.ReadFile(path)
+	if !strings.HasPrefix(string(first), user) {
+		t.Errorf("user prefix lost: %q", first)
+	}
+	if !strings.Contains(string(first), "first body") {
+		t.Errorf("body missing: %q", first)
+	}
+	if err := upsertManagedBlock(path, "second body"); err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	second, _ := os.ReadFile(path)
+	if !strings.HasPrefix(string(second), user) {
+		t.Errorf("user prefix lost on replace: %q", second)
+	}
+	if strings.Contains(string(second), "first body") {
+		t.Errorf("old body not replaced: %q", second)
+	}
+	if !strings.Contains(string(second), "second body") {
+		t.Errorf("new body missing: %q", second)
+	}
+	// Exactly one block: counts of begin/end markers stay at one.
+	if got := strings.Count(string(second), bonesBlockBegin); got != 1 {
+		t.Errorf("begin marker count: got %d want 1", got)
+	}
+	if got := strings.Count(string(second), bonesBlockEnd); got != 1 {
+		t.Errorf("end marker count: got %d want 1", got)
+	}
+}
+
+// TestUpsertManagedBlock_IdempotentSameBody checks that re-running with
+// the same body yields a byte-identical file. This is what carries the
+// "no diff on re-scaffold" property up to writeAgentsMD / linkClaudeMD.
+func TestUpsertManagedBlock_IdempotentSameBody(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "F.md")
+	if err := os.WriteFile(path, []byte("# User\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertManagedBlock(path, "body"); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	first, _ := os.ReadFile(path)
+	if err := upsertManagedBlock(path, "body"); err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	second, _ := os.ReadFile(path)
+	if string(first) != string(second) {
+		t.Errorf("not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}
+
+// TestStripManagedBlock_RestoresUserContent verifies that strip removes
+// the markers and the block contents, leaving the user's original
+// content intact (modulo a normalized trailing newline).
+func TestStripManagedBlock_RestoresUserContent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "F.md")
+	user := "# User\n\nLine.\n"
+	if err := os.WriteFile(path, []byte(user), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertManagedBlock(path, "body"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if err := stripManagedBlock(path); err != nil {
+		t.Fatalf("strip: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != user {
+		t.Errorf("user content not restored:\nwant %q\ngot  %q", user, got)
+	}
+}
+
+// TestStripManagedBlock_RemovesEmptyResultFile checks that stripping a
+// file whose only content is the managed block leaves no empty file
+// behind — the file is removed entirely.
+func TestStripManagedBlock_RemovesEmptyResultFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "F.md")
+	if err := os.WriteFile(path, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertManagedBlock(path, "body"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if err := stripManagedBlock(path); err != nil {
+		t.Fatalf("strip: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("file should be removed when strip leaves it empty; got err=%v", err)
+	}
+}
+
+// TestStripManagedBlock_NoBlockNoOp pins that strip is a no-op when the
+// file has no managed block — used by `bones down` against files that
+// were never bones-touched.
+func TestStripManagedBlock_NoBlockNoOp(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "F.md")
+	user := "# User\n"
+	if err := os.WriteFile(path, []byte(user), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := stripManagedBlock(path); err != nil {
+		t.Fatalf("strip: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != user {
+		t.Errorf("file modified by no-op strip:\nwant %q\ngot  %q", user, got)
 	}
 }

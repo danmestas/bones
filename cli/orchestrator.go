@@ -19,8 +19,28 @@ var agentsMDTemplate []byte
 // agentsMDMarker is the first line of the bones-managed AGENTS.md
 // template. scaffoldOrchestrator uses it to tell whether an existing
 // AGENTS.md is bones-owned (safe to overwrite) or user-authored
-// (refuse and surface a merge instruction).
+// (upsert a managed block instead).
 const agentsMDMarker = "# Agent Guidance for this Workspace"
+
+// bonesBlockBegin and bonesBlockEnd delimit the bones-managed section
+// inserted into a user-authored CLAUDE.md or AGENTS.md. HTML comments
+// keep the markers invisible to most renderers and unique enough to
+// detect by substring without false positives in normal markdown
+// content. See ADR 0042's managed-section addendum.
+const (
+	bonesBlockBegin = "<!-- BONES:BEGIN -->"
+	bonesBlockEnd   = "<!-- BONES:END -->"
+)
+
+// claudeManagedBody is the body of the bones-managed block inserted
+// into a user-authored CLAUDE.md. CLAUDE.md is a pointer file; the
+// agent contract itself lives in AGENTS.md. Kept short on purpose: the
+// user already has their own CLAUDE.md content and we want our
+// addition to be unobtrusive.
+const claudeManagedBody = "Bones is active in this workspace. " +
+	"The full agent contract is in AGENTS.md.\n\n" +
+	"On `bones down` the agent removes this entire block " +
+	"(markers and all) from CLAUDE.md and deletes AGENTS.md."
 
 // legacyBonesSkills are the per-skill directories `bones up` used to
 // scaffold under .claude/skills/ before ADR 0042. They are wiped on
@@ -90,22 +110,151 @@ func removeLegacyBonesSkills(root string) error {
 	return nil
 }
 
-// writeAgentsMD writes the bones-managed AGENTS.md template to the
-// workspace root. If an AGENTS.md already exists and starts with the
-// bones marker, it is overwritten (idempotent re-scaffold). If it
-// exists without the marker, the file is user-authored and we refuse
-// with a message that points at the merge path.
+// writeAgentsMD installs the bones-managed AGENTS.md content at the
+// workspace root. Three shapes are recognized:
+//
+//  1. AGENTS.md is absent — the bones template is written as the
+//     entire file (the workspace is now a "bones-owned AGENTS.md"
+//     workspace).
+//  2. AGENTS.md exists and starts with the bones marker — bones owns
+//     the whole file; the template is rewritten in place
+//     (idempotent re-scaffold).
+//  3. AGENTS.md exists without the marker — the file is user-authored.
+//     The bones template is upserted into a marker-delimited block at
+//     the end of the file. User content is preserved byte-for-byte;
+//     re-scaffold replaces only the block contents.
+//
+// The user-authored case (added per issue #145) replaces an earlier
+// guard that refused user content outright.
 func writeAgentsMD(root string) error {
 	path := filepath.Join(root, "AGENTS.md")
-	if existing, err := os.ReadFile(path); err == nil {
-		if !bonesOwnedAgentsMD(existing) {
-			return fmt.Errorf("AGENTS.md exists and is not bones-managed; "+
-				"merge bones content manually or remove %s and re-run", path)
-		}
-	} else if !os.IsNotExist(err) {
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	return os.WriteFile(path, agentsMDTemplate, 0o644)
+	if os.IsNotExist(err) || bonesOwnedAgentsMD(existing) {
+		return os.WriteFile(path, agentsMDTemplate, 0o644)
+	}
+	return upsertManagedBlock(path, string(agentsMDTemplate))
+}
+
+// upsertManagedBlock writes (or refreshes) a bones-managed section
+// delimited by bonesBlockBegin / bonesBlockEnd inside the file at
+// path. User content outside the markers is preserved byte-for-byte.
+// Idempotent: running the function twice with the same body yields a
+// byte-identical file.
+//
+// Layout: a single blank line separator between any pre-existing user
+// content and the BEGIN marker; one trailing newline after the END
+// marker. If the file is empty, no leading blank line is added.
+//
+// If the file is missing it is created with just the block. If a
+// bonesBlockBegin marker is present without a matching bonesBlockEnd
+// marker, the block is treated as malformed and an error is returned
+// so we never silently corrupt user content.
+func upsertManagedBlock(path, body string) error {
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	s := string(data)
+
+	beginIdx := strings.Index(s, bonesBlockBegin)
+	newBlock := bonesBlockBegin + "\n" + body + "\n" + bonesBlockEnd
+
+	var out string
+	if beginIdx == -1 {
+		// Append a fresh block. Normalize trailing newline on user
+		// content and add a single blank line separator.
+		prefix := s
+		if prefix != "" && !strings.HasSuffix(prefix, "\n") {
+			prefix += "\n"
+		}
+		if prefix != "" {
+			prefix += "\n"
+		}
+		out = prefix + newBlock + "\n"
+	} else {
+		endRel := strings.Index(s[beginIdx:], bonesBlockEnd)
+		if endRel == -1 {
+			return fmt.Errorf("malformed managed block in %s: "+
+				"%s present without matching %s",
+				path, bonesBlockBegin, bonesBlockEnd)
+		}
+		endAbs := beginIdx + endRel + len(bonesBlockEnd)
+		out = s[:beginIdx] + newBlock + s[endAbs:]
+	}
+
+	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}
+
+// stripManagedBlock removes the bones-managed section (markers and
+// body) from the file at path. User content outside the markers is
+// preserved byte-for-byte. The blank-line separator that
+// upsertManagedBlock added between user content and the BEGIN marker
+// is collapsed back to a single trailing newline so a strip-then-
+// upsert cycle round-trips cleanly.
+//
+// No-op if the file is absent or contains no managed block. If
+// stripping leaves the file empty, the file is removed entirely so
+// `bones down` doesn't leave behind a 0-byte CLAUDE.md / AGENTS.md.
+func stripManagedBlock(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	s := string(data)
+	beginIdx := strings.Index(s, bonesBlockBegin)
+	if beginIdx == -1 {
+		return nil
+	}
+	endRel := strings.Index(s[beginIdx:], bonesBlockEnd)
+	if endRel == -1 {
+		return fmt.Errorf("malformed managed block in %s: "+
+			"%s present without matching %s",
+			path, bonesBlockBegin, bonesBlockEnd)
+	}
+	endAbs := beginIdx + endRel + len(bonesBlockEnd)
+	if endAbs < len(s) && s[endAbs] == '\n' {
+		endAbs++
+	}
+
+	// Collapse trailing newlines on the prefix (including the blank
+	// separator we added on upsert) so we restore exactly one trailing
+	// newline — matching the user's original "ends with \n" shape.
+	trimEnd := beginIdx
+	for trimEnd > 0 && s[trimEnd-1] == '\n' {
+		trimEnd--
+	}
+	prefix := s[:trimEnd]
+	if prefix != "" {
+		prefix += "\n"
+	}
+	out := prefix + s[endAbs:]
+
+	if out == "" {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove %s: %w", path, err)
+		}
+		return nil
+	}
+	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}
+
+// hasManagedBlock reports whether content contains a bones-managed
+// section. Used by `bones down` to decide whether to strip a block out
+// of a user-authored file vs leave it alone.
+func hasManagedBlock(content []byte) bool {
+	return strings.Contains(string(content), bonesBlockBegin)
 }
 
 // bonesOwnedAgentsMD reports whether the given AGENTS.md content was
@@ -122,62 +271,64 @@ func bonesOwnedAgentsMD(content []byte) bool {
 	return false
 }
 
-// linkClaudeMD creates CLAUDE.md as a symbolic link to AGENTS.md per
-// the agents.md spec migration recipe. Mirrors writeAgentsMD's safety
-// gate: pre-existing user content is refused, never silently destroyed
-// (issue #139). Bones-managed shapes — a symlink to AGENTS.md, or a
-// regular-file fallback carrying the bones marker — are recognized and
-// replaced idempotently. Workspaces on platforms without symlink
-// support land on the regular-file fallback with the AGENTS.md content.
+// linkClaudeMD installs the bones-side CLAUDE.md content at the
+// workspace root. Four shapes are recognized:
+//
+//  1. CLAUDE.md is absent — bones writes a symlink to AGENTS.md (or,
+//     on filesystems without symlink support, a regular file fallback
+//     carrying the AGENTS.md content).
+//  2. CLAUDE.md is a symlink to AGENTS.md — bones-owned, no-op.
+//  3. CLAUDE.md is a regular file whose first lines carry the bones
+//     marker — the bones-owned fallback shape; rewritten in place
+//     (idempotent re-scaffold).
+//  4. CLAUDE.md is a regular file without the marker — user-authored.
+//     A short bones-managed block (markers + claudeManagedBody) is
+//     upserted at the end of the file. User content is preserved
+//     byte-for-byte; re-scaffold replaces only the block contents.
+//
+// CLAUDE.md as a symlink to anything other than AGENTS.md is refused:
+// following arbitrary symlinks could write outside the workspace, and
+// the brief explicitly scopes the new model to regular files.
+//
+// The user-authored regular-file case (added per issue #145) replaces
+// the earlier guard from issue #139 that refused user content
+// outright.
 func linkClaudeMD(root string) error {
 	target := "AGENTS.md"
 	link := filepath.Join(root, "CLAUDE.md")
 
-	if err := requireBonesOwnedClaudeMD(link, target); err != nil {
-		return err
-	}
-	if cur, err := os.Readlink(link); err == nil && cur == target {
-		return nil
-	}
-	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove existing CLAUDE.md: %w", err)
-	}
-	if err := os.Symlink(target, link); err == nil {
-		return nil
-	}
-	// Fallback: write a regular file with the same content. Less ideal
-	// (drifts on AGENTS.md edits), but symlinks are unsupported on some
-	// filesystems (e.g. older Windows volumes without developer mode).
-	return os.WriteFile(link, agentsMDTemplate, 0o644)
-}
-
-// requireBonesOwnedClaudeMD returns an error if CLAUDE.md exists in a
-// shape bones did not produce. The four bones-recognized shapes are:
-// (1) absent, (2) symlink whose target is AGENTS.md, (3) regular file
-// whose first lines carry the bones marker (the fallback path on
-// symlink-unsupported filesystems). Any other shape — symlink to a
-// different target, regular file without the marker — is treated as
-// user content and refused.
-func requireBonesOwnedClaudeMD(link, target string) error {
 	if cur, err := os.Readlink(link); err == nil {
 		if cur == target {
 			return nil
 		}
-		return fmt.Errorf("CLAUDE.md is a symlink to %q, not bones-managed; "+
-			"merge bones content manually or remove %s and re-run", cur, link)
+		return fmt.Errorf("CLAUDE.md is a symlink to %q, which bones cannot "+
+			"safely modify; remove %s or replace it with a regular file "+
+			"(bones will preserve its content) and re-run", cur, link)
 	}
+
 	data, err := os.ReadFile(link)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read CLAUDE.md: %w", err)
 	}
-	if bonesOwnedAgentsMD(data) {
-		return nil
+
+	if os.IsNotExist(err) {
+		if err := os.Symlink(target, link); err == nil {
+			return nil
+		}
+		// Fallback: write a regular file with the same content. Less
+		// ideal (drifts on AGENTS.md edits), but symlinks are
+		// unsupported on some filesystems (e.g. older Windows volumes
+		// without developer mode).
+		return os.WriteFile(link, agentsMDTemplate, 0o644)
 	}
-	return fmt.Errorf("CLAUDE.md exists and is not bones-managed; "+
-		"merge bones content into AGENTS.md or remove %s and re-run", link)
+
+	if bonesOwnedAgentsMD(data) {
+		// Bones-owned fallback shape: rewrite in place to converge on
+		// the current template.
+		return os.WriteFile(link, agentsMDTemplate, 0o644)
+	}
+
+	return upsertManagedBlock(link, claudeManagedBody)
 }
 
 // mergeSettings idempotently installs the SessionStart + PreCompact
