@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	libfossilcli "github.com/danmestas/libfossil/cli"
 
@@ -48,6 +49,9 @@ type HubStartCmd struct {
 	// Pass an explicit non-zero port to pin.
 	FossilPort int `name:"fossil-port" default:"0" help:"Fossil HTTP port (0 = per-ws)"`
 	NATSPort   int `name:"nats-port" default:"0" help:"NATS client port (0 = per-ws)"`
+	// DrainTimeout bounds NATS/Fossil drain on shutdown before
+	// runForeground returns errDrainTimeout (non-zero exit). See #158.
+	DrainTimeout time.Duration `name:"drain-timeout" default:"30s" help:"max drain wait"` //nolint:lll
 }
 
 func (c *HubStartCmd) Run(g *libfossilcli.Globals) error {
@@ -66,6 +70,7 @@ func (c *HubStartCmd) Run(g *libfossilcli.Globals) error {
 		hub.WithFossilPort(c.FossilPort),
 		hub.WithNATSPort(c.NATSPort),
 		hub.WithDetach(c.Detach),
+		hub.WithDrainTimeout(c.DrainTimeout),
 	)
 }
 

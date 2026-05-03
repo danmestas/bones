@@ -16,15 +16,18 @@
 //	  pid files. Idempotent: missing or stale pid files are not an error.
 package hub
 
+import "time"
+
 // Option configures Start.
 type Option func(*opts)
 
 // opts holds tunable behavior for Start. The exported Option constructors
 // are the only way to mutate this struct from outside the package.
 type opts struct {
-	fossilPort int
-	natsPort   int
-	detach     bool
+	fossilPort   int
+	natsPort     int
+	detach       bool
+	drainTimeout time.Duration
 }
 
 // defaults returns the production defaults: ports left zero so
@@ -33,7 +36,11 @@ type opts struct {
 // or pick a free port"; passing WithFossilPort(N) or WithNATSPort(N)
 // pins to N.
 func defaults() opts {
-	return opts{fossilPort: 0, natsPort: 0}
+	return opts{
+		fossilPort:   0,
+		natsPort:     0,
+		drainTimeout: defaultDrainTimeout,
+	}
 }
 
 // WithFossilPort pins the Fossil HTTP port. Zero means "let the hub
@@ -50,3 +57,14 @@ func WithNATSPort(p int) Option { return func(o *opts) { o.natsPort = p } }
 // (the default), Start blocks on ctx.Done() and shuts both servers down
 // cleanly when ctx is canceled.
 func WithDetach(d bool) Option { return func(o *opts) { o.detach = d } }
+
+// WithDrainTimeout bounds how long runForeground waits for the embedded
+// NATS server and the Fossil child to drain after ctx is canceled.
+// Without a bound, a stuck leaf or fossil checkpoint can keep the hub
+// process alive indefinitely (#158). On timeout the wait is abandoned,
+// a stderr log line records the forced exit, and Start returns a
+// non-nil error so the parent CLI exits non-zero. A zero or negative
+// value falls back to defaultDrainTimeout.
+func WithDrainTimeout(d time.Duration) Option {
+	return func(o *opts) { o.drainTimeout = d }
+}
