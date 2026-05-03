@@ -11,6 +11,7 @@ import (
 
 	"github.com/danmestas/bones/internal/githook"
 	"github.com/danmestas/bones/internal/hub"
+	"github.com/danmestas/bones/internal/scaffoldver"
 	"github.com/danmestas/bones/internal/telemetry"
 	"github.com/danmestas/bones/internal/workspace"
 )
@@ -25,6 +26,13 @@ import (
 // Per ADR 0041 the hub is no longer started here. Any verb that needs the
 // hub auto-starts it lazily via workspace.Join.
 //
+// Per ADR 0046 (#146), `bones up` is also the recovery path for a
+// half-installed workspace: when step 1 has previously succeeded but
+// step 2 did not (`.bones/agent.id` present, `.bones/scaffold_version`
+// absent), runUp announces the recovery on stderr and re-runs scaffold
+// idempotently. Each scaffold step is safe to call against partial
+// state.
+//
 // Default output is a single confirmation line. With verbose=true, prints
 // per-step status lines. WARN lines from drift / missing-git checks
 // always print because they describe real issues operators must see.
@@ -34,6 +42,12 @@ func runUp(cwd string, verbose bool) (err error) {
 	)
 	defer func() { end(err) }()
 
+	// Detect recovery state BEFORE init: agent.id present from a prior
+	// run + missing stamp = step 2 failed last time. The announcement
+	// lands once on stderr per #146 — silent recovery would leave the
+	// user wondering why a re-run worked after the previous error.
+	recovery := isIncompleteScaffold(cwd)
+
 	info, err := initOrJoinWorkspace(ctx, cwd)
 	if err != nil {
 		return fmt.Errorf("workspace: %w", err)
@@ -41,6 +55,11 @@ func runUp(cwd string, verbose bool) (err error) {
 	wsDir := info.WorkspaceDir
 	if verbose {
 		fmt.Printf("up: workspace at %s\n", wsDir)
+	}
+
+	if recovery {
+		fmt.Fprintln(os.Stderr,
+			"bones: scaffold incomplete from prior run — re-running scaffold")
 	}
 
 	if err := scaffoldOrchestrator(wsDir); err != nil {
@@ -103,6 +122,25 @@ func printHubStatus(w io.Writer, root string) {
 	}
 	_, _ = fmt.Fprintf(w, "up: hub: previously recorded at %s / %s — "+
 		"will restart on next verb\n", fossilURL, natsURL)
+}
+
+// isIncompleteScaffold reports whether cwd lives inside a workspace
+// whose `.bones/agent.id` marker exists but whose
+// `.bones/scaffold_version` stamp is missing. This is the signature of
+// a `bones up` that completed step 1 (workspace init) but failed step
+// 2 (orchestrator scaffold), per #146 / ADR 0046.
+//
+// Returns false for fresh workspaces (no marker — nothing to recover
+// from), for fully-scaffolded workspaces (stamp present), and when
+// FindRoot fails. Used by runUp to decide whether to print the
+// recovery-announcement line.
+func isIncompleteScaffold(cwd string) bool {
+	root, err := workspace.FindRoot(cwd)
+	if err != nil {
+		return false
+	}
+	stamp, _ := scaffoldver.Read(root)
+	return stamp == ""
 }
 
 // initOrJoinWorkspace returns workspace.Info for cwd, creating the
