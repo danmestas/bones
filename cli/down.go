@@ -341,7 +341,10 @@ func planStopHub(root string, c *DownCmd) []downAction {
 		description: "stop hub (.bones/pids/{fossil,nats}.pid)",
 		do: func() error {
 			// Best-effort: an already-stopped hub must not fail down.
-			_ = hub.Stop(root)
+			// WithForce so the active-slot guard (#157) doesn't block
+			// down — bones down is an explicit destructive teardown
+			// the operator already confirmed.
+			_ = hub.Stop(root, hub.WithForce(true))
 			return nil
 		},
 	}}

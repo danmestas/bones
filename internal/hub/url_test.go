@@ -143,10 +143,18 @@ func TestFossilURL_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestStartStopWritesAndRemovesURLFiles is a thin assert layered on the
-// existing round-trip: after Start binds, the URL files exist; after
-// Stop, they're gone.
-func TestStartStopWritesAndRemovesURLFiles(t *testing.T) {
+// TestStartWritesURLFilesStopPreserves layers a thin assert on the
+// existing round-trip: resolvePorts writes the URL files, FossilURL
+// reads them back, and Stop preserves them so the next Start can
+// re-read the recorded port (#157 port preservation across stop/start).
+//
+// Pre-#157 contract was that Stop removed the URL files. The active-
+// leaf desync surfaced in #157 forced the swap: leaves that cached a
+// NATS URL at workspace.Join time must keep working across a hub
+// restart when the port is still free, which only works if the
+// recorded URL survives Stop. Full teardown (bones down) clears them
+// separately by removing the entire .bones/ directory.
+func TestStartWritesURLFilesStopPreserves(t *testing.T) {
 	root := t.TempDir()
 	p, err := newPaths(root)
 	if err != nil {
@@ -169,13 +177,14 @@ func TestStartStopWritesAndRemovesURLFiles(t *testing.T) {
 	if got := FossilURL(root); got != want {
 		t.Errorf("FossilURL = %q, want %q", got, want)
 	}
-	// Stop removes URL files.
+	// Stop preserves URL files (#157).
 	if err := Stop(root); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{p.fossilURL, p.natsURL} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Errorf("URL file %s still present after Stop", filepath.Base(path))
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("URL file %s should be preserved across Stop (#157): %v",
+				filepath.Base(path), err)
 		}
 	}
 }
