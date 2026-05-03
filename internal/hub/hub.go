@@ -328,13 +328,19 @@ func spawnDetachedChild(p paths, o opts) error {
 			hubLogTail(p))
 	}
 
+	// Capture pid before Release: on Unix, os.Process.release sets
+	// p.Pid = -1 (Go stdlib src/os/exec_unix.go), so reading
+	// cmd.Process.Pid after Release yields -1 instead of the child's
+	// real pid (#148).
+	pid := cmd.Process.Pid
+
 	// Release the child so it isn't reaped when we return.
 	if err := cmd.Process.Release(); err != nil {
 		return fmt.Errorf("hub: release child: %w", err)
 	}
 
 	fmt.Printf("hub: fossil at http://127.0.0.1:%d, nats at nats://127.0.0.1:%d (pid=%d)\n",
-		o.fossilPort, o.natsPort, cmd.Process.Pid)
+		o.fossilPort, o.natsPort, pid)
 	return nil
 }
 
