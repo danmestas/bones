@@ -7,7 +7,61 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+// TestWaitOrTimeout_DoneClosed asserts the bounded-wait helper returns
+// nil when its done channel closes before the timeout expires. This is
+// the happy path for runForeground's drain wait — NATS shutdown completes
+// in time and the hub exits cleanly.
+func TestWaitOrTimeout_DoneClosed(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	if err := waitOrTimeout(done, 5*time.Second); err != nil {
+		t.Fatalf("waitOrTimeout(closed done): got err %v, want nil", err)
+	}
+}
+
+// TestWaitOrTimeout_Timeout asserts the helper returns errDrainTimeout
+// when its done channel never closes. This is the core mechanism that
+// prevents natsserver.WaitForShutdown from hanging the hub forever (#158).
+func TestWaitOrTimeout_Timeout(t *testing.T) {
+	never := make(chan struct{})
+	start := time.Now()
+	err := waitOrTimeout(never, 50*time.Millisecond)
+	elapsed := time.Since(start)
+	if !errors.Is(err, errDrainTimeout) {
+		t.Fatalf("waitOrTimeout(never): got err %v, want errDrainTimeout", err)
+	}
+	// Bound the lower edge so we know the timer actually fired (not a
+	// fast-path nil), and the upper edge so a regression that swaps in a
+	// 30s default timeout fails fast instead of running for half a minute.
+	if elapsed < 50*time.Millisecond {
+		t.Fatalf("waitOrTimeout: returned in %v, want >= 50ms", elapsed)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("waitOrTimeout: returned in %v, want < 1s", elapsed)
+	}
+}
+
+// TestWaitOrTimeout_ZeroFallsBackToDefault asserts that a zero/negative
+// timeout uses defaultDrainTimeout rather than firing immediately. The
+// happy-path closure still returns nil because the channel closes well
+// before the default expires.
+func TestWaitOrTimeout_ZeroFallsBackToDefault(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	if err := waitOrTimeout(done, 0); err != nil {
+		t.Fatalf("waitOrTimeout(zero, closed done): got err %v, want nil", err)
+	}
+	if err := waitOrTimeout(done, -5*time.Second); err != nil {
+		t.Fatalf("waitOrTimeout(negative, closed done): got err %v, want nil", err)
+	}
+	if defaultDrainTimeout != 30*time.Second {
+		t.Errorf("defaultDrainTimeout: got %v, want 30s — brief documents 30s",
+			defaultDrainTimeout)
+	}
+}
 
 // TestRunForeground_SeedFailureCleansSidecars asserts that when seed
 // fails after libfossil has begun creating SQLite sidecar files,

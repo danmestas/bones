@@ -58,6 +58,20 @@ const natsBootstrapBackoff = 1 * time.Second
 // for a healthy hub to flush WAL and exit cleanly on TERM.
 var stopGrace = 2 * time.Second
 
+// defaultDrainTimeout bounds the in-process NATS shutdown wait and the
+// Fossil drain wait when ctx is canceled. Without a bound, a stuck
+// leaf or fossil checkpoint can keep the hub process alive
+// indefinitely — natsserver.Server.WaitForShutdown has no timeout
+// (#158). 30s is generous for a healthy shutdown and short enough
+// that operators do not wait minutes for force-kill escalation.
+const defaultDrainTimeout = 30 * time.Second
+
+// errDrainTimeout is returned from runForeground when the NATS or
+// Fossil drain blocks past the configured drain timeout. Surfaces a
+// non-zero exit code at the CLI so the parent can distinguish a clean
+// shutdown from a forced one.
+var errDrainTimeout = errors.New("hub: drain timeout exceeded")
+
 // Start brings up the orchestrator hub: a Fossil repository at
 // .bones/hub.fossil seeded from git-tracked files, a Fossil HTTP
 // server on the chosen port, and an embedded NATS JetStream server.
@@ -226,11 +240,59 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 	<-ctx.Done()
 	fossilCancel()
 	natsSrv.Shutdown()
-	natsSrv.WaitForShutdown()
-	<-fossilDone
+
+	// Bound both drain waits so a stuck NATS connection (no leaf to
+	// disconnect) or a wedged Fossil checkpoint cannot keep this
+	// process alive forever (#158). On timeout, abandon the wait,
+	// log the forced exit, and propagate errDrainTimeout so the CLI
+	// exits non-zero.
+	natsDone := make(chan struct{})
+	go func() {
+		natsSrv.WaitForShutdown()
+		close(natsDone)
+	}()
+
+	var drainErr error
+	if err := waitOrTimeout(natsDone, o.drainTimeout); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"hub: nats shutdown exceeded %s; forcing exit (#158)\n",
+			effectiveDrainTimeout(o.drainTimeout))
+		drainErr = err
+	}
+	if err := waitOrTimeout(fossilDone, o.drainTimeout); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"hub: fossil drain exceeded %s; forcing exit (#158)\n",
+			effectiveDrainTimeout(o.drainTimeout))
+		drainErr = err
+	}
+
 	_ = os.Remove(p.fossilPid)
 	_ = os.Remove(p.natsPid)
-	return nil
+	return drainErr
+}
+
+// effectiveDrainTimeout returns d when positive, otherwise the package
+// default. Used so both runForeground's stderr lines and the actual
+// wait honor the same fallback.
+func effectiveDrainTimeout(d time.Duration) time.Duration {
+	if d <= 0 {
+		return defaultDrainTimeout
+	}
+	return d
+}
+
+// waitOrTimeout blocks until done is closed or timeout elapses. Returns
+// nil on close, errDrainTimeout on timeout. A zero or negative timeout
+// falls back to defaultDrainTimeout. Used to bound the NATS shutdown
+// wait and the Fossil drain so a stuck server cannot hang the hub
+// process forever (#158).
+func waitOrTimeout(done <-chan struct{}, timeout time.Duration) error {
+	select {
+	case <-done:
+		return nil
+	case <-time.After(effectiveDrainTimeout(timeout)):
+		return errDrainTimeout
+	}
 }
 
 // hubLogTail reads the last N lines (capped to ~2KB) of hub.log and
@@ -273,6 +335,7 @@ func spawnDetachedChild(p paths, o opts) error {
 	cmd := exec.Command(exe, "hub", "start",
 		"--fossil-port", strconv.Itoa(o.fossilPort),
 		"--nats-port", strconv.Itoa(o.natsPort),
+		"--drain-timeout", effectiveDrainTimeout(o.drainTimeout).String(),
 	)
 	cmd.Dir = p.root
 	cmd.Stdout = hubLog
