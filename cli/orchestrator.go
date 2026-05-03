@@ -138,6 +138,47 @@ func writeAgentsMD(root string) error {
 	return upsertManagedBlock(path, string(agentsMDTemplate))
 }
 
+// findManagedBlock locates the outer bones-managed section in s using
+// nested-aware parsing: BEGIN/END marker pairs occurring inside the
+// body (e.g. when the bones AGENTS.md template documents the marker
+// syntax in a fenced code block) are counted as nested and do not
+// terminate the outer block.
+//
+// Returns (begin, end, true, nil) where begin is the index of the
+// outer BEGIN marker and end is the index just past the outer END
+// marker, suitable for s[:begin] / s[end:] slicing.
+// Returns (-1, -1, false, nil) when no BEGIN marker is present.
+// Returns a non-nil error when a BEGIN marker is present without a
+// matching END (counting nesting); the caller must surface the error
+// rather than silently corrupting user content (issue #150).
+func findManagedBlock(s string) (begin, end int, ok bool, err error) {
+	begin = strings.Index(s, bonesBlockBegin)
+	if begin == -1 {
+		return -1, -1, false, nil
+	}
+	cursor := begin + len(bonesBlockBegin)
+	depth := 1
+	for {
+		nextBegin := strings.Index(s[cursor:], bonesBlockBegin)
+		nextEnd := strings.Index(s[cursor:], bonesBlockEnd)
+		if nextEnd == -1 {
+			return -1, -1, false, fmt.Errorf("malformed managed block: "+
+				"%s present without matching %s",
+				bonesBlockBegin, bonesBlockEnd)
+		}
+		if nextBegin != -1 && nextBegin < nextEnd {
+			depth++
+			cursor += nextBegin + len(bonesBlockBegin)
+			continue
+		}
+		depth--
+		cursor += nextEnd + len(bonesBlockEnd)
+		if depth == 0 {
+			return begin, cursor, true, nil
+		}
+	}
+}
+
 // upsertManagedBlock writes (or refreshes) a bones-managed section
 // delimited by bonesBlockBegin / bonesBlockEnd inside the file at
 // path. User content outside the markers is preserved byte-for-byte.
@@ -148,10 +189,10 @@ func writeAgentsMD(root string) error {
 // content and the BEGIN marker; one trailing newline after the END
 // marker. If the file is empty, no leading blank line is added.
 //
-// If the file is missing it is created with just the block. If a
-// bonesBlockBegin marker is present without a matching bonesBlockEnd
-// marker, the block is treated as malformed and an error is returned
-// so we never silently corrupt user content.
+// If the file is missing it is created with just the block. Nested
+// marker pairs in the body (per findManagedBlock) are tolerated. A
+// BEGIN marker without a matching END (after counting nesting) is
+// treated as malformed and surfaces an error.
 func upsertManagedBlock(path, body string) error {
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
@@ -159,11 +200,15 @@ func upsertManagedBlock(path, body string) error {
 	}
 	s := string(data)
 
-	beginIdx := strings.Index(s, bonesBlockBegin)
 	newBlock := bonesBlockBegin + "\n" + body + "\n" + bonesBlockEnd
 
+	begin, end, ok, err := findManagedBlock(s)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+
 	var out string
-	if beginIdx == -1 {
+	if !ok {
 		// Append a fresh block. Normalize trailing newline on user
 		// content and add a single blank line separator.
 		prefix := s
@@ -175,14 +220,7 @@ func upsertManagedBlock(path, body string) error {
 		}
 		out = prefix + newBlock + "\n"
 	} else {
-		endRel := strings.Index(s[beginIdx:], bonesBlockEnd)
-		if endRel == -1 {
-			return fmt.Errorf("malformed managed block in %s: "+
-				"%s present without matching %s",
-				path, bonesBlockBegin, bonesBlockEnd)
-		}
-		endAbs := beginIdx + endRel + len(bonesBlockEnd)
-		out = s[:beginIdx] + newBlock + s[endAbs:]
+		out = s[:begin] + newBlock + s[end:]
 	}
 
 	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
@@ -198,6 +236,10 @@ func upsertManagedBlock(path, body string) error {
 // is collapsed back to a single trailing newline so a strip-then-
 // upsert cycle round-trips cleanly.
 //
+// Nested marker pairs in the body are handled by findManagedBlock —
+// only the outer block is removed, even when the body itself contains
+// literal marker strings (issue #150).
+//
 // No-op if the file is absent or contains no managed block. If
 // stripping leaves the file empty, the file is removed entirely so
 // `bones down` doesn't leave behind a 0-byte CLAUDE.md / AGENTS.md.
@@ -210,25 +252,21 @@ func stripManagedBlock(path string) error {
 		return fmt.Errorf("read %s: %w", path, err)
 	}
 	s := string(data)
-	beginIdx := strings.Index(s, bonesBlockBegin)
-	if beginIdx == -1 {
+	begin, end, ok, err := findManagedBlock(s)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	if !ok {
 		return nil
 	}
-	endRel := strings.Index(s[beginIdx:], bonesBlockEnd)
-	if endRel == -1 {
-		return fmt.Errorf("malformed managed block in %s: "+
-			"%s present without matching %s",
-			path, bonesBlockBegin, bonesBlockEnd)
-	}
-	endAbs := beginIdx + endRel + len(bonesBlockEnd)
-	if endAbs < len(s) && s[endAbs] == '\n' {
-		endAbs++
+	if end < len(s) && s[end] == '\n' {
+		end++
 	}
 
 	// Collapse trailing newlines on the prefix (including the blank
 	// separator we added on upsert) so we restore exactly one trailing
 	// newline — matching the user's original "ends with \n" shape.
-	trimEnd := beginIdx
+	trimEnd := begin
 	for trimEnd > 0 && s[trimEnd-1] == '\n' {
 		trimEnd--
 	}
@@ -236,7 +274,7 @@ func stripManagedBlock(path string) error {
 	if prefix != "" {
 		prefix += "\n"
 	}
-	out := prefix + s[endAbs:]
+	out := prefix + s[end:]
 
 	if out == "" {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -250,11 +288,19 @@ func stripManagedBlock(path string) error {
 	return nil
 }
 
-// hasManagedBlock reports whether content contains a bones-managed
-// section. Used by `bones down` to decide whether to strip a block out
-// of a user-authored file vs leave it alone.
+// hasManagedBlock reports whether content contains a real outer
+// bones-managed section, not merely the marker substrings. A file
+// that mentions the markers in user prose without actually opening a
+// block (e.g. BEGIN-only, or end-only) returns false so `bones down`
+// does not attempt to strip something that isn't there (issue #150).
+//
+// Malformed blocks (BEGIN with no matching END, counting nesting) are
+// treated as "no block present" rather than surfacing an error: the
+// strip path will re-detect and error if it tries to act, but mere
+// detection should not be a failure mode.
 func hasManagedBlock(content []byte) bool {
-	return strings.Contains(string(content), bonesBlockBegin)
+	_, _, ok, err := findManagedBlock(string(content))
+	return ok && err == nil
 }
 
 // bonesOwnedAgentsMD reports whether the given AGENTS.md content was
