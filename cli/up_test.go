@@ -115,3 +115,129 @@ func TestPrintHubStatus_StaleURLs(t *testing.T) {
 			"is dead); got: %q", got)
 	}
 }
+
+// TestIsIncompleteScaffold_Fresh pins that a directory with no
+// `.bones/` is not flagged for recovery. (Per #146 / ADR 0046.)
+func TestIsIncompleteScaffold_Fresh(t *testing.T) {
+	dir := t.TempDir()
+	if isIncompleteScaffold(dir) {
+		t.Errorf("fresh dir should not be flagged for recovery")
+	}
+}
+
+// TestIsIncompleteScaffold_FullyScaffolded pins that a workspace with
+// both agent.id AND scaffold_version is not flagged for recovery.
+func TestIsIncompleteScaffold_FullyScaffolded(t *testing.T) {
+	dir := t.TempDir()
+	bones := filepath.Join(dir, ".bones")
+	if err := os.MkdirAll(bones, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bones, "agent.id"),
+		[]byte("test-agent"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bones, "scaffold_version"),
+		[]byte("test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if isIncompleteScaffold(dir) {
+		t.Errorf("fully-scaffolded workspace should not be flagged for recovery")
+	}
+}
+
+// TestIsIncompleteScaffold_HalfInstalled pins #146's load-bearing
+// detection: a workspace whose agent.id exists but whose stamp is
+// missing IS flagged for recovery. This is the state left by a
+// `bones up` that aborted in step 2 (orchestrator scaffold).
+func TestIsIncompleteScaffold_HalfInstalled(t *testing.T) {
+	dir := t.TempDir()
+	bones := filepath.Join(dir, ".bones")
+	if err := os.MkdirAll(bones, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bones, "agent.id"),
+		[]byte("test-agent"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Note: no scaffold_version stamp.
+	if !isIncompleteScaffold(dir) {
+		t.Errorf("workspace with agent.id but no stamp should be flagged " +
+			"for recovery")
+	}
+}
+
+// TestScaffoldOrchestrator_RecoversFromHalfInstall pins the contract
+// that scaffoldOrchestrator can be re-run safely against a half-
+// installed workspace and converges on the same state as a fresh run.
+// Per #146 / ADR 0046, every step inside scaffoldOrchestrator is
+// idempotent against partial prior state — there is no separate
+// "preflight" pass; the redo IS the recovery.
+//
+// Fixture: agent.id present, .claude/settings.json containing only
+// some bones hooks (simulating a settings-stage failure where
+// mergeSettings ran but a later step did not), no scaffold_version
+// stamp. Run scaffoldOrchestrator. Assert: stamp written, AGENTS.md
+// present, settings.json has full hook set.
+func TestScaffoldOrchestrator_RecoversFromHalfInstall(t *testing.T) {
+	dir := t.TempDir()
+	bones := filepath.Join(dir, ".bones")
+	if err := os.MkdirAll(bones, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bones, "agent.id"),
+		[]byte("test-agent"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a half-merged settings.json: bones SessionStart hook is
+	// in but PreCompact is not.
+	settingsDir := filepath.Join(dir, ".claude")
+	if err := os.MkdirAll(settingsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	partial := `{"hooks":{"SessionStart":[{"matcher":"","hooks":[` +
+		`{"command":"bones tasks prime --json","type":"command","timeout":10}` +
+		`]}]}}`
+	if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"),
+		[]byte(partial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatalf("scaffoldOrchestrator on half-installed workspace: %v", err)
+	}
+
+	// Stamp written → recovery succeeded.
+	if _, err := os.Stat(filepath.Join(bones, "scaffold_version")); err != nil {
+		t.Errorf("scaffold_version stamp not written after recovery: %v", err)
+	}
+	// AGENTS.md present.
+	if _, err := os.Stat(filepath.Join(dir, "AGENTS.md")); err != nil {
+		t.Errorf("AGENTS.md not written after recovery: %v", err)
+	}
+	// settings.json now has the full hook set.
+	data, err := os.ReadFile(filepath.Join(settingsDir, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	for _, want := range []string{
+		"bones tasks prime --json", // present in partial
+		"bones hub start",          // added by recovery
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("settings.json missing %q after recovery:\n%s", want, body)
+		}
+	}
+
+	// Idempotent: a third run produces a byte-identical settings.json.
+	first := body
+	if err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatalf("second scaffold: %v", err)
+	}
+	data2, _ := os.ReadFile(filepath.Join(settingsDir, "settings.json"))
+	if string(data2) != first {
+		t.Errorf("settings.json not idempotent across recovery + re-run:\n"+
+			"first:\n%s\nsecond:\n%s", first, data2)
+	}
+}

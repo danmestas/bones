@@ -283,4 +283,4 @@ frontend  t-c44a    laptop  0      stale   120s ago
 
 ## License
 
-Apache-2.0. See `[LICENSE](LICENSE)`.
+Apache-2.0. See [LICENSE](LICENSE).
