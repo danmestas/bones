@@ -404,39 +404,56 @@ func planRemoveSkills(root string, c *DownCmd) []downAction {
 	return plan
 }
 
-// planRemoveAgentsMD removes the bones-managed AGENTS.md and the
-// CLAUDE.md symlink (or its file fallback). Per ADR 0042 these are
-// the harness-agnostic guidance channel; they pair with the hook
-// entries removed by planRemoveHooks. AGENTS.md is removed only if
-// it was bones-managed (first line matches the bones marker) — a
-// user-authored AGENTS.md is left in place so we don't clobber
-// project-specific guidance.
+// planRemoveAgentsMD removes (or strips bones content from) the
+// CLAUDE.md and AGENTS.md files at the workspace root. Per ADR 0042
+// these are the harness-agnostic guidance channel; they pair with the
+// hook entries removed by planRemoveHooks.
+//
+// Three cases per file:
+//   - Bones-owned outright (AGENTS.md template, or a CLAUDE.md symlink
+//     to AGENTS.md, or the regular-file fallback carrying the bones
+//     marker) — file is removed entirely.
+//   - User-authored with a bones managed block (per the issue #145
+//     model) — block is stripped in place, user content preserved.
+//   - User-authored with no bones content — left alone.
 func planRemoveAgentsMD(root string) []downAction {
 	var plan []downAction
+
 	agentsPath := filepath.Join(root, "AGENTS.md")
-	if data, err := os.ReadFile(agentsPath); err == nil && bonesOwnedAgentsMD(data) {
-		plan = append(plan, downAction{
-			description: "remove " + agentsPath,
-			do:          func() error { return os.Remove(agentsPath) },
-		})
+	if data, err := os.ReadFile(agentsPath); err == nil {
+		switch {
+		case bonesOwnedAgentsMD(data):
+			plan = append(plan, downAction{
+				description: "remove " + agentsPath,
+				do:          func() error { return os.Remove(agentsPath) },
+			})
+		case hasManagedBlock(data):
+			plan = append(plan, downAction{
+				description: "strip bones block from " + agentsPath,
+				do:          func() error { return stripManagedBlock(agentsPath) },
+			})
+		}
 	}
-	// CLAUDE.md is unconditionally bones-managed when AGENTS.md is —
-	// it's a symlink we wrote pointing at AGENTS.md (or a file fallback
-	// with the same content on platforms that don't support symlinks).
-	// Remove it only if it points at AGENTS.md or contains the bones
-	// marker; an unrelated CLAUDE.md (user-authored, e.g. an older
-	// project convention) is preserved.
+
 	claudePath := filepath.Join(root, "CLAUDE.md")
 	if target, err := os.Readlink(claudePath); err == nil && target == "AGENTS.md" {
 		plan = append(plan, downAction{
 			description: "remove " + claudePath,
 			do:          func() error { return os.Remove(claudePath) },
 		})
-	} else if data, err := os.ReadFile(claudePath); err == nil && bonesOwnedAgentsMD(data) {
-		plan = append(plan, downAction{
-			description: "remove " + claudePath,
-			do:          func() error { return os.Remove(claudePath) },
-		})
+	} else if data, err := os.ReadFile(claudePath); err == nil {
+		switch {
+		case bonesOwnedAgentsMD(data):
+			plan = append(plan, downAction{
+				description: "remove " + claudePath,
+				do:          func() error { return os.Remove(claudePath) },
+			})
+		case hasManagedBlock(data):
+			plan = append(plan, downAction{
+				description: "strip bones block from " + claudePath,
+				do:          func() error { return stripManagedBlock(claudePath) },
+			})
+		}
 	}
 	return plan
 }
