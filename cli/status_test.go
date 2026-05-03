@@ -17,10 +17,11 @@ import (
 
 func TestRenderStatus_Empty(t *testing.T) {
 	rep := statusReport{
-		WorkspaceDir:  "/tmp/ws/bones",
-		GeneratedAt:   time.Date(2026, 4, 30, 14, 5, 2, 0, time.UTC),
-		TasksByStatus: map[tasks.Status]int{},
-		TasksByID:     map[string]tasks.Task{},
+		WorkspaceDir:     "/tmp/ws/bones",
+		GeneratedAt:      time.Date(2026, 4, 30, 14, 5, 2, 0, time.UTC),
+		TasksByStatus:    map[tasks.Status]int{},
+		TasksByID:        map[string]tasks.Task{},
+		ScaffoldComplete: true,
 	}
 	var buf bytes.Buffer
 	if err := renderStatus(rep, &buf); err != nil {
@@ -36,6 +37,36 @@ func TestRenderStatus_Empty(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q\n--- output ---\n%s", want, out)
 		}
+	}
+	// ScaffoldComplete=true → no incomplete-scaffold WARN.
+	if strings.Contains(out, "scaffold incomplete") {
+		t.Errorf("unexpected scaffold-incomplete WARN when stamp present:\n%s", out)
+	}
+}
+
+// TestRenderStatus_ScaffoldIncomplete pins #147: when the workspace
+// stamp is missing (scaffoldver.Read → empty), renderStatus emits a
+// WARN line directing the user to re-run `bones up`. Without this the
+// user sees a green status header against a half-installed workspace
+// where SessionStart hooks were never written.
+func TestRenderStatus_ScaffoldIncomplete(t *testing.T) {
+	rep := statusReport{
+		WorkspaceDir:     "/tmp/ws/bones",
+		GeneratedAt:      time.Date(2026, 5, 3, 14, 5, 2, 0, time.UTC),
+		TasksByStatus:    map[tasks.Status]int{},
+		TasksByID:        map[string]tasks.Task{},
+		ScaffoldComplete: false,
+	}
+	var buf bytes.Buffer
+	if err := renderStatus(rep, &buf); err != nil {
+		t.Fatalf("renderStatus: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "scaffold incomplete") {
+		t.Errorf("missing scaffold-incomplete WARN:\n%s", out)
+	}
+	if !strings.Contains(out, "bones up") {
+		t.Errorf("WARN should direct user to `bones up`:\n%s", out)
 	}
 }
 
@@ -82,6 +113,7 @@ func TestRenderStatus_WithSessionsAndTasks(t *testing.T) {
 				TaskID: "7777777a-aaaa-bbbb-cccc-dddddddddddd", Title: "auth fix",
 			},
 		},
+		ScaffoldComplete: true,
 	}
 	var buf bytes.Buffer
 	if err := renderStatus(rep, &buf); err != nil {

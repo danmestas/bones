@@ -17,6 +17,7 @@ import (
 
 	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/registry"
+	"github.com/danmestas/bones/internal/scaffoldver"
 	"github.com/danmestas/bones/internal/sessions"
 	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/tasks"
@@ -64,6 +65,13 @@ type statusReport struct {
 	TasksByID     map[string]tasks.Task
 
 	Activity []activityEvent
+
+	// ScaffoldComplete is true when scaffoldver.Read returns a non-empty
+	// stamp. False signals an incomplete `bones up` (per #146): step 1
+	// (workspace init) succeeded but step 2 (scaffold) did not, so
+	// .claude/settings.json hooks are missing and AGENTS.md may be
+	// partial. Surfaced as a WARN by renderStatus (#147).
+	ScaffoldComplete bool
 }
 
 // activityEvent is one entry in the recent-activity feed. Time is
@@ -101,11 +109,13 @@ func (c *StatusCmd) Run(g *libfossilcli.Globals) error {
 // gracefully — a workspace that hasn't bootstrapped a hub repo yet
 // still gets the task/session view.
 func gatherStatus(ctx context.Context, info workspace.Info) (statusReport, error) {
+	stamp, _ := scaffoldver.Read(info.WorkspaceDir)
 	rep := statusReport{
-		WorkspaceDir:  info.WorkspaceDir,
-		GeneratedAt:   timeNow(),
-		TasksByStatus: map[tasks.Status]int{},
-		TasksByID:     map[string]tasks.Task{},
+		WorkspaceDir:     info.WorkspaceDir,
+		GeneratedAt:      timeNow(),
+		TasksByStatus:    map[tasks.Status]int{},
+		TasksByID:        map[string]tasks.Task{},
+		ScaffoldComplete: stamp != "",
 	}
 
 	mgr, closeMgr, err := openManager(ctx, info)
@@ -245,6 +255,18 @@ func renderStatus(rep statusReport, w io.Writer) error {
 	)
 	if _, err := io.WriteString(w, header); err != nil {
 		return err
+	}
+
+	// Surface incomplete scaffolds (#147): step 1 of `bones up` succeeded
+	// (the workspace marker is present, otherwise gatherStatus could not
+	// have run) but step 2 (scaffold) did not — `.claude/settings.json`
+	// hooks are missing, agents operate without context priming. Re-run
+	// `bones up` to recover (per #146).
+	if !rep.ScaffoldComplete {
+		if _, err := io.WriteString(w,
+			"WARN  scaffold incomplete — re-run `bones up`\n\n"); err != nil {
+			return err
+		}
 	}
 
 	if err := renderSlotTable(rep, w); err != nil {

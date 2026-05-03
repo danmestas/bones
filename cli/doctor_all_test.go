@@ -15,9 +15,11 @@ import (
 )
 
 // makeFakeWorkspace builds a minimal valid bones workspace under
-// t.TempDir() — directory + .bones/agent.id marker — so registry
-// entries pointing at it don't get flagged as orphans by ADR 0043's
-// orphan check during doctor tests.
+// t.TempDir(): directory + .bones/agent.id marker + scaffold_version
+// stamp + a bones-marked AGENTS.md so doctor's substrate gates all
+// pass. Registry entries pointing at it don't get flagged as orphans
+// by ADR 0043, the #147 incomplete-scaffold WARN doesn't fire, and
+// ADR 0042's AGENTS.md presence check is satisfied.
 func makeFakeWorkspace(t *testing.T, name string) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), name)
@@ -27,6 +29,15 @@ func makeFakeWorkspace(t *testing.T, name string) string {
 	if err := os.WriteFile(filepath.Join(dir, ".bones", "agent.id"),
 		[]byte("test"), 0o644); err != nil {
 		t.Fatalf("makeFakeWorkspace marker: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".bones", "scaffold_version"),
+		[]byte("test"), 0o644); err != nil {
+		t.Fatalf("makeFakeWorkspace stamp: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"),
+		[]byte("# Agent Guidance for this Workspace\n\n## Agent Setup (REQUIRED)\n"),
+		0o644); err != nil {
+		t.Fatalf("makeFakeWorkspace agents.md: %v", err)
 	}
 	return dir
 }
