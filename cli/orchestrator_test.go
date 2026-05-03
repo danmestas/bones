@@ -1093,3 +1093,121 @@ func TestStripManagedBlock_NoBlockNoOp(t *testing.T) {
 		t.Errorf("file modified by no-op strip:\nwant %q\ngot  %q", user, got)
 	}
 }
+
+// nestedMarkerBody is a body that itself contains the literal
+// bones-block markers. The bones AGENTS.md template body is exactly
+// this shape: it documents the marker syntax in a fenced code block.
+// All managed-section helpers must treat these as nested content of
+// the outer block, not as outer-block boundaries (issue #150).
+var nestedMarkerBody = "real body line\n\n" +
+	"```\n" +
+	bonesBlockBegin + "\n" +
+	"…example…\n" +
+	bonesBlockEnd + "\n" +
+	"```\n\n" +
+	"trailing body line"
+
+// TestUpsertManagedBlock_NestedMarkersInBody pins issue #150: the
+// outer block must be located using nested-aware parsing, not first-
+// END-after-BEGIN. Re-upserting the same body produces a byte-
+// identical file, even when the body contains the literal marker
+// strings.
+func TestUpsertManagedBlock_NestedMarkersInBody(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "F.md")
+	user := "# User\n"
+	if err := os.WriteFile(path, []byte(user), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertManagedBlock(path, nestedMarkerBody); err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+	first, _ := os.ReadFile(path)
+	if !strings.HasPrefix(string(first), user) {
+		t.Errorf("user prefix lost: %q", first)
+	}
+	if !strings.Contains(string(first), "trailing body line") {
+		t.Errorf("body trailing content missing: %q", first)
+	}
+	if err := upsertManagedBlock(path, nestedMarkerBody); err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	second, _ := os.ReadFile(path)
+	if string(first) != string(second) {
+		t.Errorf("re-upsert with nested markers not idempotent:\nfirst:\n%s\nsecond:\n%s",
+			first, second)
+	}
+}
+
+// TestStripManagedBlock_NestedMarkersInBody pins that strip removes
+// the outer block in full and leaves the user's content intact, even
+// when the body content contains literal marker strings (issue #150).
+func TestStripManagedBlock_NestedMarkersInBody(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "F.md")
+	user := "# User\n\nUser content.\n"
+	if err := os.WriteFile(path, []byte(user), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertManagedBlock(path, nestedMarkerBody); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if err := stripManagedBlock(path); err != nil {
+		t.Fatalf("strip: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != user {
+		t.Errorf("user content not restored after nested-body strip:\nwant %q\ngot  %q",
+			user, got)
+	}
+}
+
+// TestStripManagedBlock_PreservesContentAfterBlock pins that user
+// content following the outer END marker is not consumed by strip,
+// even when the body content above it contains literal markers.
+func TestStripManagedBlock_PreservesContentAfterBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "F.md")
+	user := "# User\n"
+	if err := os.WriteFile(path, []byte(user), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertManagedBlock(path, nestedMarkerBody); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	// Manually append user content after the END marker.
+	current, _ := os.ReadFile(path)
+	withTail := string(current) + "\n## After bones\n\nMore user prose.\n"
+	if err := os.WriteFile(path, []byte(withTail), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := stripManagedBlock(path); err != nil {
+		t.Fatalf("strip: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	want := "# User\n\n## After bones\n\nMore user prose.\n"
+	if string(got) != want {
+		t.Errorf("post-block content not preserved:\nwant %q\ngot  %q", want, got)
+	}
+}
+
+// TestHasManagedBlock_RejectsBareSubstring pins that hasManagedBlock
+// returns true only for files that contain a real outer block — a
+// file that mentions the marker strings in user prose (no actual
+// block) must not trigger a strip on `bones down` (issue #150).
+func TestHasManagedBlock_RejectsBareSubstring(t *testing.T) {
+	// Begin-only, no end: not a real block.
+	beginOnly := "# Doc\n\nMy file mentions " + bonesBlockBegin + " but never closes it.\n"
+	if hasManagedBlock([]byte(beginOnly)) {
+		t.Errorf("hasManagedBlock should be false for BEGIN without END:\n%s", beginOnly)
+	}
+	// No markers at all.
+	if hasManagedBlock([]byte("# Doc\n\nBoring content.\n")) {
+		t.Errorf("hasManagedBlock should be false for marker-free content")
+	}
+	// Real block: should be true.
+	real := "# Doc\n\n" + bonesBlockBegin + "\nbody\n" + bonesBlockEnd + "\n"
+	if !hasManagedBlock([]byte(real)) {
+		t.Errorf("hasManagedBlock should be true for a real block:\n%s", real)
+	}
+}
