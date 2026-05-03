@@ -57,6 +57,10 @@ func (c *SwarmJoinCmd) run(ctx context.Context, info workspace.Info) error {
 		NoAutosync:    c.NoAutosync,
 	})
 	if err != nil {
+		// Surface diagnostic context (#155) so operators see the
+		// connected URL vs disk URL plus hub liveness in stderr —
+		// the actionable evidence when join fails on a NATS error.
+		reportSwarmFailure(info.WorkspaceDir, info.NATSURL)
 		// Stamp the verb name into the error so operators see which
 		// CLI command surfaced it (the swarm.* errors are package-
 		// scoped and would otherwise read as bare "swarm: ..."

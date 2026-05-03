@@ -77,6 +77,10 @@ func (c *SwarmCloseCmd) Run(g *libfossilcli.Globals) error {
 		KeepWT:             c.KeepWT,
 	}
 	if err := lease.Close(ctx, closeOpts); err != nil {
+		// Surface diagnostic context (#155) on close failure too —
+		// less common than commit failure but the same URL/hub
+		// state matters when it happens.
+		reportSwarmFailure(info.WorkspaceDir, info.NATSURL)
 		return fmt.Errorf("swarm close: %w", err)
 	}
 	fmt.Fprintf(os.Stderr,

@@ -56,6 +56,10 @@ func (c *SwarmCommitCmd) Run(g *libfossilcli.Globals) error {
 			Event:     logwriter.EventCommitError,
 			Fields:    map[string]interface{}{"reason": err.Error()},
 		})
+		// Surface diagnostic context (#155): if the failure was
+		// "no responders available" or similar, the connected URL
+		// vs disk URL plus hub liveness is the actionable evidence.
+		reportSwarmFailure(info.WorkspaceDir, info.NATSURL)
 		return fmt.Errorf("swarm commit: %w", err)
 	}
 	c.emitCommitReport(lease.Slot(), lease.TaskID(), files, res, resolveHubURL(c.HubURL))

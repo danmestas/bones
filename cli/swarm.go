@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/nats-io/nats.go"
 
@@ -82,6 +83,10 @@ func bootstrapResume(
 	sess, closeSess, err := openSwarmSessions(ctx, info)
 	if err != nil {
 		stop()
+		// #155 instrumentation: openSwarmSessions wraps a
+		// nats.Connect; a failure here is the most direct symptom
+		// of URL discovery race or hub-down.
+		reportSwarmFailure(info.WorkspaceDir, info.NATSURL)
 		return nil, workspace.Info{}, nil, nil, err
 	}
 	host, _ := os.Hostname()
@@ -99,9 +104,58 @@ func bootstrapResume(
 		if errors.Is(err, swarm.ErrSessionNotFound) {
 			return nil, workspace.Info{}, nil, nil, err
 		}
+		// #155 instrumentation: Resume opens its own NATS
+		// connection; surface the same diagnostic on failure.
+		reportSwarmFailure(info.WorkspaceDir, info.NATSURL)
 		return nil, workspace.Info{}, nil, nil, fmt.Errorf("%s: %w", verbName, err)
 	}
 	return ctx, info, lease, stop, nil
+}
+
+// diagnoseSwarmFailure builds a stderr-friendly diagnostic snippet
+// for #155: when a swarm verb fails on a NATS-related error
+// (commonly "nats: no responders available"), the most likely root
+// causes are URL discovery race (the verb cached one URL but the hub
+// rebound on a different port) or hub-down (pid files name dead
+// processes). Capture both at the moment of failure so the next
+// recurrence has actionable evidence rather than a bare error.
+//
+// connectedURL is whichever URL the verb actually dialed (typically
+// info.NATSURL captured at workspace.Join time). The on-disk URL is
+// re-read here so any mid-flight drift surfaces.
+func diagnoseSwarmFailure(workspaceDir, connectedURL string) string {
+	if workspaceDir == "" {
+		return "  (no workspace context — cannot diagnose)"
+	}
+	diskURL := hub.NATSURL(workspaceDir)
+	pid, running := hub.IsRunning(workspaceDir)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "  connected to: %s\n", connectedURL)
+	fmt.Fprintf(&b, "  on disk now : %s\n", diskURL)
+	if connectedURL != diskURL && diskURL != "" {
+		b.WriteString(
+			"  ⚠ MISMATCH: NATS URL changed since this verb captured it; the\n" +
+				"    hub likely restarted on a different port. See #155, #157.\n",
+		)
+	}
+	if running {
+		fmt.Fprintf(&b, "  hub status  : up, pid=%d\n", pid)
+	} else {
+		b.WriteString("  hub status  : DOWN (no live fossil/nats pids)\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// reportSwarmFailure is the stderr-side companion to
+// diagnoseSwarmFailure. Verbs call this on a non-nil error to
+// surface the diagnostic alongside the bare error message. Always
+// safe — workspaceDir or connectedURL may be empty when the verb
+// failed before workspace.Join completed.
+func reportSwarmFailure(workspaceDir, connectedURL string) {
+	fmt.Fprintf(os.Stderr,
+		"swarm: diagnostic (#155):\n%s\n",
+		diagnoseSwarmFailure(workspaceDir, connectedURL))
 }
 
 // resolveHubURL returns the hub fossil HTTP URL for swarm operations,
