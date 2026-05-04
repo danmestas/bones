@@ -49,6 +49,41 @@ const claudeManagedBody = "Bones is active in this workspace. " +
 // names are left alone.
 var legacyBonesSkills = []string{"orchestrator", "subagent", "uninstall-bones"}
 
+// scaffoldFootprint captures what scaffoldOrchestrator did during a
+// single invocation, for surfacing in the default-mode `bones up`
+// summary (issue #173). All counts and slices are zero-value safe; a
+// re-run on a fully-scaffolded workspace yields an empty footprint.
+type scaffoldFootprint struct {
+	// FilesWritten lists workspace-relative paths that were created or
+	// rewritten as bones-owned files (e.g. AGENTS.md, CLAUDE.md when
+	// fresh-installed as a symlink, .bones/AGENT_GUIDANCE.md).
+	FilesWritten []string
+
+	// MarkerBlockTargets lists workspace-relative paths whose existing
+	// user content received an upserted bones marker block (e.g.
+	// CLAUDE.md when user-authored).
+	MarkerBlockTargets []string
+
+	// GitignoreEntriesAdded lists the entries newly appended to
+	// .gitignore. Empty when all entries already existed.
+	GitignoreEntriesAdded []string
+
+	// HooksAddedByEvent counts new hook entries added to settings.json,
+	// keyed by event name (e.g. "SessionStart": 2, "PreCompact": 1).
+	// Existing duplicates are not counted.
+	HooksAddedByEvent map[string]int
+}
+
+// hooksAdded returns the total count of new hook entries written, summed
+// across all events. Used to keep the summary line one-shot.
+func (f *scaffoldFootprint) hooksAdded() int {
+	n := 0
+	for _, c := range f.HooksAddedByEvent {
+		n += c
+	}
+	return n
+}
+
 // scaffoldOrchestrator scaffolds the AGENTS.md universal channel and
 // Claude-format hooks into the workspace at root. Per ADR 0042 the
 // pre-existing per-skill markdown trees under .claude/skills/{orchestrator,
@@ -58,26 +93,35 @@ var legacyBonesSkills = []string{"orchestrator", "subagent", "uninstall-bones"}
 //
 // Idempotent: re-running yields no diff against an already-installed
 // workspace.
-func scaffoldOrchestrator(root string) error {
+//
+// Returns a scaffoldFootprint describing the per-call file-and-hook
+// changes (used by runUp to render the default-mode summary, #173). The
+// footprint is best-effort: helpers track only the actions they actually
+// performed, so a fully-scaffolded workspace produces a zero-value
+// footprint.
+func scaffoldOrchestrator(root string) (scaffoldFootprint, error) {
+	var fp scaffoldFootprint
+	fp.HooksAddedByEvent = map[string]int{}
+
 	if err := removeLegacyBonesSkills(root); err != nil {
-		return fmt.Errorf("legacy skills cleanup: %w", err)
+		return fp, fmt.Errorf("legacy skills cleanup: %w", err)
 	}
-	if err := writeAgentsMD(root); err != nil {
-		return fmt.Errorf("agents.md: %w", err)
+	if err := writeAgentsMD(root, &fp); err != nil {
+		return fp, fmt.Errorf("agents.md: %w", err)
 	}
-	if err := linkClaudeMD(root); err != nil {
-		return fmt.Errorf("claude.md symlink: %w", err)
+	if err := linkClaudeMD(root, &fp); err != nil {
+		return fp, fmt.Errorf("claude.md symlink: %w", err)
 	}
-	if err := mergeSettings(filepath.Join(root, ".claude", "settings.json")); err != nil {
-		return fmt.Errorf("settings: %w", err)
+	if err := mergeSettings(filepath.Join(root, ".claude", "settings.json"), &fp); err != nil {
+		return fp, fmt.Errorf("settings: %w", err)
 	}
-	if err := ensureGitignoreEntries(root); err != nil {
-		return fmt.Errorf("root gitignore: %w", err)
+	if err := ensureGitignoreEntries(root, &fp); err != nil {
+		return fp, fmt.Errorf("root gitignore: %w", err)
 	}
 	if err := scaffoldver.Write(root, version.Get()); err != nil {
-		return fmt.Errorf("scaffold version stamp: %w", err)
+		return fp, fmt.Errorf("scaffold version stamp: %w", err)
 	}
-	return nil
+	return fp, nil
 }
 
 // removeLegacyBonesSkills removes the three pre-ADR-0042 bones-owned
@@ -126,16 +170,39 @@ func removeLegacyBonesSkills(root string) error {
 //
 // The user-authored case (added per issue #145) replaces an earlier
 // guard that refused user content outright.
-func writeAgentsMD(root string) error {
+func writeAgentsMD(root string, fp *scaffoldFootprint) error {
 	path := filepath.Join(root, "AGENTS.md")
 	existing, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if os.IsNotExist(err) || bonesOwnedAgentsMD(existing) {
-		return os.WriteFile(path, agentsMDTemplate, 0o644)
+	if os.IsNotExist(err) {
+		if err := os.WriteFile(path, agentsMDTemplate, 0o644); err != nil {
+			return err
+		}
+		recordWritten(fp, "AGENTS.md")
+		return nil
 	}
-	return upsertManagedBlock(path, string(agentsMDTemplate))
+	if bonesOwnedAgentsMD(existing) {
+		// Bones-owned: rewrite in place. Only count as "written" when the
+		// content actually changed, so re-running on a converged
+		// workspace doesn't lie in the summary.
+		if string(existing) != string(agentsMDTemplate) {
+			if err := os.WriteFile(path, agentsMDTemplate, 0o644); err != nil {
+				return err
+			}
+			recordWritten(fp, "AGENTS.md")
+		}
+		return nil
+	}
+	had := hasManagedBlock(existing)
+	if err := upsertManagedBlock(path, string(agentsMDTemplate)); err != nil {
+		return err
+	}
+	if !had {
+		recordMarkerBlock(fp, "AGENTS.md")
+	}
+	return nil
 }
 
 // findManagedBlock locates the outer bones-managed section in s using
@@ -339,7 +406,7 @@ func bonesOwnedAgentsMD(content []byte) bool {
 // The user-authored regular-file case (added per issue #145) replaces
 // the earlier guard from issue #139 that refused user content
 // outright.
-func linkClaudeMD(root string) error {
+func linkClaudeMD(root string, fp *scaffoldFootprint) error {
 	target := "AGENTS.md"
 	link := filepath.Join(root, "CLAUDE.md")
 
@@ -359,22 +426,41 @@ func linkClaudeMD(root string) error {
 
 	if os.IsNotExist(err) {
 		if err := os.Symlink(target, link); err == nil {
+			recordWritten(fp, "CLAUDE.md")
 			return nil
 		}
 		// Fallback: write a regular file with the same content. Less
 		// ideal (drifts on AGENTS.md edits), but symlinks are
 		// unsupported on some filesystems (e.g. older Windows volumes
 		// without developer mode).
-		return os.WriteFile(link, agentsMDTemplate, 0o644)
+		if err := os.WriteFile(link, agentsMDTemplate, 0o644); err != nil {
+			return err
+		}
+		recordWritten(fp, "CLAUDE.md")
+		return nil
 	}
 
 	if bonesOwnedAgentsMD(data) {
 		// Bones-owned fallback shape: rewrite in place to converge on
-		// the current template.
-		return os.WriteFile(link, agentsMDTemplate, 0o644)
+		// the current template. Only record as "written" when content
+		// actually changes.
+		if string(data) != string(agentsMDTemplate) {
+			if err := os.WriteFile(link, agentsMDTemplate, 0o644); err != nil {
+				return err
+			}
+			recordWritten(fp, "CLAUDE.md")
+		}
+		return nil
 	}
 
-	return upsertManagedBlock(link, claudeManagedBody)
+	had := hasManagedBlock(data)
+	if err := upsertManagedBlock(link, claudeManagedBody); err != nil {
+		return err
+	}
+	if !had {
+		recordMarkerBlock(fp, "CLAUDE.md")
+	}
+	return nil
 }
 
 // mergeSettings idempotently installs the SessionStart + PreCompact
@@ -391,7 +477,7 @@ func linkClaudeMD(root string) error {
 // ADR 0038 the hub is workspace-scoped and `bones down` is the explicit
 // teardown; legacy hub-shutdown.sh entries under Stop or SessionEnd are
 // migrated away.
-func mergeSettings(path string) error {
+func mergeSettings(path string, fp *scaffoldFootprint) error {
 	root := map[string]any{}
 	if data, err := os.ReadFile(path); err == nil {
 		if len(data) > 0 {
@@ -427,9 +513,15 @@ func mergeSettings(path string) error {
 	// session boundaries — specs written outside `bones tasks` evaporate
 	// at the next compaction, which keeps planners filing atomic work
 	// rather than bypassing the tracker with freeform docs.
-	addHook(hooks, "SessionStart", "bones tasks prime --json")
-	addHook(hooks, "SessionStart", "bones hub start")
-	addHook(hooks, "PreCompact", "bones tasks prime --json")
+	if addHook(hooks, "SessionStart", "bones tasks prime --json") {
+		recordHook(fp, "SessionStart")
+	}
+	if addHook(hooks, "SessionStart", "bones hub start") {
+		recordHook(fp, "SessionStart")
+	}
+	if addHook(hooks, "PreCompact", "bones tasks prime --json") {
+		recordHook(fp, "PreCompact")
+	}
 
 	root["hooks"] = hooks
 
@@ -518,7 +610,10 @@ func pruneCommandFromEvent(hooks map[string]any, event, needle string) {
 	hooks[event] = keep
 }
 
-func addHook(hooks map[string]any, event, cmd string) {
+// addHook returns true when a fresh entry was appended, false when the
+// hook was already present (idempotent no-op). The boolean lets the
+// caller report a precise "merged N hooks" count in the up summary.
+func addHook(hooks map[string]any, event, cmd string) bool {
 	groups, _ := hooks[event].([]any)
 
 	grpIdx := -1
@@ -551,7 +646,7 @@ func addHook(hooks map[string]any, event, cmd string) {
 		}
 		if c, _ := em["command"].(string); c == cmd {
 			hooks[event] = groups
-			return
+			return false
 		}
 	}
 
@@ -563,6 +658,39 @@ func addHook(hooks map[string]any, event, cmd string) {
 	grp["hooks"] = entries
 	groups[grpIdx] = grp
 	hooks[event] = groups
+	return true
+}
+
+// recordWritten appends path to fp.FilesWritten when fp is non-nil. The
+// nil-check keeps every helper safe to call from tests that don't care
+// about footprint reporting.
+func recordWritten(fp *scaffoldFootprint, path string) {
+	if fp == nil {
+		return
+	}
+	fp.FilesWritten = append(fp.FilesWritten, path)
+}
+
+// recordMarkerBlock appends path to fp.MarkerBlockTargets when fp is
+// non-nil. Used when an upsert added a fresh bones-managed block to a
+// user-authored file (vs. a no-op refresh).
+func recordMarkerBlock(fp *scaffoldFootprint, path string) {
+	if fp == nil {
+		return
+	}
+	fp.MarkerBlockTargets = append(fp.MarkerBlockTargets, path)
+}
+
+// recordHook bumps the per-event hook-add counter when fp is non-nil.
+// Initializes the map on first use so callers can stay terse.
+func recordHook(fp *scaffoldFootprint, event string) {
+	if fp == nil {
+		return
+	}
+	if fp.HooksAddedByEvent == nil {
+		fp.HooksAddedByEvent = map[string]int{}
+	}
+	fp.HooksAddedByEvent[event]++
 }
 
 // ensureGitignoreEntries appends Fossil + bones runtime entries to the
@@ -574,7 +702,7 @@ func addHook(hooks map[string]any, event, cmd string) {
 //
 // Idempotent: skips entries already present (whole-line match).
 // Creates .gitignore if missing.
-func ensureGitignoreEntries(dir string) error {
+func ensureGitignoreEntries(dir string, fp *scaffoldFootprint) error {
 	path := filepath.Join(dir, ".gitignore")
 	wantEntries := []string{
 		".fslckout",
@@ -615,6 +743,9 @@ func ensureGitignoreEntries(dir string) error {
 		if _, err := f.WriteString(e + "\n"); err != nil {
 			return fmt.Errorf("write .gitignore: %w", err)
 		}
+	}
+	if fp != nil {
+		fp.GitignoreEntriesAdded = append(fp.GitignoreEntriesAdded, missing...)
 	}
 	return nil
 }

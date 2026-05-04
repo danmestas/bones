@@ -203,7 +203,7 @@ func TestScaffoldOrchestrator_RecoversFromHalfInstall(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator on half-installed workspace: %v", err)
 	}
 
@@ -232,7 +232,7 @@ func TestScaffoldOrchestrator_RecoversFromHalfInstall(t *testing.T) {
 
 	// Idempotent: a third run produces a byte-identical settings.json.
 	first := body
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("second scaffold: %v", err)
 	}
 	data2, _ := os.ReadFile(filepath.Join(settingsDir, "settings.json"))

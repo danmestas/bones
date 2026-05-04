@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/danmestas/bones/internal/githook"
 	"github.com/danmestas/bones/internal/hub"
@@ -48,47 +50,118 @@ func runUp(cwd string, verbose bool) (err error) {
 	// user wondering why a re-run worked after the previous error.
 	recovery := isIncompleteScaffold(cwd)
 
-	info, err := initOrJoinWorkspace(ctx, cwd)
-	if err != nil {
-		return fmt.Errorf("workspace: %w", err)
+	info, ierr := initOrJoinWorkspace(ctx, cwd)
+	if ierr != nil {
+		err = fmt.Errorf("workspace: %w", ierr)
+		return err
 	}
 	wsDir := info.WorkspaceDir
+
+	// Open the audit log under <wsDir>/.bones/up.log (#171). Defer Close
+	// so the exit code + duration land regardless of which step fails
+	// below. The logger is non-nil even on open failure (writes degrade
+	// to no-ops) so terminal output never depends on disk-writability.
+	logger := openUpLog(wsDir)
+	defer logger.Close(err)
+
 	if verbose {
-		fmt.Printf("up: workspace at %s\n", wsDir)
+		logger.Infof("up: workspace at %s", wsDir)
 	}
 
 	if recovery {
-		fmt.Fprintln(os.Stderr,
-			"bones: scaffold incomplete from prior run — re-running scaffold")
+		logger.Warnf("bones: scaffold incomplete from prior run — re-running scaffold")
 	}
 
-	if err := scaffoldOrchestrator(wsDir); err != nil {
-		return fmt.Errorf("orchestrator scaffold: %w", err)
+	fp, scaffErr := scaffoldOrchestrator(wsDir)
+	if scaffErr != nil {
+		err = fmt.Errorf("orchestrator scaffold: %w", scaffErr)
+		return err
 	}
 	if verbose {
-		fmt.Println("up: orchestrator skills, hooks, and gitignore installed")
+		logger.Infof("up: orchestrator skills, hooks, and gitignore installed")
 	}
 
-	if err := installGitHook(wsDir, verbose); err != nil {
-		return fmt.Errorf("git hook: %w", err)
+	if hookErr := installGitHook(wsDir, verbose, logger); hookErr != nil {
+		err = fmt.Errorf("git hook: %w", hookErr)
+		return err
 	}
 
-	if err := writeAgentGuidance(wsDir); err != nil {
-		return fmt.Errorf("agent guidance: %w", err)
+	guidanceWritten, gErr := writeAgentGuidance(wsDir)
+	if gErr != nil {
+		err = fmt.Errorf("agent guidance: %w", gErr)
+		return err
+	}
+	if guidanceWritten {
+		fp.FilesWritten = append(fp.FilesWritten,
+			filepath.Join(".bones", "AGENT_GUIDANCE.md"))
 	}
 
-	if err := checkFossilDrift(wsDir); err != nil {
-		fmt.Fprintf(os.Stderr, "up: WARN  %v\n", err)
+	if dErr := checkFossilDrift(wsDir); dErr != nil {
+		logger.Warnf("up: WARN  %v", dErr)
 	}
 
 	if verbose {
-		fmt.Println("up: workspace ready. Run any verb (e.g., `bones tasks status`) " +
+		logger.Infof("up: workspace ready. Run any verb (e.g., `bones tasks status`) " +
 			"and the hub will start automatically; or run `bones hub start` now.")
 	} else {
-		fmt.Printf("up: ready at %s\n", wsDir)
+		logger.Infof("up: ready at %s", wsDir)
+		emitFootprintSummary(logger, fp)
 	}
-	printHubStatus(os.Stdout, wsDir)
+	printHubStatus(logger.Tee(os.Stdout), wsDir)
 	return nil
+}
+
+// emitFootprintSummary surfaces per-action file/hook changes from the
+// scaffold pass into the default-mode summary (#173). Each line is
+// indented under the "up: ready at" banner so a quick scan reads as
+// "what just changed in this workspace". When the workspace was already
+// fully scaffolded (no-op re-run), the function emits a single
+// "no changes" line so the operator sees an explicit affirmation rather
+// than wondering whether they pasted the wrong cwd.
+func emitFootprintSummary(logger *upLogger, fp scaffoldFootprint) {
+	emitted := false
+
+	if len(fp.FilesWritten) > 0 {
+		emitted = true
+		logger.Infof("up:   wrote %s", strings.Join(fp.FilesWritten, ", "))
+	}
+	for _, path := range fp.MarkerBlockTargets {
+		emitted = true
+		logger.Infof("up:   appended bones marker block to %s", path)
+	}
+	if len(fp.GitignoreEntriesAdded) > 0 {
+		emitted = true
+		logger.Infof("up:   added %d entries to .gitignore (%s)",
+			len(fp.GitignoreEntriesAdded),
+			strings.Join(fp.GitignoreEntriesAdded, ", "))
+	}
+	if total := fp.hooksAdded(); total > 0 {
+		emitted = true
+		logger.Infof("up:   merged %d hooks into .claude/settings.json (%s)",
+			total, formatHookCounts(fp.HooksAddedByEvent))
+	}
+
+	if !emitted {
+		logger.Infof("up:   no changes (workspace already converged)")
+	}
+}
+
+// formatHookCounts renders the per-event hook-add counts with stable
+// ordering so summary output is reproducible across runs (the underlying
+// map is unordered).
+func formatHookCounts(byEvent map[string]int) string {
+	keys := make([]string, 0, len(byEvent))
+	for k, v := range byEvent {
+		if v > 0 {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s: %d", k, byEvent[k]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // printHubStatus reflects the workspace's current hub state to w
@@ -164,17 +237,17 @@ func initOrJoinWorkspace(ctx context.Context, cwd string) (workspace.Info, error
 // The "no .git found" line prints regardless of verbose because it
 // signals a missing enforcement gate the operator should know about.
 // The success line is verbose-only.
-func installGitHook(wsDir string, verbose bool) error {
+func installGitHook(wsDir string, verbose bool, logger *upLogger) error {
 	gitDir := githook.FindGitDir(wsDir)
 	if gitDir == "" {
-		fmt.Println("up: no .git found — skipping pre-commit hook install")
+		logger.Infof("up: no .git found — skipping pre-commit hook install")
 		return nil
 	}
 	if err := githook.Install(gitDir); err != nil {
 		return err
 	}
 	if verbose {
-		fmt.Printf("up: pre-commit hook installed at %s/hooks/pre-commit\n", gitDir)
+		logger.Infof("up: pre-commit hook installed at %s/hooks/pre-commit", gitDir)
 	}
 	return nil
 }
@@ -183,15 +256,23 @@ func installGitHook(wsDir string, verbose bool) error {
 // that don't read CLAUDE.md still pick up workspace-level direction
 // to use bones rather than direct git. The SessionStart hook reads
 // this file and injects it into agent context.
-func writeAgentGuidance(wsDir string) error {
+//
+// Returns (true, nil) when the file was just created (a fresh up wrote
+// it), (false, nil) when it already existed (re-run no-op). The boolean
+// is consumed by runUp's footprint summary so default-mode output can
+// reflect whether AGENT_GUIDANCE.md is part of this run's diff.
+func writeAgentGuidance(wsDir string) (bool, error) {
 	path := filepath.Join(wsDir, ".bones", "AGENT_GUIDANCE.md")
 	if _, err := os.Stat(path); err == nil {
-		return nil
+		return false, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+		return false, err
 	}
-	return os.WriteFile(path, []byte(agentGuidance), 0o644)
+	if err := os.WriteFile(path, []byte(agentGuidance), 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 const agentGuidance = `# Bones is active in this workspace

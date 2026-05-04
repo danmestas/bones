@@ -13,7 +13,7 @@ type CLI struct {
 	libfossilcli.Globals
 
 	// Daily.
-	Up     bonescli.UpCmd     `cmd:"" group:"daily" help:"Bootstrap workspace, scaffold, leaf, hub"`
+	Up     bonescli.UpCmd     `cmd:"" group:"daily" help:"Bootstrap workspace, lazy hub (ADR 0041)"`
 	Down   bonescli.DownCmd   `cmd:"" group:"daily" help:"Reverse up: stop hub + clean scaffold"`
 	Status bonescli.StatusCmd `cmd:"" group:"daily" help:"Snapshot tasks, sessions, hub activity"`
 	Tasks  bonescli.TasksCmd  `cmd:"" group:"daily" help:"Inspect and mutate runtime agent tasks"`
