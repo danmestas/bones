@@ -11,7 +11,7 @@ import (
 
 func TestScaffoldOrchestrator_FreshWorkspace(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 	// Per ADR 0042: AGENTS.md (universal channel) + CLAUDE.md symlink
@@ -61,12 +61,12 @@ func TestScaffoldOrchestrator_FreshWorkspace(t *testing.T) {
 // content diff.
 func TestScaffoldOrchestrator_Idempotent_AGENTSandCLAUDE(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatal(err)
 	}
 	firstAgents, _ := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
 	firstClaude, _ := os.Readlink(filepath.Join(dir, "CLAUDE.md"))
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatal(err)
 	}
 	secondAgents, _ := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
@@ -96,7 +96,7 @@ func TestScaffoldOrchestrator_WipesLegacyBonesSkills(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 	for _, name := range legacyBonesSkills {
@@ -119,7 +119,7 @@ func TestScaffoldOrchestrator_PreservesUserAuthoredSkills(t *testing.T) {
 	if err := os.WriteFile(skillPath, []byte("mine\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(userSkill); err != nil {
@@ -139,7 +139,7 @@ func TestScaffoldOrchestrator_AppendsBlockToUserAuthoredAGENTS(t *testing.T) {
 	if err := os.WriteFile(agentsPath, []byte(usersAgents), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator on user-authored AGENTS.md: %v", err)
 	}
 	got, _ := os.ReadFile(agentsPath)
@@ -155,14 +155,14 @@ func TestScaffoldOrchestrator_AppendsBlockToUserAuthoredAGENTS(t *testing.T) {
 
 func TestScaffoldOrchestrator_Idempotent(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatal(err)
 	}
 	first, err := os.ReadFile(filepath.Join(dir, ".claude", "settings.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatal(err)
 	}
 	second, err := os.ReadFile(filepath.Join(dir, ".claude", "settings.json"))
@@ -189,7 +189,7 @@ func TestScaffoldOrchestrator_PreservesExistingHooks(t *testing.T) {
 	if err := os.WriteFile(settings, []byte(existing), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(settings)
@@ -246,7 +246,7 @@ func TestScaffoldOrchestrator_MigrateLegacyStopHook(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 
@@ -296,7 +296,7 @@ func TestScaffoldOrchestrator_PreservesUnrelatedStopHook(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 
@@ -362,7 +362,7 @@ func countHookCommand(settings map[string]any, event, cmd string) int {
 // "tasks-as-survivor" pressure that keeps planners filing atomic work.
 func TestScaffoldOrchestrator_SessionStartIncludesPrime(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 	cmds := hookCommandsFor(readSettings(t, dir), "SessionStart")
@@ -378,7 +378,7 @@ func TestScaffoldOrchestrator_SessionStartIncludesPrime(t *testing.T) {
 // alone leaves a multi-hour window where freeform context can win.
 func TestScaffoldOrchestrator_PreCompactIncludesPrime(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 	cmds := hookCommandsFor(readSettings(t, dir), "PreCompact")
@@ -396,7 +396,7 @@ func TestScaffoldOrchestrator_PreCompactIncludesPrime(t *testing.T) {
 func TestScaffoldOrchestrator_PrimeHookIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	for i := range 3 {
-		if err := scaffoldOrchestrator(dir); err != nil {
+		if _, err := scaffoldOrchestrator(dir); err != nil {
 			t.Fatalf("scaffold pass %d: %v", i+1, err)
 		}
 	}
@@ -472,7 +472,7 @@ func TestScaffoldOrchestrator_MigrateLegacySessionEndShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 
@@ -514,7 +514,7 @@ func TestScaffoldOrchestrator_PreservesUnrelatedSessionEndHook(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 
@@ -530,7 +530,7 @@ func TestScaffoldOrchestrator_PreservesUnrelatedSessionEndHook(t *testing.T) {
 // ADR 0023.
 func TestScaffoldOrchestrator_AgentsMDHasADR0023Completion(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 	agents, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
@@ -550,7 +550,7 @@ func TestScaffoldOrchestrator_AgentsMDHasADR0023Completion(t *testing.T) {
 // a value to compare against.
 func TestScaffoldOrchestrator_StampsScaffoldVersion(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 	stamp, err := os.ReadFile(filepath.Join(dir, ".bones", "scaffold_version"))
@@ -565,7 +565,7 @@ func TestScaffoldOrchestrator_StampsScaffoldVersion(t *testing.T) {
 
 func TestEnsureGitignoreEntries_FreshFile(t *testing.T) {
 	dir := t.TempDir()
-	if err := ensureGitignoreEntries(dir); err != nil {
+	if err := ensureGitignoreEntries(dir, nil); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
@@ -593,14 +593,14 @@ func TestEnsureGitignoreEntries_FreshFile(t *testing.T) {
 
 func TestEnsureGitignoreEntries_Idempotent(t *testing.T) {
 	dir := t.TempDir()
-	if err := ensureGitignoreEntries(dir); err != nil {
+	if err := ensureGitignoreEntries(dir, nil); err != nil {
 		t.Fatal(err)
 	}
 	first, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureGitignoreEntries(dir); err != nil {
+	if err := ensureGitignoreEntries(dir, nil); err != nil {
 		t.Fatal(err)
 	}
 	second, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
@@ -619,7 +619,7 @@ func TestEnsureGitignoreEntries_PreservesExisting(t *testing.T) {
 	if err := os.WriteFile(path, []byte(preexisting), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureGitignoreEntries(dir); err != nil {
+	if err := ensureGitignoreEntries(dir, nil); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -641,7 +641,7 @@ func TestEnsureGitignoreEntries_PartialOverlap(t *testing.T) {
 	if err := os.WriteFile(path, []byte(preexisting), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureGitignoreEntries(dir); err != nil {
+	if err := ensureGitignoreEntries(dir, nil); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -783,7 +783,7 @@ func TestScaffoldOrchestrator_MigratesLegacyBootstrap(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 
@@ -814,7 +814,7 @@ func TestLinkClaudeMD_AppendsBlockToUserAuthoredFile(t *testing.T) {
 	if err := os.WriteFile(claudePath, []byte(usersClaude), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := linkClaudeMD(dir); err != nil {
+	if err := linkClaudeMD(dir, nil); err != nil {
 		t.Fatalf("linkClaudeMD on user-authored CLAUDE.md: %v", err)
 	}
 	got, _ := os.ReadFile(claudePath)
@@ -842,11 +842,11 @@ func TestLinkClaudeMD_IdempotentUserAuthored(t *testing.T) {
 	if err := os.WriteFile(claudePath, []byte(usersClaude), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := linkClaudeMD(dir); err != nil {
+	if err := linkClaudeMD(dir, nil); err != nil {
 		t.Fatalf("first linkClaudeMD: %v", err)
 	}
 	first, _ := os.ReadFile(claudePath)
-	if err := linkClaudeMD(dir); err != nil {
+	if err := linkClaudeMD(dir, nil); err != nil {
 		t.Fatalf("second linkClaudeMD: %v", err)
 	}
 	second, _ := os.ReadFile(claudePath)
@@ -865,7 +865,7 @@ func TestLinkClaudeMD_PreservesUserEditsAboveBlock(t *testing.T) {
 	if err := os.WriteFile(claudePath, []byte("# Original\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := linkClaudeMD(dir); err != nil {
+	if err := linkClaudeMD(dir, nil); err != nil {
 		t.Fatalf("first linkClaudeMD: %v", err)
 	}
 	// User edits above the block — adds a new line of prose.
@@ -875,7 +875,7 @@ func TestLinkClaudeMD_PreservesUserEditsAboveBlock(t *testing.T) {
 	if err := os.WriteFile(claudePath, []byte(edited), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := linkClaudeMD(dir); err != nil {
+	if err := linkClaudeMD(dir, nil); err != nil {
 		t.Fatalf("second linkClaudeMD: %v", err)
 	}
 	got, _ := os.ReadFile(claudePath)
@@ -903,7 +903,7 @@ func TestLinkClaudeMD_RefusesUnrelatedSymlink(t *testing.T) {
 	if err := os.Symlink("elsewhere.md", claudePath); err != nil {
 		t.Fatal(err)
 	}
-	err := linkClaudeMD(dir)
+	err := linkClaudeMD(dir, nil)
 	if err == nil {
 		t.Fatal("expected error when CLAUDE.md is a symlink to a non-AGENTS.md target")
 	}
@@ -927,7 +927,7 @@ func TestLinkClaudeMD_AcceptsBonesOwnedFallback(t *testing.T) {
 	if err := os.WriteFile(claudePath, agentsMDTemplate, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := linkClaudeMD(dir); err != nil {
+	if err := linkClaudeMD(dir, nil); err != nil {
 		t.Errorf("linkClaudeMD on bones-owned fallback file: %v", err)
 	}
 }
@@ -943,7 +943,7 @@ func TestScaffoldOrchestrator_AppendsBlockToUserAuthoredCLAUDE(t *testing.T) {
 	if err := os.WriteFile(claudePath, []byte(usersClaude), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator on user-authored CLAUDE.md: %v", err)
 	}
 	got, _ := os.ReadFile(claudePath)
@@ -963,7 +963,7 @@ func TestScaffoldOrchestrator_AppendsBlockToUserAuthoredCLAUDE(t *testing.T) {
 // symlink to it, which silently delivers empty agent guidance.
 func TestScaffoldOrchestrator_AGENTSNonEmpty(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 	info, err := os.Stat(filepath.Join(dir, "AGENTS.md"))
