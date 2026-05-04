@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/tasks"
 )
@@ -37,7 +37,7 @@ type aggregateResult struct {
 	Slots       []aggregateSlot `json:"slots"`
 }
 
-func (c *TasksAggregateCmd) Run(g *libfossilcli.Globals) error {
+func (c *TasksAggregateCmd) Run(g *repocli.Globals) error {
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
 		return err

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/telemetry"
 )
@@ -30,7 +30,7 @@ type TelemetryStatusCmd struct{}
 
 // Run renders the status. Always exits 0 — even "off" is a valid
 // state to report.
-func (c *TelemetryStatusCmd) Run(g *libfossilcli.Globals) error {
+func (c *TelemetryStatusCmd) Run(g *repocli.Globals) error {
 	state := "off"
 	if telemetry.IsEnabled() {
 		state = "on"
@@ -60,7 +60,7 @@ type TelemetryDisableCmd struct{}
 // Run writes the marker file. Surfaces I/O errors directly with the
 // path so the operator can investigate (e.g. permission issues on
 // read-only home directories).
-func (c *TelemetryDisableCmd) Run(g *libfossilcli.Globals) error {
+func (c *TelemetryDisableCmd) Run(g *repocli.Globals) error {
 	if err := telemetry.Disable(); err != nil {
 		return err
 	}
@@ -78,7 +78,7 @@ type TelemetryEnableCmd struct{}
 // Run removes the marker. The follow-up resolution outcome depends
 // on the build flavor and env vars; the printed hint points the
 // operator at `bones telemetry status` rather than guessing.
-func (c *TelemetryEnableCmd) Run(g *libfossilcli.Globals) error {
+func (c *TelemetryEnableCmd) Run(g *repocli.Globals) error {
 	if err := telemetry.Enable(); err != nil {
 		return err
 	}

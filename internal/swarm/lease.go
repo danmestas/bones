@@ -11,7 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/danmestas/libfossil"
+	edgehub "github.com/danmestas/EdgeSync/hub"
+	"github.com/danmestas/EdgeSync/leaf/agent"
 	"github.com/nats-io/nats.go"
 
 	"github.com/danmestas/bones/internal/assert"
@@ -164,7 +165,7 @@ type AcquireOpts struct {
 // errors but should not roll back the local commit.
 type CommitResult struct {
 	UUID       string
-	PushResult *libfossil.SyncResult
+	PushResult *agent.SyncResult
 	PushErr    error
 	RenewErr   error
 }
@@ -542,10 +543,9 @@ func (l *FreshLease) Abort(ctx context.Context) error {
 // Resume and now.
 //
 // After Commit returns, the lease's underlying coord.Leaf has been
-// stopped — the push path needs an exclusive libfossil.Repo handle
-// on leaf.fossil. The lease can still be Released or Closed; doing
-// other verb work on the lease's leaf after Commit is undefined and
-// would have to re-Resume.
+// stopped. The lease can still be Released or Closed; doing other
+// verb work on the lease's leaf after Commit is undefined and would
+// have to re-Resume.
 func (l *ResumedLease) Commit(
 	ctx context.Context, message string, files []coord.File,
 ) (CommitResult, error) {
@@ -558,13 +558,17 @@ func (l *ResumedLease) Commit(
 	if err != nil {
 		return CommitResult{}, err
 	}
-	// Stop the leaf BEFORE pushing so the agent's libfossil.Repo
-	// handle is closed; pushLeafFossil opens its own handle on
-	// leaf.fossil cleanly.
+	// Push BEFORE stopping the leaf — Leaf.Push routes through the
+	// agent's SyncTo API, which requires the agent to be running.
+	// The pre-libfossil-exit flow stopped the leaf first to give a
+	// libfossil-direct push path exclusive repo access; with the
+	// agent owning the repo handle there's no exclusivity concern.
+	// projectCode left empty — agent.SyncTo auto-derives from the
+	// leaf's repo config, which was set at OpenLeaf clone time.
+	pushRes, pushErr := l.leaf.Push(ctx, l.hubURL, l.fossilUser, "")
 	_ = l.leaf.Stop()
 	l.leaf = nil
 
-	pushRes, pushErr := pushLeafFossil(ctx, l.info.WorkspaceDir, l.slot, l.fossilUser, l.hubURL)
 	renewErr := l.bumpLastRenewed(ctx)
 
 	appendEvent(l.info.WorkspaceDir, Event{
@@ -928,49 +932,6 @@ func commitViaLeaf(
 	return uuid, nil
 }
 
-// pushLeafFossil HTTP-pushes the slot's leaf.fossil to the hub via
-// libfossil's /xfer transport. The two NATS deployments are separate
-// by design (hub NATS vs. workspace leaf NATS), so the post-commit
-// announce doesn't reach the hub's /xfer subscriber — the explicit
-// HTTP push here is what makes the commit visible to `bones peek`
-// and the hub timeline.
-//
-// Soft-fail-friendly: returns SyncResult and error separately so the
-// caller can warn on push failure without rolling back the local
-// commit.
-//
-// This site uses libfossil directly because ResumedLease.Commit stops
-// the leaf agent BEFORE calling pushLeafFossil — the EdgeSync
-// agent.SyncTo API requires a running agent. Migrating to agent.SyncTo
-// would require a swarm-flow change (push-before-stop), which is out
-// of scope for the rest of the libfossil-exit and stays on the
-// libfossil-direct path.
-func pushLeafFossil(
-	ctx context.Context, workspaceDir, slot, fossilUser, hubURL string,
-) (*libfossil.SyncResult, error) {
-	leafRepoPath := filepath.Join(SlotDir(workspaceDir, slot), "leaf.fossil")
-	leafRepo, err := libfossil.Open(leafRepoPath)
-	if err != nil {
-		return nil, fmt.Errorf("swarm: open leaf repo for push: %w", err)
-	}
-	defer func() { _ = leafRepo.Close() }()
-	projectCode, err := leafRepo.Config("project-code")
-	if err != nil {
-		return nil, fmt.Errorf("swarm: read project-code: %w", err)
-	}
-	transport := libfossil.NewHTTPTransport(hubURL)
-	res, err := leafRepo.Sync(ctx, transport, libfossil.SyncOpts{
-		Push:        true,
-		Pull:        false,
-		User:        fossilUser,
-		ProjectCode: projectCode,
-	})
-	if err != nil {
-		return res, fmt.Errorf("swarm: sync push: %w", err)
-	}
-	return res, nil
-}
-
 // ensureSlotUser creates the slot's fossil user on the hub repo if
 // missing. The role-guard for "workspace not bootstrapped" lives
 // here: if `<workspace>/.bones/hub.fossil` is absent, returns
@@ -985,16 +946,16 @@ func ensureSlotUser(workspaceDir, login, caps string) error {
 		}
 		return fmt.Errorf("swarm: stat hub repo: %w", err)
 	}
-	repo, err := libfossil.Open(hubRepoPath)
+	repo, err := edgehub.OpenRepo(hubRepoPath)
 	if err != nil {
 		return fmt.Errorf("swarm: open hub repo: %w", err)
 	}
 	defer func() { _ = repo.Close() }()
 
-	if _, err := repo.GetUser(login); err == nil {
+	if repo.HasUser(login) {
 		return nil
 	}
-	if err := repo.CreateUser(libfossil.UserOpts{
+	if err := repo.AddUser(edgehub.User{
 		Login: login,
 		Caps:  caps,
 	}); err != nil {

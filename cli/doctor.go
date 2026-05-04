@@ -12,7 +12,7 @@ import (
 	"time"
 
 	edgecli "github.com/danmestas/EdgeSync/cli"
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/githook"
 	"github.com/danmestas/bones/internal/registry"
@@ -46,7 +46,7 @@ type DoctorCmd struct {
 // Run invokes the EdgeSync doctor first; on completion (regardless
 // of pass/warn/fail) it appends a "swarm sessions" section that
 // iterates bones-swarm-sessions and reports each entry's state.
-func (c *DoctorCmd) Run(g *libfossilcli.Globals) (err error) {
+func (c *DoctorCmd) Run(g *repocli.Globals) (err error) {
 	if c.All {
 		return c.runAll(g)
 	}
@@ -79,7 +79,7 @@ func (c *DoctorCmd) Run(g *libfossilcli.Globals) (err error) {
 }
 
 // runAll dispatches the cross-workspace --all rendering path.
-func (c *DoctorCmd) runAll(_ *libfossilcli.Globals) error {
+func (c *DoctorCmd) runAll(_ *repocli.Globals) error {
 	var exitCode int
 	if c.JSON {
 		exitCode = renderDoctorAllJSON(os.Stdout)

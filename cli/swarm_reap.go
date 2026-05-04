@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/coord"
 	"github.com/danmestas/bones/internal/dispatch"
@@ -42,7 +42,7 @@ type SwarmReapCmd struct {
 // Run executes the reap. Workspace + sessions are opened once; per-
 // stale-session closes run sequentially (small N expected; concurrent
 // closes would race the same hub fossil).
-func (c *SwarmReapCmd) Run(g *libfossilcli.Globals) error {
+func (c *SwarmReapCmd) Run(g *repocli.Globals) error {
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
 		return err

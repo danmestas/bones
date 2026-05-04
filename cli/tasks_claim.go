@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/tasks"
 )
@@ -29,7 +29,7 @@ func (e *errClaimConflict) Error() string {
 }
 func (e *errClaimConflict) Unwrap() error { return tasks.ErrInvalidTransition }
 
-func (c *TasksClaimCmd) Run(g *libfossilcli.Globals) error {
+func (c *TasksClaimCmd) Run(g *repocli.Globals) error {
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
 		return err

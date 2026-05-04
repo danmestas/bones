@@ -14,7 +14,7 @@ import (
 
 	"github.com/mattn/go-isatty"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/logwriter"
 	"github.com/danmestas/bones/internal/workspace"
@@ -35,7 +35,7 @@ type LogsCmd struct {
 }
 
 // Run is the Kong entry point for `bones logs`.
-func (c *LogsCmd) Run(g *libfossilcli.Globals) error {
+func (c *LogsCmd) Run(g *repocli.Globals) error {
 	// Validate: exactly one of --slot or --workspace.
 	if c.Slot == "" && !c.Workspace {
 		return fmt.Errorf("bones logs: specify --slot=<name> or --workspace")

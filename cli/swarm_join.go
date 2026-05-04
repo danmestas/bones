@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/logwriter"
 	"github.com/danmestas/bones/internal/swarm"
@@ -40,7 +40,7 @@ type SwarmJoinCmd struct {
 // check, ensures the slot user, CAS-writes the session record, opens
 // the leaf, claims the task, writes the pid file), emit the report,
 // FreshLease.Release.
-func (c *SwarmJoinCmd) Run(g *libfossilcli.Globals) error {
+func (c *SwarmJoinCmd) Run(g *repocli.Globals) error {
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
 		return err

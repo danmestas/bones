@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/workspace"
@@ -38,7 +38,7 @@ type SwarmFanInCmd struct {
 	DryRun  bool   `name:"dry-run" help:"show what would be merged without committing"`
 }
 
-func (c *SwarmFanInCmd) Run(g *libfossilcli.Globals) error {
+func (c *SwarmFanInCmd) Run(g *repocli.Globals) error {
 	hubRepo, fossilBin, err := c.resolvePrereqs()
 	if err != nil {
 		return err

@@ -13,7 +13,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/registry"
@@ -85,7 +85,7 @@ type activityEvent struct {
 	Comment string // commit comment (actCommit only)
 }
 
-func (c *StatusCmd) Run(g *libfossilcli.Globals) error {
+func (c *StatusCmd) Run(g *repocli.Globals) error {
 	if c.All {
 		if c.JSON {
 			return renderStatusAllJSON(os.Stdout)

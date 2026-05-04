@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"time"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/coord"
 	"github.com/danmestas/bones/internal/dispatch"
@@ -27,7 +27,7 @@ type TasksDispatchParentCmd struct {
 	WorkerClaimHandoff bool   `name:"worker-claim-handoff" help:"worker takes claim ownership"`
 }
 
-func (c *TasksDispatchParentCmd) Run(g *libfossilcli.Globals) error {
+func (c *TasksDispatchParentCmd) Run(g *repocli.Globals) error {
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
 		return err
@@ -125,7 +125,7 @@ type TasksDispatchWorkerCmd struct {
 	Rev              string        `name:"rev" help:"fork rev"`
 }
 
-func (c *TasksDispatchWorkerCmd) Run(g *libfossilcli.Globals) error {
+func (c *TasksDispatchWorkerCmd) Run(g *repocli.Globals) error {
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
 		return err

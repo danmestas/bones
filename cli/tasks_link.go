@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/coord"
 )
@@ -19,7 +19,7 @@ type TasksLinkCmd struct {
 	JSON bool   `name:"json" help:"emit JSON"`
 }
 
-func (c *TasksLinkCmd) Run(g *libfossilcli.Globals) error {
+func (c *TasksLinkCmd) Run(g *repocli.Globals) error {
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
 		return err

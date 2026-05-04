@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/coord"
 )
@@ -17,7 +17,7 @@ type TasksPrimeCmd struct {
 	JSON bool `name:"json" help:"emit JSON"`
 }
 
-func (c *TasksPrimeCmd) Run(g *libfossilcli.Globals) error {
+func (c *TasksPrimeCmd) Run(g *repocli.Globals) error {
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
 		return err

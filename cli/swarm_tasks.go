@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/coord"
 	"github.com/danmestas/bones/internal/tasks"
@@ -31,7 +31,7 @@ type SwarmTasksCmd struct {
 	JSON bool   `name:"json" help:"emit JSON"`
 }
 
-func (c *SwarmTasksCmd) Run(g *libfossilcli.Globals) error {
+func (c *SwarmTasksCmd) Run(g *repocli.Globals) error {
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
 		return err

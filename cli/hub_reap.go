@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/registry"
 )
@@ -28,7 +28,7 @@ type HubReapCmd struct {
 	DryRun bool `name:"dry-run" help:"print orphans without acting"`
 }
 
-func (c *HubReapCmd) Run(g *libfossilcli.Globals) error {
+func (c *HubReapCmd) Run(g *repocli.Globals) error {
 	return runHubReap(c, os.Stdin, os.Stdout)
 }
 

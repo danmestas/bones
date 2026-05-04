@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 )
 
 // TasksShowCmd prints a single task.
@@ -14,7 +14,7 @@ type TasksShowCmd struct {
 	JSON bool   `name:"json" help:"emit JSON"`
 }
 
-func (c *TasksShowCmd) Run(g *libfossilcli.Globals) error {
+func (c *TasksShowCmd) Run(g *repocli.Globals) error {
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
 		return err

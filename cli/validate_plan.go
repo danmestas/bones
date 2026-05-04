@@ -14,7 +14,7 @@ import (
 	"regexp"
 	"strings"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 )
 
 // ValidatePlanCmd parses a Markdown plan, extracts [slot: name]
@@ -57,7 +57,7 @@ type ValidateResult struct {
 	Slots  []slotEntry `json:"slots"`
 }
 
-func (c *ValidatePlanCmd) Run(g *libfossilcli.Globals) error {
+func (c *ValidatePlanCmd) Run(g *repocli.Globals) error {
 	if c.ListSlots {
 		fmt.Fprintln(os.Stderr,
 			"validate-plan: --list-slots is a no-op; JSON is now always emitted on stdout")

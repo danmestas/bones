@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/coord"
 )
@@ -63,7 +63,7 @@ type autoclaimOpts struct {
 	AgentID  string
 }
 
-func (c *TasksAutoclaimCmd) Run(g *libfossilcli.Globals) error {
+func (c *TasksAutoclaimCmd) Run(g *repocli.Globals) error {
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
 		return err
