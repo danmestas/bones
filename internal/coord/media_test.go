@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/EdgeSync/leaf/agent/notify"
+	"github.com/danmestas/bones/internal/chat"
 )
 
 // TestLeaf_PostMedia_HappyPath posts an opaque media blob through
@@ -66,24 +66,24 @@ func TestLeaf_PostMedia_HappyPath(t *testing.T) {
 	}
 }
 
-func TestMediaFromMessage_MalformedFallsThrough(t *testing.T) {
-	msg := notify.Message{
+func TestMediaFromEnvelope_MalformedFallsThrough(t *testing.T) {
+	env := chat.Envelope{
 		ID:        "msg-test-malformed-media-0001",
-		Thread:    "thread-test-uuid-0001",
+		Thread:    "abc12345",
 		From:      "agent-A",
 		Body:      "MEDIA:not-json",
 		Timestamp: time.Now().UTC(),
 	}
-	if _, ok := mediaFromMessage(msg); ok {
-		t.Fatalf("mediaFromMessage: got ok=true for malformed body")
+	if _, ok := mediaFromEnvelope(env); ok {
+		t.Fatalf("mediaFromEnvelope: got ok=true for malformed body")
 	}
-	evt := eventFromMessage(msg)
+	evt := eventFromEnvelope(env)
 	cm, isChat := evt.(ChatMessage)
 	if !isChat {
-		t.Fatalf("eventFromMessage: got %T, want ChatMessage", evt)
+		t.Fatalf("eventFromEnvelope: got %T, want ChatMessage", evt)
 	}
-	if cm.Body() != msg.Body {
-		t.Fatalf("ChatMessage.Body=%q, want %q", cm.Body(), msg.Body)
+	if cm.Body() != env.Body {
+		t.Fatalf("ChatMessage.Body=%q, want %q", cm.Body(), env.Body)
 	}
 }
 

@@ -23,10 +23,9 @@ func newAutoclaimCoord(t *testing.T, agentID string) *coord.Coord {
 func newAutoclaimCoordOnURL(t *testing.T, url, agentID string) *coord.Coord {
 	t.Helper()
 	cfg := coord.Config{
-		AgentID:            agentID,
-		NATSURL:            url,
-		ChatFossilRepoPath: filepath.Join(t.TempDir(), agentID+"-chat.fossil"),
-		CheckoutRoot:       filepath.Join(t.TempDir(), agentID+"-checkouts"),
+		AgentID:      agentID,
+		NATSURL:      url,
+		CheckoutRoot: filepath.Join(t.TempDir(), agentID+"-checkouts"),
 	}
 	c, err := coord.Open(context.Background(), cfg)
 	if err != nil {

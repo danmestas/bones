@@ -11,10 +11,9 @@ import (
 // so mutation tests can zero individual fields below the default.
 func baselineConfig() Config {
 	return Config{
-		AgentID:            "test-agent",
-		NATSURL:            "nats://127.0.0.1:4222",
-		ChatFossilRepoPath: "/tmp/coord-baseline-chat.fossil",
-		CheckoutRoot:       "/tmp/coord-baseline-checkouts",
+		AgentID:      "test-agent",
+		NATSURL:      "nats://127.0.0.1:4222",
+		CheckoutRoot: "/tmp/coord-baseline-checkouts",
 		Tuning: TuningConfig{
 			HoldTTLDefault:    30 * time.Second,
 			HoldTTLMax:        5 * time.Minute,
@@ -136,11 +135,6 @@ func TestConfigValidate_Invalid(t *testing.T) {
 			name:    "empty NATSURL",
 			mutate:  func(c *Config) { c.NATSURL = "" },
 			wantKey: "NATSURL",
-		},
-		{
-			name:    "empty ChatFossilRepoPath",
-			mutate:  func(c *Config) { c.ChatFossilRepoPath = "" },
-			wantKey: "ChatFossilRepoPath",
 		},
 		{
 			name:    "empty CheckoutRoot",

@@ -3,8 +3,6 @@ package coord
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -20,15 +18,14 @@ var nilCtx context.Context
 // Fields mirror baselineConfig in config_test.go; kept separate so the
 // two test files remain readable in isolation. The NATSURL here is a
 // loopback stub — tests that reach the NATS dial use validConfigWithURL
-// instead. ChatFossilRepoPath is bound to t.TempDir() so every test
-// gets a fresh Fossil repo without touching shared filesystem state.
+// instead. Per ADR 0047 chat lives on a JetStream stream — no per-test
+// chat.fossil path needed.
 func validConfig(t *testing.T) Config {
 	t.Helper()
 	return Config{
-		AgentID:            "test-agent",
-		NATSURL:            "nats://127.0.0.1:0",
-		ChatFossilRepoPath: filepath.Join(t.TempDir(), "chat.fossil"),
-		CheckoutRoot:       t.TempDir(),
+		AgentID:      "test-agent",
+		NATSURL:      "nats://127.0.0.1:0",
+		CheckoutRoot: t.TempDir(),
 		Tuning: TuningConfig{
 			HoldTTLDefault:    30 * time.Second,
 			HoldTTLMax:        5 * time.Minute,
@@ -66,9 +63,6 @@ func newCoordWithMaxSubs(
 	cfg := validConfigWithURL(t, url)
 	cfg.AgentID = agentID
 	cfg.Tuning.MaxSubscribers = maxSubs
-	cfg.ChatFossilRepoPath = filepath.Join(
-		t.TempDir(), agentID+"-chat.fossil",
-	)
 	c, err := Open(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("Open(%s): %v", agentID, err)
@@ -246,102 +240,10 @@ func TestAsk_InvariantPanics(t *testing.T) {
 	})
 }
 
-// TestOpen_AutoCreatesChatFossilParentDir covers issue #167: callers
-// pass a ChatFossilRepoPath whose parent directory may not yet exist
-// (e.g., `<workspace>/.bones/chat.fossil` on a fresh init). Open is
-// responsible for ensuring the parent dir exists so the underlying
-// libfossil.Create can land the file.
-func TestOpen_AutoCreatesChatFossilParentDir(t *testing.T) {
-	nc, _ := natstest.NewJetStreamServer(t)
-	cfg := validConfigWithURL(t, nc.ConnectedUrl())
-
-	// Point ChatFossilRepoPath at a path whose parent does NOT exist
-	// yet — the typical "fresh workspace" shape with `.bones/`
-	// half-initialized.
-	parent := filepath.Join(t.TempDir(), "missing-parent")
-	cfg.ChatFossilRepoPath = filepath.Join(parent, "chat.fossil")
-
-	c, err := Open(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("Open: unexpected error: %v", err)
-	}
-	t.Cleanup(func() { _ = c.Close() })
-
-	if _, err := os.Stat(cfg.ChatFossilRepoPath); err != nil {
-		t.Fatalf("chat.fossil not created at %q: %v", cfg.ChatFossilRepoPath, err)
-	}
-}
-
-// TestOpen_RecreatesMissingChatFossil covers issue #167: an operator
-// who has deleted `<workspace>/.bones/chat.fossil` should not see a
-// permanent breakage. Re-opening the same config must idempotently
-// re-init the fossil DB.
-func TestOpen_RecreatesMissingChatFossil(t *testing.T) {
-	nc, _ := natstest.NewJetStreamServer(t)
-	cfg := validConfigWithURL(t, nc.ConnectedUrl())
-
-	// First Open creates the file.
-	c1, err := Open(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("first Open: %v", err)
-	}
-	if err := c1.Close(); err != nil {
-		t.Fatalf("first Close: %v", err)
-	}
-	if _, err := os.Stat(cfg.ChatFossilRepoPath); err != nil {
-		t.Fatalf("chat.fossil missing after first Open: %v", err)
-	}
-
-	// Operator deletes chat.fossil.
-	if err := os.Remove(cfg.ChatFossilRepoPath); err != nil {
-		t.Fatalf("rm chat.fossil: %v", err)
-	}
-
-	// Second Open should idempotently recreate it.
-	c2, err := Open(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("second Open after rm chat.fossil: %v", err)
-	}
-	t.Cleanup(func() { _ = c2.Close() })
-
-	if _, err := os.Stat(cfg.ChatFossilRepoPath); err != nil {
-		t.Fatalf("chat.fossil not recreated after second Open: %v", err)
-	}
-}
-
-// TestOpen_ChatFossilUnreadableErrorIncludesPath covers issue #167's
-// "better error message" requirement. When the chat.fossil path is
-// genuinely unrecoverable (here: the path points at a directory rather
-// than a fossil file), the returned error must name the path and hint
-// at remediation.
-func TestOpen_ChatFossilUnreadableErrorIncludesPath(t *testing.T) {
-	nc, _ := natstest.NewJetStreamServer(t)
-	cfg := validConfigWithURL(t, nc.ConnectedUrl())
-
-	// Force an unrecoverable shape: ChatFossilRepoPath points at a
-	// directory. libfossil.Open will fail and the wrap should mention
-	// both the path and the remediation hint.
-	dirPath := filepath.Join(t.TempDir(), "chat.fossil")
-	if err := os.MkdirAll(dirPath, 0o755); err != nil {
-		t.Fatalf("mkdir bogus chat.fossil dir: %v", err)
-	}
-	cfg.ChatFossilRepoPath = dirPath
-
-	_, err := Open(context.Background(), cfg)
-	if err == nil {
-		t.Fatalf("Open: expected error when chat.fossil path is a directory")
-	}
-	msg := err.Error()
-	if !strings.Contains(msg, dirPath) {
-		t.Errorf("error must name path %q; got %v", dirPath, err)
-	}
-	if !strings.Contains(msg, "missing or unreadable") {
-		t.Errorf("error must say 'missing or unreadable'; got %v", err)
-	}
-	if !strings.Contains(msg, "bones up") {
-		t.Errorf("error must hint at 'bones up'; got %v", err)
-	}
-	if !strings.Contains(msg, "bones doctor") {
-		t.Errorf("error must hint at 'bones doctor'; got %v", err)
-	}
-}
+// Note: TestOpen_AutoCreatesChatFossilParentDir,
+// TestOpen_RecreatesMissingChatFossil, and
+// TestOpen_ChatFossilUnreadableErrorIncludesPath were removed when ADR
+// 0047 moved chat onto a JetStream stream. Those tests targeted the
+// chat.fossil filesystem behavior; no equivalent failure mode exists
+// on the JS substrate (stream creation succeeds idempotently and
+// failures surface through the JetStream error path).

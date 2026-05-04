@@ -19,11 +19,24 @@ func newCoordOnURLWithHeartbeat(
 ) *coord.Coord {
 	t.Helper()
 	fileID := strings.ReplaceAll(agentID, "/", "_")
+	// Dispatch worker AgentIDs are compound (parent + "/" + taskID); the
+	// production dispatch path pins ProjectPrefix to the workspace
+	// identity BEFORE substituting the worker AgentID so all dispatch
+	// participants meet on the same NATS subject namespace AND the JS
+	// chat stream name stays valid (per ADR 0047 stream names cannot
+	// contain `/`). Mirror that production contract here.
+	projectPrefix := coord.DeriveProjectPrefix(agentID)
+	if strings.Contains(agentID, "/") {
+		// Compound worker ID: derive from the part before the slash.
+		projectPrefix = coord.DeriveProjectPrefix(
+			strings.SplitN(agentID, "/", 2)[0],
+		)
+	}
 	cfg := coord.Config{
-		AgentID:            agentID,
-		NATSURL:            url,
-		ChatFossilRepoPath: filepath.Join(t.TempDir(), fileID+"-chat.fossil"),
-		CheckoutRoot:       filepath.Join(t.TempDir(), fileID+"-checkouts"),
+		AgentID:       agentID,
+		NATSURL:       url,
+		CheckoutRoot:  filepath.Join(t.TempDir(), fileID+"-checkouts"),
+		ProjectPrefix: projectPrefix,
 		Tuning: coord.TuningConfig{
 			HeartbeatInterval: hb,
 		},

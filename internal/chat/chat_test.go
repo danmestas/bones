@@ -3,7 +3,6 @@ package chat_test
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,17 +11,17 @@ import (
 	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
-// validConfig returns a fully-valid chat.Config bound to the given
-// NATS URL and a fresh repo path under t.TempDir. Tests mutate the
-// returned value to exercise specific Validate branches.
+// validConfig returns a fully-valid chat.Config. The Nats handle must
+// be filled in by the caller from a JetStream-enabled test server —
+// chat.Open creates a JS stream per ADR 0047.
 func validConfig(t *testing.T) chat.Config {
 	t.Helper()
 	return chat.Config{
 		AgentID:        "bones-testabcd",
 		ProjectPrefix:  "bones",
 		Nats:           nil, // filled in by caller
-		FossilRepoPath: filepath.Join(t.TempDir(), "chat.fossil"),
 		MaxSubscribers: 32,
+		// MaxRetentionAge: 0 = unbounded, the production default.
 	}
 }
 
@@ -43,7 +42,7 @@ func requirePanic(t *testing.T, fn func(), want string) {
 }
 
 func TestOpen_Valid(t *testing.T) {
-	nc, _ := natstest.NewTestServer(t)
+	nc, _ := natstest.NewJetStreamServer(t)
 	cfg := validConfig(t)
 	cfg.Nats = nc
 
@@ -60,7 +59,7 @@ func TestOpen_Valid(t *testing.T) {
 }
 
 func TestOpen_InvalidConfig(t *testing.T) {
-	nc, _ := natstest.NewTestServer(t)
+	nc, _ := natstest.NewJetStreamServer(t)
 	cases := []struct {
 		name    string
 		mutate  func(*chat.Config)
@@ -80,11 +79,6 @@ func TestOpen_InvalidConfig(t *testing.T) {
 			name:    "nil Nats",
 			mutate:  func(c *chat.Config) { c.Nats = nil },
 			wantKey: "Nats",
-		},
-		{
-			name:    "empty FossilRepoPath",
-			mutate:  func(c *chat.Config) { c.FossilRepoPath = "" },
-			wantKey: "FossilRepoPath",
 		},
 		{
 			name:    "zero MaxSubscribers",
@@ -123,7 +117,7 @@ func TestOpen_InvalidConfig(t *testing.T) {
 }
 
 func TestOpen_NilCtxPanics(t *testing.T) {
-	nc, _ := natstest.NewTestServer(t)
+	nc, _ := natstest.NewJetStreamServer(t)
 	cfg := validConfig(t)
 	cfg.Nats = nc
 	var nilCtx context.Context
@@ -134,7 +128,7 @@ func TestOpen_NilCtxPanics(t *testing.T) {
 }
 
 func TestClose_Idempotent(t *testing.T) {
-	nc, _ := natstest.NewTestServer(t)
+	nc, _ := natstest.NewJetStreamServer(t)
 	cfg := validConfig(t)
 	cfg.Nats = nc
 
@@ -164,7 +158,7 @@ const deterministicTestTimeout = 2 * time.Second
 // bones-x0t: cross-Manager identity falls out of the
 // deterministic hash with no coordination substrate.
 func TestSend_DeterministicThreadAcrossManagers(t *testing.T) {
-	nc, _ := natstest.NewTestServer(t)
+	nc, _ := natstest.NewJetStreamServer(t)
 
 	cfgA := validConfig(t)
 	cfgA.AgentID = "bones-aaaa"
@@ -207,7 +201,7 @@ func TestSend_DeterministicThreadAcrossManagers(t *testing.T) {
 		// cross-restart test. Here we just pin that the hash is
 		// self-consistent: it's the same across two posts from the
 		// same Manager, proving the Send path truly is deterministic.
-		firstShort := msg.ThreadShort()
+		firstShort := msg.Thread
 		if err := mB.Send(
 			context.Background(), "t1", "second",
 		); err != nil {
@@ -218,10 +212,10 @@ func TestSend_DeterministicThreadAcrossManagers(t *testing.T) {
 			if !ok {
 				t.Fatalf("stream: closed before second delivery")
 			}
-			if msg2.ThreadShort() != firstShort {
+			if msg2.Thread != firstShort {
 				t.Fatalf(
 					"ThreadShort drift: first=%q second=%q",
-					firstShort, msg2.ThreadShort(),
+					firstShort, msg2.Thread,
 				)
 			}
 		case <-time.After(deterministicTestTimeout):
@@ -246,7 +240,7 @@ func TestSend_DeterministicThreadAcrossManagers(t *testing.T) {
 // ThreadShort. Without the deterministic hash the pre-x0t cache would
 // have regenerated a fresh Thread UUID, breaking this property.
 func TestSend_DeterministicAcrossRestart(t *testing.T) {
-	nc, _ := natstest.NewTestServer(t)
+	nc, _ := natstest.NewJetStreamServer(t)
 
 	cfgA := validConfig(t)
 	cfgA.AgentID = "bones-aaaa"
@@ -282,7 +276,7 @@ func TestSend_DeterministicAcrossRestart(t *testing.T) {
 		if !ok {
 			t.Fatalf("stream: closed before first delivery")
 		}
-		firstShort = msg.ThreadShort()
+		firstShort = msg.Thread
 	case <-time.After(deterministicTestTimeout):
 		t.Fatalf("no first delivery within %s", deterministicTestTimeout)
 	}
@@ -312,10 +306,10 @@ func TestSend_DeterministicAcrossRestart(t *testing.T) {
 		if !ok {
 			t.Fatalf("stream: closed before second delivery")
 		}
-		if msg.ThreadShort() != firstShort {
+		if msg.Thread != firstShort {
 			t.Fatalf(
 				"ThreadShort drifted across restart: first=%q second=%q",
-				firstShort, msg.ThreadShort(),
+				firstShort, msg.Thread,
 			)
 		}
 	case <-time.After(deterministicTestTimeout):
@@ -338,14 +332,13 @@ const reqRespTimeout = 2 * time.Second
 // coord wrapper. Also covers threadShort — the helper is unreachable
 // via WatchAll.
 func TestWatch_NamedDelivery(t *testing.T) {
-	nc, _ := natstest.NewTestServer(t)
+	nc, _ := natstest.NewJetStreamServer(t)
 
 	cfgA := validConfig(t)
 	cfgA.AgentID = "bones-aaaa"
 	cfgA.Nats = nc
 	cfgB := validConfig(t)
 	cfgB.AgentID = "bones-bbbb"
-	cfgB.FossilRepoPath = filepath.Join(t.TempDir(), "b.fossil")
 	cfgB.Nats = nc
 
 	mA, err := chat.Open(context.Background(), cfgA)
@@ -387,7 +380,7 @@ func TestWatch_NamedDelivery(t *testing.T) {
 // already-closed channel rather than panicking. Deferred consumer
 // drains stay quiet when chat is torn down during shutdown.
 func TestWatch_UseAfterClose(t *testing.T) {
-	nc, _ := natstest.NewTestServer(t)
+	nc, _ := natstest.NewJetStreamServer(t)
 	cfg := validConfig(t)
 	cfg.Nats = nc
 
@@ -418,14 +411,13 @@ func TestWatch_UseAfterClose(t *testing.T) {
 // ThreadShort untouched — no hash round-trip — so delivery lands on
 // the raw <proj>.* subject.
 func TestWatchPattern_WildcardDelivery(t *testing.T) {
-	nc, _ := natstest.NewTestServer(t)
+	nc, _ := natstest.NewJetStreamServer(t)
 
 	cfgA := validConfig(t)
 	cfgA.AgentID = "bones-aaaa"
 	cfgA.Nats = nc
 	cfgB := validConfig(t)
 	cfgB.AgentID = "bones-bbbb"
-	cfgB.FossilRepoPath = filepath.Join(t.TempDir(), "b.fossil")
 	cfgB.Nats = nc
 
 	mA, err := chat.Open(context.Background(), cfgA)
@@ -466,7 +458,7 @@ func TestWatchPattern_WildcardDelivery(t *testing.T) {
 // accepts empty by definition). Empty-pattern callers at the chat
 // layer should use WatchAll; the panic documents that contract.
 func TestWatchPattern_InvariantPanics(t *testing.T) {
-	nc, _ := natstest.NewTestServer(t)
+	nc, _ := natstest.NewJetStreamServer(t)
 	cfg := validConfig(t)
 	cfg.Nats = nc
 	m, err := chat.Open(context.Background(), cfg)
@@ -495,7 +487,7 @@ func TestWatchPattern_InvariantPanics(t *testing.T) {
 // Single Manager on purpose — the surface is subject-string in,
 // payload-bytes out, and spans no project/thread state.
 func TestRequest_RespondRoundTrip(t *testing.T) {
-	nc, _ := natstest.NewTestServer(t)
+	nc, _ := natstest.NewJetStreamServer(t)
 	cfg := validConfig(t)
 	cfg.Nats = nc
 
@@ -537,7 +529,7 @@ func TestRequest_RespondRoundTrip(t *testing.T) {
 // distinguish via errors.Is; this test only pins that some error
 // surfaces with the wrap prefix.
 func TestRequest_NoResponder(t *testing.T) {
-	nc, _ := natstest.NewTestServer(t)
+	nc, _ := natstest.NewJetStreamServer(t)
 	cfg := validConfig(t)
 	cfg.Nats = nc
 
@@ -567,7 +559,7 @@ func TestRequest_NoResponder(t *testing.T) {
 // without worrying about a double-close panic from an explicit
 // earlier call.
 func TestRespond_UnsubscribeIdempotent(t *testing.T) {
-	nc, _ := natstest.NewTestServer(t)
+	nc, _ := natstest.NewJetStreamServer(t)
 	cfg := validConfig(t)
 	cfg.Nats = nc
 
@@ -598,7 +590,7 @@ func TestRespond_UnsubscribeIdempotent(t *testing.T) {
 // serialized error. That is the documented behavior — callers that
 // need richer error semantics layer them in the payload shape.
 func TestRespond_HandlerError(t *testing.T) {
-	nc, _ := natstest.NewTestServer(t)
+	nc, _ := natstest.NewJetStreamServer(t)
 	cfg := validConfig(t)
 	cfg.Nats = nc
 

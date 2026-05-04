@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -188,39 +186,27 @@ func openSubstrate(
 	return s, nil
 }
 
-// openChat opens the chat manager for cfg, ensuring the
-// ChatFossilRepoPath parent directory exists first (so a freshly-init
-// workspace doesn't fail on a missing `.bones/`) and re-wrapping the
-// failure with a friendly, path-naming, remediation-hinting message
-// so operators who deleted chat.fossil aren't told "no bones workspace
-// found". Issues #167, #168.
+// openChat opens the chat manager for cfg. Per ADR 0047 chat lives on
+// a JetStream stream owned by internal/chat — no fossil sidecar, no
+// per-Coord disk file. The ProjectPrefix supplies the stream name and
+// subject namespace; retention defaults to unbounded so coord.Prime
+// preserves agent context across long absences (ADR 0036).
 func openChat(
 	ctx context.Context, cfg Config, nc *nats.Conn,
 ) (*chat.Manager, error) {
-	if parent := filepath.Dir(cfg.ChatFossilRepoPath); parent != "" {
-		if err := os.MkdirAll(parent, 0o755); err != nil {
-			return nil, fmt.Errorf(
-				"coord.Open: chat.fossil parent dir %q: %w", parent, err,
-			)
-		}
-	}
 	chatProject := cfg.ProjectPrefix
 	if chatProject == "" {
 		chatProject = projectPrefix(cfg.AgentID)
 	}
 	m, err := chat.Open(ctx, chat.Config{
-		AgentID:        cfg.AgentID,
-		ProjectPrefix:  chatProject,
-		Nats:           nc,
-		FossilRepoPath: cfg.ChatFossilRepoPath,
-		MaxSubscribers: cfg.Tuning.MaxSubscribers,
+		AgentID:         cfg.AgentID,
+		ProjectPrefix:   chatProject,
+		Nats:            nc,
+		MaxRetentionAge: cfg.Tuning.ChatRetentionMaxAge,
+		MaxSubscribers:  cfg.Tuning.MaxSubscribers,
 	})
 	if err != nil {
-		return nil, fmt.Errorf(
-			"coord: chat.fossil at %s is missing or unreadable; "+
-				"run 'bones up' to recreate or 'bones doctor' to diagnose: %w",
-			cfg.ChatFossilRepoPath, err,
-		)
+		return nil, fmt.Errorf("coord.Open: chat: %w", err)
 	}
 	return m, nil
 }

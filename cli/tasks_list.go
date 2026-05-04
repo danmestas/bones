@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"time"
 
@@ -222,14 +221,12 @@ func liveAgentSet(peers []coord.Presence) map[string]struct{} {
 // chat.fossil lives under <WorkspaceDir>/.bones/ — the bones-managed
 // runtime tree — so operators don't see it as a stray file at the
 // project root and don't accidentally delete it. Per ADRs 0023 and 0041
-// the workspace already has `.bones/` as the runtime-state directory;
-// gitignoring `.bones/` covers chat.fossil transitively. Issues #167,
-// #168.
+// Per ADR 0047 chat lives on a JetStream stream — no chat.fossil path
+// needed.
 func newCoordConfig(info workspace.Info) coord.Config {
 	return coord.Config{
-		AgentID:            info.AgentID,
-		NATSURL:            info.NATSURL,
-		ChatFossilRepoPath: filepath.Join(info.WorkspaceDir, ".bones", "chat.fossil"),
-		CheckoutRoot:       info.WorkspaceDir,
+		AgentID:      info.AgentID,
+		NATSURL:      info.NATSURL,
+		CheckoutRoot: info.WorkspaceDir,
 	}
 }
