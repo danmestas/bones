@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/danmestas/libfossil"
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
+	edgehub "github.com/danmestas/EdgeSync/hub"
 
 	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/workspace"
@@ -34,23 +34,23 @@ type HubUserAddCmd struct {
 	Caps  string `name:"caps" default:"oih" help:"fossil caps (default: clone+checkin+history)"`
 }
 
-func (c *HubUserAddCmd) Run(g *libfossilcli.Globals) error {
+func (c *HubUserAddCmd) Run(g *repocli.Globals) error {
 	repoPath, err := hubRepoPath()
 	if err != nil {
 		return err
 	}
-	repo, err := libfossil.Open(repoPath)
+	repo, err := edgehub.OpenRepo(repoPath)
 	if err != nil {
 		return fmt.Errorf("open hub repo: %w", err)
 	}
 	defer func() { _ = repo.Close() }()
 
-	if _, err := repo.GetUser(c.Login); err == nil {
+	if repo.HasUser(c.Login) {
 		fmt.Printf("hub user %q already exists (no change)\n", c.Login)
 		return nil
 	}
 
-	if err := repo.CreateUser(libfossil.UserOpts{
+	if err := repo.AddUser(edgehub.User{
 		Login: c.Login,
 		Caps:  c.Caps,
 	}); err != nil {
@@ -63,12 +63,12 @@ func (c *HubUserAddCmd) Run(g *libfossilcli.Globals) error {
 // HubUserListCmd prints the hub repo's user table.
 type HubUserListCmd struct{}
 
-func (c *HubUserListCmd) Run(g *libfossilcli.Globals) error {
+func (c *HubUserListCmd) Run(g *repocli.Globals) error {
 	repoPath, err := hubRepoPath()
 	if err != nil {
 		return err
 	}
-	repo, err := libfossil.Open(repoPath)
+	repo, err := edgehub.OpenRepo(repoPath)
 	if err != nil {
 		return fmt.Errorf("open hub repo: %w", err)
 	}

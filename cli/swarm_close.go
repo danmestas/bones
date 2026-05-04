@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/coord"
 	"github.com/danmestas/bones/internal/dispatch"
@@ -42,7 +42,7 @@ type SwarmCloseCmd struct {
 	KeepWT         bool   `name:"keep-wt" help:"retain wt dir on success (default: remove)"`
 }
 
-func (c *SwarmCloseCmd) Run(g *libfossilcli.Globals) error {
+func (c *SwarmCloseCmd) Run(g *repocli.Globals) error {
 	if err := c.validateResult(); err != nil {
 		return err
 	}

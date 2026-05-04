@@ -3,8 +3,6 @@ package coord
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +11,10 @@ import (
 
 	"github.com/danmestas/EdgeSync/leaf/agent"
 	"github.com/danmestas/libfossil"
+	// modernc SQLite driver, registered for libfossil.Clone in
+	// OpenLeaf's pre-agent clone path. The rest of the package goes
+	// through the EdgeSync agent, which manages its own driver
+	// registration internally.
 	_ "github.com/danmestas/libfossil/db/driver/modernc"
 
 	"github.com/danmestas/bones/internal/assert"
@@ -460,20 +462,11 @@ func (l *Leaf) Commit(
 		return "", err
 	}
 
-	// Write through the agent's repo handle. EdgeSync v0.0.10's
-	// agent.Commit does not yet surface ParentID/MergeParents — the
-	// trunk-based-development invariant requires explicitly chaining
-	// onto the trunk tip, which the wrapped API can't express, so this
-	// site stays on the libfossil-typed CommitOpts path. media.go and
-	// compact.go (which don't set ParentID) use the wrapped API.
-	repo := l.agent.Repo()
-
-	// Pull from hub before resolving the trunk tip so the new commit's
-	// parent is the latest hub-known commit, not whatever this leaf
-	// snapshot saw at clone time. This is the implementation of
-	// trunk-based development across slots: every slot.Commit advances
-	// a shared trunk rather than producing a sibling leaf that fan-in
-	// must collapse later.
+	// Pull from hub before committing so the new commit's parent is the
+	// latest hub-known commit, not whatever this leaf snapshot saw at
+	// clone time. This is the implementation of trunk-based development
+	// across slots: every slot.Commit advances a shared trunk rather
+	// than producing a sibling leaf that fan-in must collapse later.
 	//
 	// A failed pull is fatal: continuing on a stale parent silently
 	// turns a "trunk advance" into "trunk fork", which is exactly what
@@ -484,7 +477,7 @@ func (l *Leaf) Commit(
 			return "", fmt.Errorf("coord.Leaf.Commit: pre-commit pull: %w", err)
 		}
 	}
-	toCommit := make([]libfossil.FileToCommit, 0, len(files))
+	toCommit := make([]agent.FileToCommit, 0, len(files))
 	for _, f := range files {
 		assert.Precondition(
 			!f.Path.IsZero(),
@@ -494,7 +487,7 @@ func (l *Leaf) Commit(
 		if name == "" {
 			name = normalizeLeadingSlash(f.Path.AsAbsolute())
 		}
-		toCommit = append(toCommit, libfossil.FileToCommit{
+		toCommit = append(toCommit, agent.FileToCommit{
 			Name:    name,
 			Content: f.Content,
 		})
@@ -510,28 +503,18 @@ func (l *Leaf) Commit(
 	if co.message != "" {
 		commitComment = co.message
 	}
-	// Resolve the current branch tip so the new commit lists it as
-	// its parent. Without this, libfossil writes an orphan checkin
-	// (no P-card on the manifest), every commit becomes its own
-	// root, and the hub timeline shows N disconnected leaves
-	// instead of a chain. BranchTip on a fresh slot leaf returns
-	// the seed commit's rid (cloned from hub at OpenLeaf time).
-	// On a brand-new empty repo with no trunk tip yet, BranchTip
-	// returns "no rows" / "branch not found"; that's the legitimate
-	// first-commit case where ParentID=0 is correct (orphan root).
-	parentID, btErr := repo.BranchTip("trunk")
-	if btErr != nil && !isBranchTipMissing(btErr) {
-		return "", fmt.Errorf("coord.Leaf.Commit: resolve trunk tip: %w", btErr)
-	}
-	_, uuid, err := repo.Commit(libfossil.CommitOpts{
-		Files:    toCommit,
-		ParentID: parentID,
-		Comment:  commitComment,
-		User:     commitUser,
+	// Agent.Commit auto-resolves the trunk tip when ParentID is unset,
+	// so the commit chains onto the latest tip from the post-pull state
+	// without bones needing to call Tip() and round-trip the rid.
+	rev, err := l.agent.Commit(ctx, agent.CommitOpts{
+		Files:   toCommit,
+		Message: commitComment,
+		Author:  commitUser,
 	})
 	if err != nil {
 		return "", fmt.Errorf("coord.Leaf.Commit: %w", err)
 	}
+	uuid := string(rev)
 
 	// Trigger an explicit sync round so the hub receives the commit.
 	// SyncNow uses leaf.Agent's NATS transport; the leaf's mesh joins
@@ -562,15 +545,6 @@ func commitMessage(c *Claim) string {
 	return "leaf commit for task " + string(c.TaskID())
 }
 
-// isBranchTipMissing reports whether err is libfossil's "this branch
-// has no commits yet" error. BranchTip wraps sql.ErrNoRows in that
-// case (queried table has zero matching rows). The first commit on
-// an empty repo is legitimate; ParentID=0 produces the correct
-// orphan-root manifest.
-func isBranchTipMissing(err error) bool {
-	return errors.Is(err, sql.ErrNoRows)
-}
-
 // pullFromHub runs a one-shot fossil pull against the configured hub
 // via the EdgeSync agent's libfossil-hidden SyncTo API. Authenticates
 // as l.fossilUser (which has 'i' caps from ensureSlotUser) when set;
@@ -591,6 +565,37 @@ func (l *Leaf) pullFromHub(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// Push HTTP-pushes the leaf's repo to hubURL via the agent's
+// libfossil-hidden SyncTo API. Used by swarm.ResumedLease.Commit to
+// land a slot's commit on the hub before stopping the leaf — the
+// previous "stop-then-push" flow relied on direct libfossil access
+// to leaf.fossil, which is no longer available post-libfossil-exit.
+//
+// fossilUser falls back to slotID when empty (matching the swarm
+// flow's existing convention). projectCode is the hub's fossil
+// project-code, required by the sync handshake.
+func (l *Leaf) Push(
+	ctx context.Context, hubURL, fossilUser, projectCode string,
+) (*agent.SyncResult, error) {
+	assert.NotNil(l, "coord.Leaf.Push: receiver is nil")
+	assert.NotNil(ctx, "coord.Leaf.Push: ctx is nil")
+	assert.NotEmpty(hubURL, "coord.Leaf.Push: hubURL is empty")
+	user := fossilUser
+	if user == "" {
+		user = l.slotID
+	}
+	res, err := l.agent.SyncTo(ctx, hubURL, agent.SyncOpts{
+		Push:        true,
+		Pull:        false,
+		User:        user,
+		ProjectCode: projectCode,
+	})
+	if err != nil {
+		return res, fmt.Errorf("coord.Leaf.Push: %w", err)
+	}
+	return res, nil
 }
 
 // CommitOption tunes Leaf.Commit. Construct with WithMessage / WithUser.

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/telemetry"
@@ -30,7 +30,7 @@ type ApplyCmd struct {
 	DryRun bool `name:"dry-run" help:"show planned changes without writing or staging"`
 }
 
-func (c *ApplyCmd) Run(g *libfossilcli.Globals) (err error) {
+func (c *ApplyCmd) Run(g *repocli.Globals) (err error) {
 	outcome := &applyOutcome{DryRun: c.DryRun}
 	_, end := telemetry.RecordCommand(context.Background(), "apply",
 		telemetry.Bool("dry_run", c.DryRun),

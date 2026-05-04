@@ -18,12 +18,16 @@ import (
 // exposes the leaf.Agent's embedded NATS mesh as the hub's NATS bus.
 //
 // Hub wraps a *leaf.Agent with serve flags set (Pull=false, Push=false,
-// Autosync=AutosyncOff). The agent's serve_http handler exposes
-// repo.XferHandler() so a stock fossil client can pull/push. The
-// agent's mesh runs a standalone NATS server (no upstream); peer
-// leaves solicit it via NATSUpstream and publish/subscribe land
-// directly on the hub's mesh — single-hop subject-interest
-// propagation. See EdgeSync PR #77 (MeshClientURL/MeshLeafAddr).
+// Autosync=AutosyncOff, ServeNATSEnabled=true). The agent's serve_http
+// handler exposes repo.XferHandler() so a stock fossil client can
+// pull/push, AND its NATS subscriber on fossil.<project-code>.sync
+// processes pushes from peer leaves over the leaf-mesh.
+//
+// Why not the EdgeSync hub package: bones's swarm flow relies on
+// NATS-based fossil sync (slot leaf publishes, hub agent subscribes
+// and merges). The hub package's NewHub starts a NATS server but does
+// not register the fossil-sync subscriber. Until the hub package gains
+// that surface, this site stays on the leaf agent serve-mode pattern.
 type Hub struct {
 	agent    *agent.Agent
 	httpAddr string
@@ -54,10 +58,6 @@ func OpenHub(ctx context.Context, workdir, httpAddr string) (*Hub, error) {
 		}
 		// Grant the unauthenticated user clone/pull/push caps so leaf
 		// agents can sync without coord plumbing per-leaf credentials.
-		// libfossil's xfer handler treats requests with no login card
-		// as user "nobody" (see internal/sync/handler.go initAuth).
-		// libfossil.Create pre-populates "nobody" with empty caps;
-		// SetCaps grants 'gio' (clone, pull, push).
 		if cerr := r.SetCaps("nobody", "gio"); cerr != nil {
 			_ = r.Close()
 			return nil, fmt.Errorf("coord.OpenHub: grant nobody caps: %w", cerr)
@@ -66,13 +66,8 @@ func OpenHub(ctx context.Context, workdir, httpAddr string) (*Hub, error) {
 	}
 
 	cfg := agent.Config{
-		RepoPath:     repoPath,
-		NATSUpstream: "", // hub's mesh runs standalone — peer leaves solicit it
-		// Pin the JetStream store dir to the workdir so two Hubs (e.g.
-		// from different tests) do not share state via the
-		// CWD-relative default `<cwd>/.nats-store`. Without this, the
-		// tasks/holds/presence KV buckets persist across tests and
-		// rooms records leak between fresh `t.TempDir()` workdirs.
+		RepoPath:         repoPath,
+		NATSUpstream:     "",
 		NATSStoreDir:     filepath.Join(workdir, ".nats-store"),
 		ServeHTTPAddr:    httpAddr,
 		ServeNATSEnabled: true,
@@ -94,19 +89,14 @@ func OpenHub(ctx context.Context, workdir, httpAddr string) (*Hub, error) {
 	}, nil
 }
 
-// NATSURL returns the hub's NATS client URL — the agent's mesh accepts
-// regular client connections here. Use this for non-agent NATS clients
-// (e.g. coord's claim/task KV traffic from the same process). For
-// remote agents joining the hub's mesh upstream, see LeafUpstream.
+// NATSURL returns the hub's NATS client URL.
 func (h *Hub) NATSURL() string {
 	assert.NotNil(h, "coord.Hub.NATSURL: receiver is nil")
 	return h.agent.MeshClientURL()
 }
 
 // LeafUpstream returns the URL remote agents pass as NATSUpstream to
-// peer their meshes into the hub's mesh as leaf nodes. The hub mesh
-// accepts these solicits on its leaf-node port (separate from the
-// client port returned by NATSURL).
+// peer their meshes into the hub's mesh as leaf nodes.
 func (h *Hub) LeafUpstream() string {
 	assert.NotNil(h, "coord.Hub.LeafUpstream: receiver is nil")
 	addr := h.agent.MeshLeafAddr()
@@ -116,15 +106,13 @@ func (h *Hub) LeafUpstream() string {
 	return "nats://" + addr
 }
 
-// HTTPAddr returns the hub's HTTP listen address, suitable as the
-// hubHTTPAddr argument to OpenLeaf.
+// HTTPAddr returns the hub's HTTP listen address.
 func (h *Hub) HTTPAddr() string {
 	assert.NotNil(h, "coord.Hub.HTTPAddr: receiver is nil")
 	return "http://" + h.httpAddr
 }
 
-// Stop shuts down the agent (which also shuts down its embedded NATS
-// mesh). Safe to call more than once; subsequent calls are no-ops.
+// Stop shuts down the agent. Safe to call more than once.
 func (h *Hub) Stop() error {
 	assert.NotNil(h, "coord.Hub.Stop: receiver is nil")
 	h.mu.Lock()

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"syscall"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/githook"
 	"github.com/danmestas/bones/internal/hub"
@@ -42,7 +42,7 @@ type DownCmd struct {
 // Run is the Kong entry point. Resolves the workspace root (walking
 // up from cwd if a marker exists, falling back to cwd otherwise),
 // builds an execution plan, prompts unless --yes, and executes.
-func (c *DownCmd) Run(g *libfossilcli.Globals) error {
+func (c *DownCmd) Run(g *repocli.Globals) error {
 	if c.All {
 		return c.runAll()
 	}

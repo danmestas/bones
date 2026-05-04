@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"strconv"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/workspace"
@@ -38,7 +38,7 @@ type PeekCmd struct {
 	Page string `name:"page" default:"timeline?y=ci&n=50" help:"fossil page (e.g. timeline)"`
 }
 
-func (c *PeekCmd) Run(g *libfossilcli.Globals) error {
+func (c *PeekCmd) Run(g *repocli.Globals) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("cwd: %w", err)

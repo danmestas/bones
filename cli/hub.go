@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/scaffoldver"
@@ -54,7 +54,7 @@ type HubStartCmd struct {
 	DrainTimeout time.Duration `name:"drain-timeout" default:"30s" help:"max drain wait"` //nolint:lll
 }
 
-func (c *HubStartCmd) Run(g *libfossilcli.Globals) error {
+func (c *HubStartCmd) Run(g *repocli.Globals) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("cwd: %w", err)
@@ -100,7 +100,7 @@ type HubStopCmd struct {
 	Force bool `name:"force" help:"stop even when swarm slots are active (#157)"`
 }
 
-func (c *HubStopCmd) Run(g *libfossilcli.Globals) error {
+func (c *HubStopCmd) Run(g *repocli.Globals) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("cwd: %w", err)

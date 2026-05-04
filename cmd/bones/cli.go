@@ -2,7 +2,7 @@ package main
 
 import (
 	edgecli "github.com/danmestas/EdgeSync/cli"
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	bonescli "github.com/danmestas/bones/cli"
 )
@@ -10,7 +10,7 @@ import (
 // CLI is the top-level Kong assembly. Globals are inherited from
 // libfossil/cli (provides `-R <repo>` and `-v` for the Repo subtree).
 type CLI struct {
-	libfossilcli.Globals
+	repocli.Globals
 
 	// Daily.
 	Up     bonescli.UpCmd     `cmd:"" group:"daily" help:"Bootstrap workspace, lazy hub (ADR 0041)"`
@@ -29,7 +29,7 @@ type CLI struct {
 	Workspaces bonescli.WorkspacesCmd `cmd:"" group:"daily" help:"List/inspect known workspaces"`
 
 	// Repository.
-	Repo libfossilcli.RepoCmd `cmd:"" group:"repo" help:"Fossil repository operations"`
+	Repo repocli.Cmd `cmd:"" group:"repo" help:"Fossil repository operations"`
 
 	// Sync & messaging.
 	Sync   edgecli.SyncCmd    `cmd:"" group:"sync" help:"Leaf agent sync"`

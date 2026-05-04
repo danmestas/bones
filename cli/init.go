@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/banner"
 	"github.com/danmestas/bones/internal/workspace"
@@ -15,7 +15,7 @@ import (
 // InitCmd creates a new bones workspace in the current directory.
 type InitCmd struct{}
 
-func (c *InitCmd) Run(g *libfossilcli.Globals) error {
+func (c *InitCmd) Run(g *repocli.Globals) error {
 	banner.Print()
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -28,7 +28,7 @@ func (c *InitCmd) Run(g *libfossilcli.Globals) error {
 // JoinCmd locates and verifies an existing workspace from cwd.
 type JoinCmd struct{}
 
-func (c *JoinCmd) Run(g *libfossilcli.Globals) error {
+func (c *JoinCmd) Run(g *repocli.Globals) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("cwd: %w", err)
@@ -46,10 +46,10 @@ func (c *JoinCmd) Run(g *libfossilcli.Globals) error {
 // Default output: a single confirmation line. With -v / --verbose: the
 // banner plus per-step status lines. WARN lines (drift, missing git)
 // print regardless because they describe real issues the operator must
-// see. Verbosity comes from the global -v flag on libfossilcli.Globals.
+// see. Verbosity comes from the global -v flag on repocli.Globals.
 type UpCmd struct{}
 
-func (c *UpCmd) Run(g *libfossilcli.Globals) error {
+func (c *UpCmd) Run(g *repocli.Globals) error {
 	if g.Verbose {
 		banner.Print()
 	}

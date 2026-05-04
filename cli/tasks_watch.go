@@ -7,7 +7,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/tasks"
 )
@@ -16,7 +16,7 @@ import (
 // lifecycle events to stdout until Ctrl-C or context cancellation.
 type TasksWatchCmd struct{}
 
-func (c *TasksWatchCmd) Run(g *libfossilcli.Globals) error {
+func (c *TasksWatchCmd) Run(g *repocli.Globals) error {
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
 		return err

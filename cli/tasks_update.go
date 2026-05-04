@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/tasks"
 )
@@ -26,7 +26,7 @@ type TasksUpdateCmd struct {
 	JSON       bool     `name:"json" help:"emit JSON"`
 }
 
-func (c *TasksUpdateCmd) Run(g *libfossilcli.Globals) error {
+func (c *TasksUpdateCmd) Run(g *repocli.Globals) error {
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
 		return err

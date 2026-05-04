@@ -15,6 +15,10 @@ import (
 	"os"
 
 	"github.com/alecthomas/kong"
+	// libfossil's modernc SQLite driver. Registered here while bones
+	// still has two libfossil-direct sites (internal/hub/hub.go for the
+	// production daemon, internal/coord/leaf.go's OpenLeaf clone path).
+	// Drops when those migrate too.
 	_ "github.com/danmestas/libfossil/db/driver/modernc"
 
 	"github.com/danmestas/bones/internal/telemetry"
@@ -77,7 +81,7 @@ func main() {
 		}),
 	)
 	// Default slog level is Info; demote operational telemetry sites
-	// to Debug so non-`-v` invocations stay quiet. `-v` (libfossilcli
+	// to Debug so non-`-v` invocations stay quiet. `-v` (repocli
 	// Globals.Verbose) reinstalls a Debug-level handler so the same
 	// sites are visible when troubleshooting.
 	if c.Verbose {

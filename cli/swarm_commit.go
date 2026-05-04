@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/coord"
 	"github.com/danmestas/bones/internal/logwriter"
@@ -33,7 +33,7 @@ type SwarmCommitCmd struct {
 	NoAutosync bool     `name:"no-autosync" help:"branch-per-slot mode (skip pre-commit hub pull)"`
 }
 
-func (c *SwarmCommitCmd) Run(g *libfossilcli.Globals) error {
+func (c *SwarmCommitCmd) Run(g *repocli.Globals) error {
 	ctx, info, lease, stop, err := bootstrapResume(
 		"swarm commit", c.Slot, c.HubURL,
 		swarm.AcquireOpts{NoAutosync: c.NoAutosync},
@@ -89,9 +89,8 @@ func (c *SwarmCommitCmd) emitCommitReport(
 			hubURL, res.PushErr)
 	} else if res.PushResult != nil {
 		fmt.Fprintf(os.Stderr,
-			"swarm commit: pushed to hub %s rounds=%d files_sent=%d bytes_sent=%d\n",
-			hubURL,
-			res.PushResult.Rounds, res.PushResult.FilesSent, res.PushResult.BytesSent,
+			"swarm commit: pushed to hub %s pushed=%d pulled=%d\n",
+			hubURL, res.PushResult.Pushed, res.PushResult.Pulled,
 		)
 	}
 	if res.RenewErr != nil {

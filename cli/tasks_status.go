@@ -10,7 +10,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/tasks"
 )
@@ -24,7 +24,7 @@ import (
 //	backlog:  3 open · 1 claimed · 2 closed (last 24h)
 type TasksStatusCmd struct{}
 
-func (c *TasksStatusCmd) Run(g *libfossilcli.Globals) error {
+func (c *TasksStatusCmd) Run(g *repocli.Globals) error {
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
 		return err

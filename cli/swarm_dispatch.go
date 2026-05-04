@@ -12,7 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/dispatch"
 	"github.com/danmestas/bones/internal/tasks"
@@ -43,7 +43,7 @@ type SwarmDispatchCmd struct {
 }
 
 // Run dispatches to the appropriate subcommand based on which flag is set.
-func (c *SwarmDispatchCmd) Run(g *libfossilcli.Globals) error {
+func (c *SwarmDispatchCmd) Run(g *repocli.Globals) error {
 	// Validate mode before touching the workspace so the usage error is fast.
 	if !c.Cancel && !c.Advance && c.PlanPath == "" {
 		return fmt.Errorf("usage: bones swarm dispatch <plan> | --advance | --cancel")

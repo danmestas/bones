@@ -12,8 +12,8 @@ import (
 	"sort"
 	"strings"
 
-	libfossil "github.com/danmestas/libfossil"
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
+	edgehub "github.com/danmestas/EdgeSync/hub"
 
 	"github.com/danmestas/bones/internal/dispatch"
 	"github.com/danmestas/bones/internal/workspace"
@@ -39,7 +39,7 @@ type finalizeResult struct {
 	Missing    []string // file in dispatch manifest but not on hub trunk
 }
 
-func (c *PlanFinalizeCmd) Run(g *libfossilcli.Globals) error {
+func (c *PlanFinalizeCmd) Run(g *repocli.Globals) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("plan finalize: cwd: %w", err)
@@ -61,13 +61,13 @@ func runPlanFinalize(c *PlanFinalizeCmd, workspaceDir string, out io.Writer) err
 	_, _ = fmt.Fprintf(out, "plan finalize: %s\n", planSource)
 
 	hubRepoPath := filepath.Join(workspaceDir, ".bones", "hub.fossil")
-	repo, err := libfossil.Open(hubRepoPath)
+	repo, err := edgehub.OpenRepo(hubRepoPath)
 	if err != nil {
 		return fmt.Errorf("plan finalize: open hub: %w", err)
 	}
 	defer func() { _ = repo.Close() }()
 
-	res := materializeManifest(repo, manifest, workspaceDir, c.Force)
+	res := materializeManifest(context.Background(), repo, manifest, workspaceDir, c.Force)
 	printFinalizeSummary(out, res)
 
 	if len(res.Conflicted) > 0 && !c.Force {
@@ -112,7 +112,7 @@ func resolvePlanManifest(planFlag, workspaceDir string) (
 // the same relative path. Conflicts are listed without writing unless
 // force is set; matched files (host == trunk) are reported and skipped.
 func materializeManifest(
-	repo *libfossil.Repo, m *dispatch.Manifest, workspaceDir string, force bool,
+	ctx context.Context, repo *edgehub.Repo, m *dispatch.Manifest, workspaceDir string, force bool,
 ) finalizeResult {
 	var res finalizeResult
 	seen := map[string]bool{}
@@ -123,7 +123,7 @@ func materializeManifest(
 					continue
 				}
 				seen[file] = true
-				trunk, err := repo.ReadFileAt("trunk", file)
+				trunk, err := repo.ReadAt(ctx, "trunk", file)
 				if err != nil {
 					res.Missing = append(res.Missing, file)
 					continue

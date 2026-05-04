@@ -10,7 +10,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/dispatch"
 	"github.com/danmestas/bones/internal/swarm"
@@ -49,7 +49,7 @@ type statusRow struct {
 	StaleSeconds int64     `json:"stale_seconds"`
 }
 
-func (c *SwarmStatusCmd) Run(g *libfossilcli.Globals) error {
+func (c *SwarmStatusCmd) Run(g *repocli.Globals) error {
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
 		return err

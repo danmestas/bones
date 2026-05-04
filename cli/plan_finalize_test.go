@@ -2,17 +2,37 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	edgehub "github.com/danmestas/EdgeSync/hub"
 	libfossil "github.com/danmestas/libfossil"
 	_ "github.com/danmestas/libfossil/db/driver/modernc"
 
 	"github.com/danmestas/bones/internal/dispatch"
 )
+
+// reopenAsHubRepo closes a libfossil.Repo and reopens it as an
+// edgehub.Repo so the test can call materializeManifest with the
+// migrated signature. Test setup uses libfossil directly because
+// the test scope hasn't migrated; production code now uses
+// edgehub.OpenRepo end-to-end.
+func reopenAsHubRepo(t *testing.T, repo *libfossil.Repo, path string) *edgehub.Repo {
+	t.Helper()
+	if err := repo.Close(); err != nil {
+		t.Fatalf("close libfossil repo: %v", err)
+	}
+	r, err := edgehub.OpenRepo(path)
+	if err != nil {
+		t.Fatalf("edgehub.OpenRepo: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	return r
+}
 
 // TestResolvePlanManifest_NoSourceErrors pins the no-source case:
 // without --plan and without dispatch.json, the verb errors with
@@ -90,7 +110,8 @@ func TestMaterializeManifest_WritesMatchesConflicts(t *testing.T) {
 		},
 	}
 
-	res := materializeManifest(repo, manifest, workspaceDir, false)
+	hubRepo := reopenAsHubRepo(t, repo, hubRepoPath)
+	res := materializeManifest(context.Background(), hubRepo, manifest, workspaceDir, false)
 
 	if !equalSorted(res.Written, []string{"docs/research/rendering/REPORT.md"}) {
 		t.Errorf("Written: got %v", res.Written)
@@ -145,7 +166,8 @@ func TestMaterializeManifest_ForceOverridesConflicts(t *testing.T) {
 			{Slot: "alpha", Files: []string{"out.md"}},
 		},
 	}}}
-	res := materializeManifest(repo, manifest, workspaceDir, true)
+	hubRepo := reopenAsHubRepo(t, repo, hubRepoPath)
+	res := materializeManifest(context.Background(), hubRepo, manifest, workspaceDir, true)
 
 	if len(res.Conflicted) != 0 {
 		t.Errorf("expected no conflicts under --force, got %v", res.Conflicted)
@@ -180,7 +202,8 @@ func TestMaterializeManifest_MissingOnTrunk(t *testing.T) {
 			{Slot: "ghost", Files: []string{"never-committed.md"}},
 		},
 	}}}
-	res := materializeManifest(repo, manifest, workspaceDir, false)
+	hubRepo := reopenAsHubRepo(t, repo, hubRepoPath)
+	res := materializeManifest(context.Background(), hubRepo, manifest, workspaceDir, false)
 
 	if !equalSorted(res.Missing, []string{"never-committed.md"}) {
 		t.Errorf("Missing: got %v", res.Missing)

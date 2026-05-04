@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	libfossilcli "github.com/danmestas/libfossil/cli"
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/workspace"
@@ -23,7 +23,7 @@ type SwarmCwdCmd struct {
 	Slot string `name:"slot" required:"" help:"slot name"`
 }
 
-func (c *SwarmCwdCmd) Run(g *libfossilcli.Globals) error {
+func (c *SwarmCwdCmd) Run(g *repocli.Globals) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("cwd: %w", err)
