@@ -51,7 +51,7 @@ Full docs: [bones.daniel-mestas.workers.dev](https://bones.daniel-mestas.workers
 your-repo/
 ├── .bones/                  # workspace marker + hub state (ADR 0041)
 │   ├── agent.id             # workspace's coord identity
-│   ├── hub.fossil           # shared trunk: code, tasks, chat, presence
+│   ├── hub.fossil           # shared trunk: code commits + presence
 │   ├── hub-fossil-url       # discovered HTTP URL (per ADR 0038)
 │   ├── hub-nats-url         # discovered NATS URL
 │   ├── nats-store/          # JetStream persistence
@@ -62,7 +62,7 @@ your-repo/
     └── skills/              # orchestrator · subagent · uninstall-bones
 ```
 
-The hub fossil holds durable state (commits, tasks, presence, chat). Tasks live in NATS JetStream KV with CAS-gated claims; commits, chat, and presence land in fossil tables. Per ADR 0041 the workspace marker and hub state are unified under `.bones/`.
+The hub fossil holds durable state for code commits and presence. Tasks live in NATS JetStream KV with CAS-gated claims; chat lives in a JetStream stream (per ADR 0047); commits and presence land in fossil tables. Per ADR 0041 the workspace marker and hub state are unified under `.bones/`.
 
 ## Commands
 
