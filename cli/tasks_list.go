@@ -218,11 +218,18 @@ func liveAgentSet(peers []coord.Presence) map[string]struct{} {
 // newCoordConfig builds a coord.Config from workspace defaults. Lifted
 // from tasks_ready.go into tasks_list.go when the ready verb folded into
 // 'tasks list --ready'.
+//
+// chat.fossil lives under <WorkspaceDir>/.bones/ — the bones-managed
+// runtime tree — so operators don't see it as a stray file at the
+// project root and don't accidentally delete it. Per ADRs 0023 and 0041
+// the workspace already has `.bones/` as the runtime-state directory;
+// gitignoring `.bones/` covers chat.fossil transitively. Issues #167,
+// #168.
 func newCoordConfig(info workspace.Info) coord.Config {
 	return coord.Config{
 		AgentID:            info.AgentID,
 		NATSURL:            info.NATSURL,
-		ChatFossilRepoPath: filepath.Join(info.WorkspaceDir, "chat.fossil"),
+		ChatFossilRepoPath: filepath.Join(info.WorkspaceDir, ".bones", "chat.fossil"),
 		CheckoutRoot:       info.WorkspaceDir,
 	}
 }

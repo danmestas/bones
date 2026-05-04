@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -165,19 +167,9 @@ func openSubstrate(
 		s.close()
 		return nil, fmt.Errorf("coord.Open: archive tasks: %w", err)
 	}
-	chatProject := cfg.ProjectPrefix
-	if chatProject == "" {
-		chatProject = projectPrefix(cfg.AgentID)
-	}
-	if s.chat, err = chat.Open(ctx, chat.Config{
-		AgentID:        cfg.AgentID,
-		ProjectPrefix:  chatProject,
-		Nats:           nc,
-		FossilRepoPath: cfg.ChatFossilRepoPath,
-		MaxSubscribers: cfg.Tuning.MaxSubscribers,
-	}); err != nil {
+	if s.chat, err = openChat(ctx, cfg, nc); err != nil {
 		s.close()
-		return nil, fmt.Errorf("coord.Open: chat: %w", err)
+		return nil, err
 	}
 	if s.presence, err = presence.Open(ctx, presence.Config{
 		AgentID:           cfg.AgentID,
@@ -194,6 +186,43 @@ func openSubstrate(
 		return nil, fmt.Errorf("coord.Open: swarm sessions: %w", err)
 	}
 	return s, nil
+}
+
+// openChat opens the chat manager for cfg, ensuring the
+// ChatFossilRepoPath parent directory exists first (so a freshly-init
+// workspace doesn't fail on a missing `.bones/`) and re-wrapping the
+// failure with a friendly, path-naming, remediation-hinting message
+// so operators who deleted chat.fossil aren't told "no bones workspace
+// found". Issues #167, #168.
+func openChat(
+	ctx context.Context, cfg Config, nc *nats.Conn,
+) (*chat.Manager, error) {
+	if parent := filepath.Dir(cfg.ChatFossilRepoPath); parent != "" {
+		if err := os.MkdirAll(parent, 0o755); err != nil {
+			return nil, fmt.Errorf(
+				"coord.Open: chat.fossil parent dir %q: %w", parent, err,
+			)
+		}
+	}
+	chatProject := cfg.ProjectPrefix
+	if chatProject == "" {
+		chatProject = projectPrefix(cfg.AgentID)
+	}
+	m, err := chat.Open(ctx, chat.Config{
+		AgentID:        cfg.AgentID,
+		ProjectPrefix:  chatProject,
+		Nats:           nc,
+		FossilRepoPath: cfg.ChatFossilRepoPath,
+		MaxSubscribers: cfg.Tuning.MaxSubscribers,
+	})
+	if err != nil {
+		return nil, fmt.Errorf(
+			"coord: chat.fossil at %s is missing or unreadable; "+
+				"run 'bones up' to recreate or 'bones doctor' to diagnose: %w",
+			cfg.ChatFossilRepoPath, err,
+		)
+	}
+	return m, nil
 }
 
 // provisionSwarmSessionsBucket ensures the bones-swarm-sessions KV
