@@ -80,6 +80,9 @@ func TestCLI_UpFreshNoRecoveryAnnouncement(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available; skipping up integration")
 	}
+	// Isolate HOME so subprocess `bones up` cannot leak into the
+	// operator's real ~/.bones/workspaces/. See #180.
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	gitInit(t, dir)
 	t.Cleanup(func() { _, _, _ = runCmd(t, bonesBin, dir, "down", "--yes") })

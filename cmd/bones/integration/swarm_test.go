@@ -303,8 +303,13 @@ func TestCLI_SwarmJoin_RefusesBootstrapFromLeafContext(t *testing.T) {
 // setupSwarmWorkspace creates a git-initialized tmpdir with a single
 // tracked file so the Go-implemented hub's seedHubRepo finds something
 // to commit. Then runs `bones init` to bring up the workspace leaf.
+//
+// Pins HOME to a temp dir so subprocess `bones hub start` invocations
+// from startSwarmHub do NOT leak entries into the operator's real
+// ~/.bones/workspaces/. See issue #180.
 func setupSwarmWorkspace(t *testing.T) string {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	// Init a fresh git repo and stage one file. Hub's seedHubRepo
 	// walks `git ls-files` and refuses to seed an empty workspace.

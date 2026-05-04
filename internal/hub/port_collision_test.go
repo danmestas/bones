@@ -28,6 +28,9 @@ func TestSpawnDetachedChild_DetectsPortCollision(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
+	// Isolate HOME so the detached-child path does not leak a registry
+	// entry into the operator's real ~/.bones/workspaces/. See #180.
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	if out, err := exec.Command("git", "-C", root, "init", "-q").CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)

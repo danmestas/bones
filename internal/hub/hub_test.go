@@ -37,6 +37,10 @@ func TestStartStopRoundTrip(t *testing.T) {
 		t.Skip("git not available; skipping hub round-trip")
 	}
 
+	// Isolate HOME so hub.Start's registry.Write does not leak entries
+	// into the operator's real ~/.bones/workspaces/ on test crash. See
+	// issue #180.
+	t.Setenv("HOME", t.TempDir())
 	root := newGitRepoWithFile(t)
 	fossilPort, natsPort := freePort(t), freePort(t)
 
@@ -120,6 +124,10 @@ func TestStartNoGitTrackedFiles(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
+	// Defensive isolation: Start fails before registry.Write here, but
+	// keep HOME pinned to a tempdir so a regression that reorders the
+	// seed-precondition check after registry.Write cannot leak. See #180.
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	mustRun(t, root, "git", "init", "-q")
 	mustRun(t, root,

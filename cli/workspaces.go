@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,13 +27,21 @@ type WorkspacesCmd struct {
 
 // WorkspacesLsCmd renders the registry as a human-readable table.
 //
-// We deliberately do NOT prune stopped entries here (unlike
+// We deliberately do NOT prune stopped entries here by default (unlike
 // `bones status --all`, which has live-only semantics): the operator
 // running `bones workspaces ls` is asking "what does bones think it
 // knows about?", and silently discarding stale entries makes it harder
 // to debug "why is bones up showing the wrong project?" scenarios.
+//
+// --prune is the explicit cleanup verb (#180): list dead entries
+// (HubStatus == stopped), confirm, and delete the registry files.
+// Entries whose status is "unknown" are skipped — those could be
+// workspaces whose hub never recorded a HubURL, and pruning them
+// would be wrong.
 type WorkspacesLsCmd struct {
-	JSON bool `name:"json" help:"emit machine-readable JSON"`
+	JSON  bool `name:"json" help:"emit machine-readable JSON"`
+	Prune bool `name:"prune" help:"remove registry entries whose hub is stopped"`
+	Yes   bool `name:"yes" short:"y" help:"skip the confirmation prompt for --prune"`
 }
 
 // Run gathers the registry view via registry.ListInfo (which performs
@@ -43,10 +52,78 @@ func (c *WorkspacesLsCmd) Run() error {
 	if err != nil {
 		return fmt.Errorf("workspaces ls: %w", err)
 	}
+	if c.Prune {
+		return runPrune(os.Stdout, os.Stdin, infos, c.Yes)
+	}
 	if c.JSON {
 		return writeWorkspacesJSON(os.Stdout, infos)
 	}
 	return writeWorkspacesTable(os.Stdout, infos, time.Now())
+}
+
+// runPrune removes registry entries whose HubStatus is "stopped".
+// Without yes, the dead entries are listed and the operator is prompted
+// for y/N on stdin before any file is removed. With yes, deletion runs
+// unconditionally. Entries with HubStatus == unknown are NEVER touched:
+// they could be workspaces whose hub never wrote a HubURL, and pruning
+// them is unsafe.
+//
+// Output: one "pruned: <name> (<id>)" line per removed entry. An empty
+// dead-set is reported as "no stopped entries to prune" and exits 0.
+//
+// Stdin / stdout are passed in so tests can drive the prompt
+// deterministically without touching the real terminal.
+func runPrune(out io.Writer, in io.Reader, infos []registry.Info, yes bool) error {
+	dead := make([]registry.Info, 0, len(infos))
+	for _, i := range infos {
+		if i.HubStatus == registry.HubStopped {
+			dead = append(dead, i)
+		}
+	}
+	if len(dead) == 0 {
+		_, err := fmt.Fprintln(out, "no stopped entries to prune")
+		return err
+	}
+	if !yes {
+		if _, err := fmt.Fprintf(out, "%d stopped entries:\n", len(dead)); err != nil {
+			return err
+		}
+		for _, i := range dead {
+			if _, err := fmt.Fprintf(out, "  %s  %s  %s\n",
+				i.ID, fallbackString(i.Name, emDash), i.Cwd); err != nil {
+				return err
+			}
+		}
+		if !pruneConfirm(out, in, len(dead)) {
+			_, err := fmt.Fprintln(out, "aborted; no entries pruned")
+			return err
+		}
+	}
+	for _, i := range dead {
+		if err := registry.Remove(i.Cwd); err != nil {
+			return fmt.Errorf("workspaces prune: %w", err)
+		}
+		if _, err := fmt.Fprintf(out, "pruned: %s (%s)\n",
+			fallbackString(i.Name, emDash), i.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// pruneConfirm is the y/N prompt used when --prune runs without --yes.
+// Mirrors confirm() in down.go but writes the prompt to the supplied
+// out writer (rather than os.Stdout directly) so tests can capture it.
+// Anything except an explicit "y"/"yes" returns false, including EOF.
+func pruneConfirm(out io.Writer, in io.Reader, n int) bool {
+	_, _ = fmt.Fprintf(out, "Prune %d stopped entries? [y/N] ", n)
+	rdr := bufio.NewReader(in)
+	line, err := rdr.ReadString('\n')
+	if err != nil && line == "" {
+		return false
+	}
+	answer := strings.TrimSpace(strings.ToLower(line))
+	return answer == "y" || answer == "yes"
 }
 
 // WorkspacesShowCmd prints one workspace's full registry entry.

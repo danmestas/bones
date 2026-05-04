@@ -285,3 +285,114 @@ func scrubVolatile(s, wsA, wsB, idA, idB string) string {
 	}
 	return strings.Join(out, "\n")
 }
+
+// TestRunPrune_YesRemovesStopped covers the non-interactive flow (#180):
+// two seeded entries, both reported as HubStatus=stopped (HubPID=-1
+// fails IsAlive), are prune-eligible. With yes=true the command
+// removes both and the registry directory is empty afterwards.
+//
+// We also assert that pruning a workspace whose HubURL is empty (and
+// thus reports HubStatus=unknown) is NOT touched — the contract for
+// --prune is "stopped only". A separate seed exercises that case so
+// the test fails if a regression starts pruning unknown entries.
+func TestRunPrune_YesRemovesStopped(t *testing.T) {
+	wsA, wsB := seedTwoWorkspaces(t)
+	wsC := t.TempDir()
+	mkBonesDir(t, wsC)
+	writeAgentIDForTest(t, wsC)
+	if err := registry.Write(registry.Entry{
+		Cwd: wsC, Name: "unknown",
+		HubURL: "", NATSURL: "", HubPID: 0,
+		StartedAt: time.Now().UTC().Truncate(time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	infos, err := registry.ListInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 3 {
+		t.Fatalf("seed: have %d infos, want 3", len(infos))
+	}
+
+	var buf bytes.Buffer
+	if err := runPrune(&buf, strings.NewReader(""), infos, true); err != nil {
+		t.Fatalf("runPrune: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"pruned: alpha", "pruned: beta"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in output:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "pruned: unknown") {
+		t.Errorf("unknown-status entry should NOT be pruned:\n%s", out)
+	}
+
+	after, err := registry.ListInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 1 || after[0].Cwd != wsC {
+		t.Errorf("after prune: want only wsC=%s, got %+v", wsC, after)
+	}
+	for _, cwd := range []string{wsA, wsB} {
+		if _, err := os.Stat(registry.EntryPath(cwd)); !os.IsNotExist(err) {
+			t.Errorf("entry file for %s should be removed; err=%v", cwd, err)
+		}
+	}
+}
+
+// TestRunPrune_NoConfirmKeepsEntries covers the prompt-rejected path:
+// the operator types "n" (or anything that is not "y"/"yes"), and the
+// registry is left untouched. Exercises the "list-with-confirm" branch
+// of the spec — the most common interactive flow.
+func TestRunPrune_NoConfirmKeepsEntries(t *testing.T) {
+	wsA, wsB := seedTwoWorkspaces(t)
+	infos, err := registry.ListInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := runPrune(&buf, strings.NewReader("n\n"), infos, false); err != nil {
+		t.Fatalf("runPrune: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "2 stopped entries") {
+		t.Errorf("missing dead-entry summary in output:\n%s", out)
+	}
+	if !strings.Contains(out, "Prune 2 stopped entries? [y/N]") {
+		t.Errorf("missing prompt in output:\n%s", out)
+	}
+	if !strings.Contains(out, "aborted; no entries pruned") {
+		t.Errorf("missing aborted-line in output:\n%s", out)
+	}
+	if strings.Contains(out, "pruned:") {
+		t.Errorf("output should not contain any pruned: lines:\n%s", out)
+	}
+
+	for _, cwd := range []string{wsA, wsB} {
+		if _, err := os.Stat(registry.EntryPath(cwd)); err != nil {
+			t.Errorf("entry for %s should still exist after abort; err=%v", cwd, err)
+		}
+	}
+}
+
+// TestRunPrune_EmptyRegistryNoOp pins the friendly-no-op path. An empty
+// registry must exit 0 with a clear message rather than an error.
+func TestRunPrune_EmptyRegistryNoOp(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	infos, err := registry.ListInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := runPrune(&buf, strings.NewReader(""), infos, true); err != nil {
+		t.Fatalf("runPrune: %v", err)
+	}
+	if !strings.Contains(buf.String(), "no stopped entries to prune") {
+		t.Errorf("missing friendly no-op line:\n%s", buf.String())
+	}
+}
