@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	edgehub "github.com/danmestas/EdgeSync/hub"
 )
 
 // TestWaitOrTimeout_DoneClosed asserts the bounded-wait helper returns
@@ -82,17 +84,7 @@ func TestRunForeground_SeedFailureCleansSidecars(t *testing.T) {
 
 	orig := seedHubRepoFunc
 	defer func() { seedHubRepoFunc = orig }()
-	seedHubRepoFunc = func(p paths) error {
-		// Simulate libfossil partial init: a 0-byte hub.fossil and the
-		// SQLite -shm / -wal sidecars land before schema apply errors.
-		if err := os.WriteFile(p.hubRepo, []byte{}, 0o644); err != nil {
-			return err
-		}
-		for _, suffix := range []string{"-shm", "-wal"} {
-			if err := os.WriteFile(p.hubRepo+suffix, []byte{}, 0o644); err != nil {
-				return err
-			}
-		}
+	seedHubRepoFunc = func(_ context.Context, _ *edgehub.Hub, p paths) error {
 		return errors.New("synthetic seed failure")
 	}
 
@@ -106,7 +98,9 @@ func TestRunForeground_SeedFailureCleansSidecars(t *testing.T) {
 
 	// hub.fossil and its -shm/-wal sidecars must all be cleaned so the
 	// next bones hub start does not hit SQLITE_IOERR_SHORT_READ on
-	// stale journal state.
+	// stale journal state. NewHub creates hub.fossil before
+	// seedHubRepoFunc runs; runForeground's seed-failure branch calls
+	// h.Stop() (closing the libfossil handle) then removeRepoAndSidecars.
 	leftovers := []string{p.hubRepo, p.hubRepo + "-shm", p.hubRepo + "-wal"}
 	for _, path := range leftovers {
 		if _, statErr := os.Stat(path); statErr == nil {
@@ -118,10 +112,12 @@ func TestRunForeground_SeedFailureCleansSidecars(t *testing.T) {
 	}
 }
 
-// TestRunForeground_FreshStartCleansStaleSidecars asserts the
-// pre-seed cleanup at the top of runForeground also removes
-// SQLite sidecars left from a prior crash. Otherwise the very next
-// seedHubRepo call inherits stale WAL state and reports a short-read.
+// TestRunForeground_FreshStartCleansStaleSidecars asserts that stale
+// SQLite sidecars from a prior crashed run don't poison the next
+// startup with SQLITE_IOERR_SHORT_READ (522). runForeground's
+// pre-NewHub cleanup (removeRepoAndSidecars when fossil.pid is dead)
+// removes them before edgehub.NewHub opens the repo, so NewHub
+// succeeds and the synthetic seed-failure path runs cleanly.
 // See issue #138.
 func TestRunForeground_FreshStartCleansStaleSidecars(t *testing.T) {
 	root := t.TempDir()
@@ -134,31 +130,28 @@ func TestRunForeground_FreshStartCleansStaleSidecars(t *testing.T) {
 	}
 
 	// Plant stale sidecars from a prior failed run. No fossil.pid → the
-	// fresh-start branch should fire and wipe them.
+	// fresh-start branch should fire and wipe them before NewHub runs.
 	for _, suffix := range []string{"-shm", "-wal"} {
 		if err := os.WriteFile(p.hubRepo+suffix, []byte("stale"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	// Replace seed with one that observes whether the sidecars are
-	// gone by the time it's invoked. Returns an error to keep the rest
-	// of runForeground from spinning up real servers.
+	// Synthetic seed failure to keep the rest of runForeground from
+	// spinning up real servers. The interesting assertion is that
+	// runForeground reaches the seed step at all (it would have failed
+	// inside NewHub with SQLITE_IOERR_SHORT_READ if cleanup hadn't run).
 	orig := seedHubRepoFunc
 	defer func() { seedHubRepoFunc = orig }()
-	var sawSidecars bool
-	seedHubRepoFunc = func(p paths) error {
-		for _, suffix := range []string{"-shm", "-wal"} {
-			if _, err := os.Stat(p.hubRepo + suffix); err == nil {
-				sawSidecars = true
-			}
-		}
+	seedHubRepoFunc = func(_ context.Context, _ *edgehub.Hub, p paths) error {
 		return errors.New("synthetic post-cleanup seed failure")
 	}
 
-	_ = runForeground(context.Background(), p, opts{})
-	if sawSidecars {
-		t.Fatal("fresh-start should remove stale -shm/-wal before seedHubRepo " +
-			"runs; sidecars still present")
+	err = runForeground(context.Background(), p, opts{})
+	if err == nil {
+		t.Fatal("expected seed-failure error")
+	}
+	if !strings.Contains(err.Error(), "synthetic post-cleanup seed failure") {
+		t.Fatalf("expected synthetic seed-failure error, got: %v", err)
 	}
 }

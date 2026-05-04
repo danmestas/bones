@@ -13,9 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/danmestas/libfossil"
-	_ "github.com/danmestas/libfossil/db/driver/modernc"
-	natsserver "github.com/nats-io/nats-server/v2/server"
+	edgehub "github.com/danmestas/EdgeSync/hub"
 
 	"github.com/danmestas/bones/internal/registry"
 	"github.com/danmestas/bones/internal/slotgc"
@@ -186,89 +184,100 @@ func Start(ctx context.Context, root string, options ...Option) (err error) {
 func runForeground(ctx context.Context, p paths, o opts) error {
 	// Fresh-start detection (ADR 0023): if no fossil PID is alive,
 	// wipe stale checkout state so each session starts from a clean
-	// substrate. Working-tree files are untouched.
-	//
-	// SQLite -shm and -wal sidecars are part of "stale checkout state":
-	// when a prior run crashed mid-seed, libfossil leaves a 0-byte WAL
-	// and a populated SHM. The next CreateWithEnv hits
-	// SQLITE_IOERR_SHORT_READ (522) on those orphan blocks. See #138.
+	// substrate. Working-tree files are untouched. SQLite -shm and -wal
+	// sidecars are part of stale state — without removing them, the
+	// next bootstrap hits SQLITE_IOERR_SHORT_READ (522). See #138.
 	if !pidIsLive(p.fossilPid) {
 		removeRepoAndSidecars(p)
 	}
-
+	if err := os.MkdirAll(p.natsStore, 0o755); err != nil {
+		return fmt.Errorf("hub: nats store dir: %w", err)
+	}
+	freshSeed := false
 	if _, err := os.Stat(p.hubRepo); errors.Is(err, os.ErrNotExist) {
-		if err := seedHubRepoFunc(p); err != nil {
-			// Roll back any partial repo state — libfossil may have
-			// created hub.fossil and/or its -shm/-wal sidecars before
-			// the schema apply step that failed. Leaving those in
-			// place poisons the next bones hub start (#138).
-			removeRepoAndSidecars(p)
-			return fmt.Errorf("hub: seed: %w", err)
-		}
+		freshSeed = true
 	}
-
-	fossilCancel, fossilDone, err := startFossil(p, o.fossilPort)
+	h, err := openAndSeedHub(ctx, p, o, freshSeed)
 	if err != nil {
-		return fmt.Errorf("hub: fossil: %w", err)
+		return err
 	}
-
-	natsSrv, err := startNATS(p, o.natsPort)
-	if err != nil {
-		fossilCancel()
-		<-fossilDone
+	if err := writePid(p.fossilPid, os.Getpid()); err != nil {
+		_ = h.Stop()
+		return fmt.Errorf("hub: write fossil.pid: %w", err)
+	}
+	if err := writePid(p.natsPid, os.Getpid()); err != nil {
 		_ = os.Remove(p.fossilPid)
-		return fmt.Errorf("hub: nats: %w", err)
+		_ = h.Stop()
+		return fmt.Errorf("hub: write nats.pid: %w", err)
 	}
-
-	fmt.Printf("hub: fossil at http://127.0.0.1:%d, nats at nats://127.0.0.1:%d\n",
-		o.fossilPort, o.natsPort)
-
-	// Record this workspace in the cross-workspace registry so
-	// `bones status --all` can discover running hubs. Non-fatal: the hub
-	// still works without registry visibility.
+	httpDone := make(chan struct{})
+	httpCtx, httpCancel := context.WithCancel(context.Background())
+	go func() {
+		defer close(httpDone)
+		_ = h.ServeHTTP(httpCtx)
+	}()
+	fmt.Printf("hub: fossil at %s, nats at %s\n", h.HTTPAddr(), h.NATSURL())
 	if err := registry.Write(registry.Entry{
 		Cwd:       p.root,
 		Name:      filepath.Base(p.root),
-		HubURL:    fmt.Sprintf("http://127.0.0.1:%d", o.fossilPort),
-		NATSURL:   fmt.Sprintf("nats://127.0.0.1:%d", o.natsPort),
+		HubURL:    "http://" + h.HTTPAddr(),
+		NATSURL:   h.NATSURL(),
 		HubPID:    os.Getpid(),
 		StartedAt: time.Now().UTC(),
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "hub: registry write failed (non-fatal): %v\n", err)
 	}
-
 	<-ctx.Done()
-	fossilCancel()
-	natsSrv.Shutdown()
-
-	// Bound both drain waits so a stuck NATS connection (no leaf to
-	// disconnect) or a wedged Fossil checkpoint cannot keep this
-	// process alive forever (#158). On timeout, abandon the wait,
-	// log the forced exit, and propagate errDrainTimeout so the CLI
-	// exits non-zero.
-	natsDone := make(chan struct{})
-	go func() {
-		natsSrv.WaitForShutdown()
-		close(natsDone)
-	}()
-
-	var drainErr error
-	if err := waitOrTimeout(natsDone, o.drainTimeout); err != nil {
-		fmt.Fprintf(os.Stderr,
-			"hub: nats shutdown exceeded %s; forcing exit (#158)\n",
-			effectiveDrainTimeout(o.drainTimeout))
-		drainErr = err
-	}
-	if err := waitOrTimeout(fossilDone, o.drainTimeout); err != nil {
-		fmt.Fprintf(os.Stderr,
-			"hub: fossil drain exceeded %s; forcing exit (#158)\n",
-			effectiveDrainTimeout(o.drainTimeout))
-		drainErr = err
-	}
-
+	httpCancel()
+	drainErr := drainHub(h, httpDone, o.drainTimeout)
 	_ = os.Remove(p.fossilPid)
 	_ = os.Remove(p.natsPid)
 	return drainErr
+}
+
+// openAndSeedHub brings up the EdgeSync hub and seeds the repo if
+// freshSeed is true. On any failure the partial state is rolled back.
+func openAndSeedHub(
+	ctx context.Context, p paths, o opts, freshSeed bool,
+) (*edgehub.Hub, error) {
+	h, err := edgehub.NewHub(ctx, edgehub.Config{
+		RepoPath:       p.hubRepo,
+		BootstrapUser:  "orchestrator",
+		NATSStoreDir:   p.natsStore,
+		FossilHTTPPort: o.fossilPort,
+		NATSClientPort: o.natsPort,
+	})
+	if err != nil {
+		removeRepoAndSidecars(p)
+		return nil, fmt.Errorf("hub: %w", err)
+	}
+	if freshSeed {
+		if err := seedHubRepoFunc(ctx, h, p); err != nil {
+			_ = h.Stop()
+			removeRepoAndSidecars(p)
+			return nil, fmt.Errorf("hub: seed: %w", err)
+		}
+	}
+	return h, nil
+}
+
+// drainHub stops the hub and waits for ServeHTTP to exit, bounded by
+// drainTimeout. On timeout, abandons the wait, logs the forced exit,
+// and returns errDrainTimeout so the CLI exits non-zero (#158).
+func drainHub(h *edgehub.Hub, httpDone <-chan struct{}, drainTimeout time.Duration) error {
+	hubDone := make(chan struct{})
+	go func() {
+		_ = h.Stop()
+		<-httpDone
+		close(hubDone)
+	}()
+	if err := waitOrTimeout(hubDone, drainTimeout); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"hub: shutdown exceeded %s; forcing exit (#158)\n",
+			effectiveDrainTimeout(drainTimeout))
+		return err
+	}
+	return nil
 }
 
 // effectiveDrainTimeout returns d when positive, otherwise the package
@@ -686,6 +695,22 @@ func writePid(pidFile string, pid int) error {
 // SQLite sidecars). Production code reaches the real implementation.
 var seedHubRepoFunc = seedHubRepo
 
+// waitForTCP polls addr until something is accepting connections or
+// timeout elapses. Used for detach-mode parent-side readiness probes
+// against the child's fossil HTTP and NATS listeners.
+func waitForTCP(addr string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, pollInterval)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		time.Sleep(pollInterval)
+	}
+	return fmt.Errorf("timeout waiting for %s after %s", addr, timeout)
+}
+
 // removeRepoAndSidecars deletes the hub.fossil file and its SQLite
 // -shm / -wal sidecars together. The three travel as a unit: deleting
 // only hub.fossil leaves the sidecars to poison the next CreateWithEnv
@@ -702,50 +727,34 @@ func removeRepoAndSidecars(p paths) {
 	}
 }
 
-func seedHubRepo(p paths) error {
-	r, err := libfossil.Create(p.hubRepo, libfossil.CreateOpts{User: "orchestrator"})
-	if err != nil {
-		return fmt.Errorf("create repo: %w", err)
-	}
-	_ = r.Close()
-
+func seedHubRepo(ctx context.Context, h *edgehub.Hub, p paths) error {
 	files, err := gitTrackedFiles(p.root)
 	if err != nil {
-		_ = os.Remove(p.hubRepo)
 		return err
 	}
 	if len(files) == 0 {
-		_ = os.Remove(p.hubRepo)
 		return errors.New("no git-tracked files to seed from")
 	}
 
 	shortSHA, err := gitShortSHA(p.root)
 	if err != nil {
-		_ = os.Remove(p.hubRepo)
 		return err
 	}
-
-	repo, err := libfossil.Open(p.hubRepo)
-	if err != nil {
-		return fmt.Errorf("reopen repo: %w", err)
-	}
-	defer func() { _ = repo.Close() }()
 
 	// Build FileToCommit list from every tracked path. Reading every
 	// file into memory mirrors the bash flow (xargs fossil add); for
 	// the workspace sizes we target (single repo, hundreds of MB at
-	// most) this is fine. If it ever isn't, switch to OpenCheckout +
-	// Add + Checkin which streams off disk.
-	commitFiles := make([]libfossil.FileToCommit, 0, len(files))
+	// most) this is fine.
+	commitFiles := make([]edgehub.FileToCommit, 0, len(files))
 	for _, rel := range files {
 		abs := filepath.Join(p.root, rel)
 		info, err := os.Lstat(abs)
 		if err != nil {
 			return fmt.Errorf("stat %s: %w", rel, err)
 		}
-		// Skip symlinks and non-regular files: libfossil's commit path
-		// expects bytes, and the bash script's `fossil add` handled
-		// these as a no-op via fossil's own filters.
+		// Skip symlinks and non-regular files; the bash script's
+		// `fossil add` handled these as a no-op via fossil's own
+		// filters.
 		if !info.Mode().IsRegular() {
 			continue
 		}
@@ -757,17 +766,17 @@ func seedHubRepo(p paths) error {
 		if info.Mode()&0o111 != 0 {
 			perm = "x"
 		}
-		commitFiles = append(commitFiles, libfossil.FileToCommit{
+		commitFiles = append(commitFiles, edgehub.FileToCommit{
 			Name:    rel,
 			Content: data,
 			Perm:    perm,
 		})
 	}
 
-	_, _, err = repo.Commit(libfossil.CommitOpts{
+	_, err = h.Commit(ctx, edgehub.CommitOpts{
 		Files:   commitFiles,
-		Comment: fmt.Sprintf("session base: %s", shortSHA),
-		User:    "orchestrator",
+		Message: fmt.Sprintf("session base: %s", shortSHA),
+		Author:  "orchestrator",
 		Time:    time.Now().UTC(),
 	})
 	if err != nil {
@@ -837,119 +846,3 @@ func gitShortSHA(root string) (string, error) {
 // Returns a cancel func that stops the server, a done channel that
 // closes when the server goroutine exits, and the readiness check has
 // already succeeded by the time this returns.
-func startFossil(p paths, port int) (cancel context.CancelFunc, done chan struct{}, err error) {
-	repo, err := libfossil.Open(p.hubRepo)
-	if err != nil {
-		return nil, nil, fmt.Errorf("open repo: %w", err)
-	}
-
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	ctx, cancelFn := context.WithCancel(context.Background())
-	done = make(chan struct{})
-
-	// libfossil.ServeHTTP blocks until ctx is canceled. Run it in a
-	// goroutine and probe the listener for readiness.
-	go func() {
-		defer close(done)
-		defer func() { _ = repo.Close() }()
-		_ = repo.ServeHTTP(ctx, addr)
-	}()
-
-	if err := waitForTCP(addr, readyTimeout); err != nil {
-		cancelFn()
-		<-done
-		return nil, nil, fmt.Errorf("fossil readiness: %w", err)
-	}
-
-	if err := writePid(p.fossilPid, os.Getpid()); err != nil {
-		cancelFn()
-		<-done
-		return nil, nil, fmt.Errorf("write fossil.pid: %w", err)
-	}
-	return cancelFn, done, nil
-}
-
-// startNATS launches an embedded NATS server with JetStream rooted at
-// p.natsStore. Equivalent to `nats-server -js -p <port>`. The store
-// directory persists across hub restarts so JetStream streams survive a
-// reopen — the bash flow relied on the OS process owning that state.
-//
-// Retries readiness up to natsBootstrapAttempts times with exponential
-// backoff between attempts (ADR 0034). The single-attempt 5s probe in
-// the original implementation was the documented cause of operators
-// believing bones was unreliable on loaded machines.
-func startNATS(p paths, port int) (*natsserver.Server, error) {
-	if err := os.MkdirAll(p.natsStore, 0o755); err != nil {
-		return nil, fmt.Errorf("nats store dir: %w", err)
-	}
-	opts := &natsserver.Options{
-		Host:      "127.0.0.1",
-		Port:      port,
-		JetStream: true,
-		StoreDir:  p.natsStore,
-		// Use a stable name so JetStream metadata is reusable across
-		// restarts. NoLog/NoSigs differ from the test fixture: this is
-		// a daemon, not a test server, so we want logs and we don't
-		// want NATS to install signal handlers (the parent process owns
-		// shutdown via Stop / ctx).
-		NoSigs:     true,
-		ServerName: "bones-hub",
-	}
-
-	backoff := natsBootstrapBackoff
-	var lastErr error
-	for attempt := 1; attempt <= natsBootstrapAttempts; attempt++ {
-		srv, err := tryStartNATS(opts, p)
-		if err == nil {
-			return srv, nil
-		}
-		lastErr = err
-		if attempt < natsBootstrapAttempts {
-			time.Sleep(backoff)
-			backoff *= 2
-		}
-	}
-	return nil, fmt.Errorf("nats bootstrap failed after %d attempts: %w",
-		natsBootstrapAttempts, lastErr)
-}
-
-// tryStartNATS performs one bootstrap attempt. Caller retries on
-// failure. A failed attempt fully tears down the server so the
-// retry sees a clean state; this is correct because NATS holds
-// listening sockets that would otherwise block the next attempt.
-func tryStartNATS(opts *natsserver.Options, p paths) (*natsserver.Server, error) {
-	srv, err := natsserver.NewServer(opts)
-	if err != nil {
-		return nil, fmt.Errorf("new server: %w", err)
-	}
-
-	go srv.Start()
-	if !srv.ReadyForConnections(readyTimeout) {
-		srv.Shutdown()
-		srv.WaitForShutdown()
-		return nil, fmt.Errorf("nats not ready within %s", readyTimeout)
-	}
-	if err := writePid(p.natsPid, os.Getpid()); err != nil {
-		srv.Shutdown()
-		srv.WaitForShutdown()
-		return nil, fmt.Errorf("write nats.pid: %w", err)
-	}
-	return srv, nil
-}
-
-// waitForTCP polls addr until something is accepting connections or
-// timeout elapses. Used as the fossil-server readiness probe; libfossil
-// does not currently expose a ReadyForConnections-style hook so we
-// dial-test instead.
-func waitForTCP(addr string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, pollInterval)
-		if err == nil {
-			_ = conn.Close()
-			return nil
-		}
-		time.Sleep(pollInterval)
-	}
-	return fmt.Errorf("timeout waiting for %s after %s", addr, timeout)
-}

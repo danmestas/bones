@@ -10,12 +10,6 @@ import (
 	"time"
 
 	"github.com/danmestas/EdgeSync/leaf/agent"
-	"github.com/danmestas/libfossil"
-	// modernc SQLite driver, registered for libfossil.Clone in
-	// OpenLeaf's pre-agent clone path. The rest of the package goes
-	// through the EdgeSync agent, which manages its own driver
-	// registration internally.
-	_ "github.com/danmestas/libfossil/db/driver/modernc"
 
 	"github.com/danmestas/bones/internal/assert"
 )
@@ -187,28 +181,13 @@ func OpenLeaf(ctx context.Context, cfg LeafConfig) (*Leaf, error) {
 	repoPath := filepath.Join(slotDir, "leaf.fossil")
 	wtPath := filepath.Join(slotDir, "wt")
 
-	// Clone the hub repo at OpenLeaf time so leaf.fossil and hub.fossil
+	// agent.New clones from hubHTTPAddr when leaf.fossil doesn't exist
+	// (CloneFromHubURL config field), so leaf.fossil and hub.fossil
 	// share the same project-code. NATS sync subjects are
 	// "<prefix>.<project-code>.sync"; without matching codes the hub's
 	// serve-nats subscriber and the leaf's sync publisher land on
 	// different subjects and the leaf gets "no responders" errors.
-	// Idempotent: skip the clone if leaf.fossil already exists.
-	if _, err := os.Stat(repoPath); os.IsNotExist(err) {
-		// Clone with no User so libfossil skips the login card and the
-		// hub authenticates as "nobody" (which OpenHub grants 'gio').
-		// Passing User: slotID would emit a login card the hub can't
-		// verify (slotID isn't in the user table) and clone fails with
-		// "authentication failed". See internal/sync/clone.go round-1
-		// login-card logic.
-		transport := libfossil.NewHTTPTransport(hubHTTPAddr)
-		r, _, cerr := libfossil.Clone(ctx, repoPath, transport, libfossil.CloneOpts{})
-		if cerr != nil {
-			return nil, fmt.Errorf("coord.OpenLeaf: clone hub: %w", cerr)
-		}
-		_ = r.Close()
-	}
-
-	a, err := startLeafAgent(cfg, repoPath, hubNATSUpstream)
+	a, err := startLeafAgent(cfg, repoPath, hubNATSUpstream, hubHTTPAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -241,24 +220,27 @@ func OpenLeaf(ctx context.Context, cfg LeafConfig) (*Leaf, error) {
 }
 
 // startLeafAgent constructs and starts the agent.Agent that owns the
-// leaf's repo. EdgeSync v0.0.10's agent.New applies the busy_timeout
-// PRAGMA internally (and deliberately does NOT cap MaxOpenConns(1) —
-// see EdgeSync#120 for the deadlock that capping caused), so bones no
-// longer reaches into the SQLite handle from this layer.
+// leaf's repo. agent.New applies SQLite tuning internally and
+// (when CloneFromHubURL is set and RepoPath doesn't exist) clones the
+// repo from the hub before opening — so OpenLeaf no longer carries a
+// pre-agent libfossil.Clone step.
 //
-// FossilUser becomes the User field on sync handshakes. The earlier
-// clone is always unauthenticated ("nobody") regardless of
+// FossilUser becomes the User field on sync handshakes. The agent's
+// internal clone is always unauthenticated ("nobody") regardless of
 // FossilUser — SlotID isn't in the hub's user table and setting User
 // during clone would fail authentication. FossilUser only affects
 // post-clone sync sessions and Commit author attribution.
-func startLeafAgent(cfg LeafConfig, repoPath, hubNATSUpstream string) (*agent.Agent, error) {
+func startLeafAgent(
+	cfg LeafConfig, repoPath, hubNATSUpstream, hubHTTPAddr string,
+) (*agent.Agent, error) {
 	agentCfg := agent.Config{
-		RepoPath:     repoPath,
-		NATSUpstream: hubNATSUpstream,
-		PeerID:       cfg.SlotID,
-		Pull:         true,
-		Push:         true,
-		Autosync:     agent.AutosyncOff,
+		RepoPath:        repoPath,
+		CloneFromHubURL: hubHTTPAddr,
+		NATSUpstream:    hubNATSUpstream,
+		PeerID:          cfg.SlotID,
+		Pull:            true,
+		Push:            true,
+		Autosync:        agent.AutosyncOff,
 	}
 	if cfg.PollInterval != 0 {
 		agentCfg.PollInterval = cfg.PollInterval

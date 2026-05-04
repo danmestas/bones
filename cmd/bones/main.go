@@ -15,10 +15,10 @@ import (
 	"os"
 
 	"github.com/alecthomas/kong"
-	// libfossil's modernc SQLite driver. Registered here while bones
-	// still has two libfossil-direct sites (internal/hub/hub.go for the
-	// production daemon, internal/coord/leaf.go's OpenLeaf clone path).
-	// Drops when those migrate too.
+	// modernc SQLite driver — registered here so libfossil (transitive
+	// via EdgeSync's hub and agent packages) finds a driver at runtime.
+	// EdgeSync's library packages don't auto-register; downstream binary
+	// callers do. Tests register via internal/{coord,hub}/driver_test.go.
 	_ "github.com/danmestas/libfossil/db/driver/modernc"
 
 	"github.com/danmestas/bones/internal/telemetry"
