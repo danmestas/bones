@@ -741,6 +741,27 @@ func TestCLI_Prime(t *testing.T) {
 	}
 	dir := newWorkspace(t)
 
+	t.Run("json_zero_tasks_envelope", func(t *testing.T) {
+		// #170: even with zero tasks, the envelope must be present
+		// so the SessionStart hook injects a "bones is active"
+		// signal into agent context.
+		stdout, stderr, code := runCmd(t, bonesBin, dir, "tasks", "prime", "--json")
+		if code != 0 {
+			t.Fatalf("prime --json exit=%d stderr=%s", code, stderr)
+		}
+		if len(strings.TrimSpace(stdout)) == 0 {
+			t.Fatalf("zero-tasks prime emitted empty stdout; want envelope")
+		}
+		for _, key := range []string{
+			`"open_tasks"`, `"ready_tasks"`, `"claimed_tasks"`,
+			`"threads"`, `"peers"`,
+		} {
+			if !strings.Contains(stdout, key) {
+				t.Errorf("envelope missing %s; got=%q", key, stdout)
+			}
+		}
+	})
+
 	out, _, code := runCmd(t, bonesBin, dir, "tasks", "create", "prime task")
 	if code != 0 {
 		t.Fatalf("seed create failed code=%d", code)
