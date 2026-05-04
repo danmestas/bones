@@ -572,7 +572,7 @@ func TestEnsureGitignoreEntries_FreshFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{".fslckout", ".fossil-settings/", ".bones/", "chat.fossil"} {
+	for _, want := range []string{".fslckout", ".fossil-settings/", ".bones/"} {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("missing %q\n%s", want, data)
 		}
@@ -581,6 +581,13 @@ func TestEnsureGitignoreEntries_FreshFile(t *testing.T) {
 	// included in the gitignore entry list.
 	if strings.Contains(string(data), ".orchestrator/") {
 		t.Errorf(".orchestrator/ should not be in gitignore post-ADR-0041\n%s", data)
+	}
+	// chat.fossil moved under .bones/ (issues #167, #168). The standalone
+	// gitignore entry is no longer needed since `.bones/` covers it; an
+	// orphaned `chat.fossil` entry would imply chat.fossil is still at
+	// the workspace root.
+	if strings.Contains(string(data), "\nchat.fossil\n") {
+		t.Errorf("standalone chat.fossil entry should be gone post #167/#168\n%s", data)
 	}
 }
 

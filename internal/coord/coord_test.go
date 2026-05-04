@@ -3,6 +3,7 @@ package coord
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -243,4 +244,104 @@ func TestAsk_InvariantPanics(t *testing.T) {
 			_, _ = c.Ask(context.Background(), "peer", "")
 		}, "question is empty")
 	})
+}
+
+// TestOpen_AutoCreatesChatFossilParentDir covers issue #167: callers
+// pass a ChatFossilRepoPath whose parent directory may not yet exist
+// (e.g., `<workspace>/.bones/chat.fossil` on a fresh init). Open is
+// responsible for ensuring the parent dir exists so the underlying
+// libfossil.Create can land the file.
+func TestOpen_AutoCreatesChatFossilParentDir(t *testing.T) {
+	nc, _ := natstest.NewJetStreamServer(t)
+	cfg := validConfigWithURL(t, nc.ConnectedUrl())
+
+	// Point ChatFossilRepoPath at a path whose parent does NOT exist
+	// yet — the typical "fresh workspace" shape with `.bones/`
+	// half-initialized.
+	parent := filepath.Join(t.TempDir(), "missing-parent")
+	cfg.ChatFossilRepoPath = filepath.Join(parent, "chat.fossil")
+
+	c, err := Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Open: unexpected error: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+
+	if _, err := os.Stat(cfg.ChatFossilRepoPath); err != nil {
+		t.Fatalf("chat.fossil not created at %q: %v", cfg.ChatFossilRepoPath, err)
+	}
+}
+
+// TestOpen_RecreatesMissingChatFossil covers issue #167: an operator
+// who has deleted `<workspace>/.bones/chat.fossil` should not see a
+// permanent breakage. Re-opening the same config must idempotently
+// re-init the fossil DB.
+func TestOpen_RecreatesMissingChatFossil(t *testing.T) {
+	nc, _ := natstest.NewJetStreamServer(t)
+	cfg := validConfigWithURL(t, nc.ConnectedUrl())
+
+	// First Open creates the file.
+	c1, err := Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("first Open: %v", err)
+	}
+	if err := c1.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if _, err := os.Stat(cfg.ChatFossilRepoPath); err != nil {
+		t.Fatalf("chat.fossil missing after first Open: %v", err)
+	}
+
+	// Operator deletes chat.fossil.
+	if err := os.Remove(cfg.ChatFossilRepoPath); err != nil {
+		t.Fatalf("rm chat.fossil: %v", err)
+	}
+
+	// Second Open should idempotently recreate it.
+	c2, err := Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("second Open after rm chat.fossil: %v", err)
+	}
+	t.Cleanup(func() { _ = c2.Close() })
+
+	if _, err := os.Stat(cfg.ChatFossilRepoPath); err != nil {
+		t.Fatalf("chat.fossil not recreated after second Open: %v", err)
+	}
+}
+
+// TestOpen_ChatFossilUnreadableErrorIncludesPath covers issue #167's
+// "better error message" requirement. When the chat.fossil path is
+// genuinely unrecoverable (here: the path points at a directory rather
+// than a fossil file), the returned error must name the path and hint
+// at remediation.
+func TestOpen_ChatFossilUnreadableErrorIncludesPath(t *testing.T) {
+	nc, _ := natstest.NewJetStreamServer(t)
+	cfg := validConfigWithURL(t, nc.ConnectedUrl())
+
+	// Force an unrecoverable shape: ChatFossilRepoPath points at a
+	// directory. libfossil.Open will fail and the wrap should mention
+	// both the path and the remediation hint.
+	dirPath := filepath.Join(t.TempDir(), "chat.fossil")
+	if err := os.MkdirAll(dirPath, 0o755); err != nil {
+		t.Fatalf("mkdir bogus chat.fossil dir: %v", err)
+	}
+	cfg.ChatFossilRepoPath = dirPath
+
+	_, err := Open(context.Background(), cfg)
+	if err == nil {
+		t.Fatalf("Open: expected error when chat.fossil path is a directory")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, dirPath) {
+		t.Errorf("error must name path %q; got %v", dirPath, err)
+	}
+	if !strings.Contains(msg, "missing or unreadable") {
+		t.Errorf("error must say 'missing or unreadable'; got %v", err)
+	}
+	if !strings.Contains(msg, "bones up") {
+		t.Errorf("error must hint at 'bones up'; got %v", err)
+	}
+	if !strings.Contains(msg, "bones doctor") {
+		t.Errorf("error must hint at 'bones doctor'; got %v", err)
+	}
 }
