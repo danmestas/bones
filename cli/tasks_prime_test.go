@@ -1,49 +1,67 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/danmestas/bones/internal/coord"
 )
 
-// TestIsEmptyPrime_AllEmpty pins the no-noise case: zero of
-// everything (no peers either) is empty.
-func TestIsEmptyPrime_AllEmpty(t *testing.T) {
-	if !isEmptyPrime(coord.PrimeResult{}) {
-		t.Errorf("zero PrimeResult should be empty")
+// TestPrimeJSON_ZeroTasksEnvelope pins #170: when the workspace has
+// zero tasks, zero threads, and zero peers, `bones tasks prime --json`
+// must still emit a non-empty envelope so the SessionStart hook
+// injects a "bones is active here" signal into agent context.
+//
+// The envelope must round-trip with the documented top-level keys
+// — open_tasks, ready_tasks, claimed_tasks, threads, peers — and
+// each list must be a present empty array (not omitted, not null).
+func TestPrimeJSON_ZeroTasksEnvelope(t *testing.T) {
+	var buf bytes.Buffer
+	if err := emitJSON(&buf, primeToJSON(coord.PrimeResult{})); err != nil {
+		t.Fatalf("emitJSON: %v", err)
+	}
+
+	if buf.Len() == 0 {
+		t.Fatalf("zero-tasks prime emitted empty stdout; want envelope")
+	}
+
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal envelope: %v\npayload=%q", err, buf.String())
+	}
+
+	for _, key := range []string{
+		"open_tasks", "ready_tasks", "claimed_tasks", "threads", "peers",
+	} {
+		raw, ok := got[key]
+		if !ok {
+			t.Errorf("envelope missing key %q; got=%q", key, buf.String())
+			continue
+		}
+		// Each list must serialize as an array (not null) so a
+		// downstream consumer can `.length` without a guard.
+		if string(raw) != "[]" {
+			t.Errorf("envelope key %q = %s, want []", key, raw)
+		}
 	}
 }
 
-// TestIsEmptyPrime_SelfOnlyPeers pins the documented edge case:
-// presence-of-self in the peers list isn't useful to attach, so
-// len(Peers) == 1 still counts as empty.
-func TestIsEmptyPrime_SelfOnlyPeers(t *testing.T) {
-	r := coord.PrimeResult{
-		Peers: make([]coord.Presence, 1),
-	}
-	if !isEmptyPrime(r) {
-		t.Errorf("self-only peers should still be empty")
-	}
-}
-
-// TestIsEmptyPrime_NonEmptyOpenTasks pins the negative case: a
-// single open task makes the result worth attaching.
-func TestIsEmptyPrime_NonEmptyOpenTasks(t *testing.T) {
+// TestPrimeJSON_PopulatedEnvelope guards the populated case so a
+// future refactor of primeToJSON keeps the documented keys.
+func TestPrimeJSON_PopulatedEnvelope(t *testing.T) {
+	var buf bytes.Buffer
 	r := coord.PrimeResult{
 		OpenTasks: make([]coord.Task, 1),
 	}
-	if isEmptyPrime(r) {
-		t.Errorf("open tasks present, should not be empty")
+	if err := emitJSON(&buf, primeToJSON(r)); err != nil {
+		t.Fatalf("emitJSON: %v", err)
 	}
-}
-
-// TestIsEmptyPrime_TwoPeers pins the threshold: more than one peer
-// means at least one other agent is online — worth attaching.
-func TestIsEmptyPrime_TwoPeers(t *testing.T) {
-	r := coord.PrimeResult{
-		Peers: make([]coord.Presence, 2),
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
 	}
-	if isEmptyPrime(r) {
-		t.Errorf("two peers means another agent is online; not empty")
+	if _, ok := got["open_tasks"]; !ok {
+		t.Errorf("populated envelope missing open_tasks; got=%q", buf.String())
 	}
 }
