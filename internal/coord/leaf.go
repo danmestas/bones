@@ -330,16 +330,15 @@ func resolveHubAddrs(cfg LeafConfig) (upstream, natsClient, httpAddr string, err
 
 // openLeafCoord builds the *Coord that backs a Leaf's claim/task work.
 // The Coord's substrate is the same NATS the leaf agent points at.
-// CheckoutRoot/ChatFossilRepoPath are bound to the slot's directory
-// tree. There is no FossilRepoPath: the Coord substrate carries no
-// libfossil handle as of Task 10. Code-artifact commits go through
-// *Leaf, which writes via leaf.Agent's repo handle.
+// CheckoutRoot is bound to the slot's directory tree. Per ADR 0047
+// chat lives on a workspace-shared JetStream stream — no per-slot
+// chat.fossil. Code-artifact commits go through *Leaf, which writes
+// via leaf.Agent's repo handle.
 func openLeafCoord(ctx context.Context, slotID, natsURL, slotDir string) (*Coord, error) {
 	cfg := Config{
-		AgentID:            slotID + "-leaf",
-		NATSURL:            natsURL,
-		CheckoutRoot:       slotDir,
-		ChatFossilRepoPath: filepath.Join(slotDir, "chat.fossil"),
+		AgentID:      slotID + "-leaf",
+		NATSURL:      natsURL,
+		CheckoutRoot: slotDir,
 		// Tuning: zero — Open applies sane defaults via defaultTuning.
 	}
 	return Open(ctx, cfg)

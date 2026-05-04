@@ -5,8 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/EdgeSync/leaf/agent/notify"
-
+	"github.com/danmestas/bones/internal/chat"
 	"github.com/danmestas/bones/internal/testutil/natstest"
 )
 
@@ -116,17 +115,17 @@ bWait:
 // the REACT prefix; any colons inside the reaction content are part of
 // the reaction. This is the substrate-edge unit test that guards the
 // encoding rule from drift.
-func TestReactionFromMessage_ColonInReaction(t *testing.T) {
-	msg := notify.Message{
+func TestReactionFromEnvelope_ColonInReaction(t *testing.T) {
+	env := chat.Envelope{
 		ID:        "msg-test-full-uuid-0001",
-		Thread:    "thread-test-uuid-0001",
+		Thread:    "abc12345",
 		From:      "agent-A",
 		Body:      "REACT:msg-target-id:one:two:three",
 		Timestamp: time.Now().UTC(),
 	}
-	r, ok := reactionFromMessage(msg)
+	r, ok := reactionFromEnvelope(env)
 	if !ok {
-		t.Fatalf("reactionFromMessage: got ok=false, want true")
+		t.Fatalf("reactionFromEnvelope: got ok=false, want true")
 	}
 	if r.Target() != "msg-target-id" {
 		t.Fatalf("Target=%q, want msg-target-id", r.Target())
@@ -141,24 +140,24 @@ func TestReactionFromMessage_ColonInReaction(t *testing.T) {
 // malformed and must surface as a ChatMessage, not a dropped event.
 // Degradation beats silent loss — operators see the garbage in chat
 // and can trace it to a misbehaving publisher.
-func TestReactionFromMessage_MalformedFallsThrough(t *testing.T) {
-	msg := notify.Message{
+func TestReactionFromEnvelope_MalformedFallsThrough(t *testing.T) {
+	env := chat.Envelope{
 		ID:        "msg-test-malformed-0001",
-		Thread:    "thread-test-uuid-0001",
+		Thread:    "abc12345",
 		From:      "agent-A",
 		Body:      "REACT:no-second-colon-here",
 		Timestamp: time.Now().UTC(),
 	}
-	if _, ok := reactionFromMessage(msg); ok {
-		t.Fatalf("reactionFromMessage: got ok=true for malformed body")
+	if _, ok := reactionFromEnvelope(env); ok {
+		t.Fatalf("reactionFromEnvelope: got ok=true for malformed body")
 	}
-	evt := eventFromMessage(msg)
+	evt := eventFromEnvelope(env)
 	cm, isChat := evt.(ChatMessage)
 	if !isChat {
-		t.Fatalf("eventFromMessage: got %T, want ChatMessage", evt)
+		t.Fatalf("eventFromEnvelope: got %T, want ChatMessage", evt)
 	}
-	if cm.Body() != msg.Body {
-		t.Fatalf("ChatMessage.Body=%q, want %q", cm.Body(), msg.Body)
+	if cm.Body() != env.Body {
+		t.Fatalf("ChatMessage.Body=%q, want %q", cm.Body(), env.Body)
 	}
 }
 

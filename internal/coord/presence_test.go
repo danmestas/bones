@@ -2,7 +2,6 @@ package coord
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,17 +10,14 @@ import (
 
 // presenceCfgForAgent returns a validConfigWithURL tweaked for a
 // second agent on the same substrate: new AgentID and a namespaced
-// ChatFossilRepoPath so two Coords on one tempdir don't collide on
-// the Fossil repo.
+// per ADR 0047 chat lives on a workspace-shared JetStream stream, so
+// per-agent Coords share the chat stream without colliding.
 func presenceCfgForAgent(
 	t *testing.T, url, agentID string,
 ) Config {
 	t.Helper()
 	cfg := validConfigWithURL(t, url)
 	cfg.AgentID = agentID
-	cfg.ChatFossilRepoPath = filepath.Join(
-		t.TempDir(), agentID+"-chat.fossil",
-	)
 	return cfg
 }
 

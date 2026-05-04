@@ -34,19 +34,20 @@ const (
 	threadChat = "harness.chat"
 )
 
-// newConfig builds a coord.Config for a role. Per-coord
-// ChatFossilRepoPath and CheckoutRoot are distinct so two children
-// running in the same workspace do not collide on chat repo / checkout
-// state. This harness tests Phase 3+4 primitives and does not exercise
-// any code-artifact write path, so no per-coord FossilRepoPath is
-// needed (Task 10 of the EdgeSync refactor removed it from Config).
-func newConfig(agentID, natsURL, chatRepo, checkoutRoot string) coord.Config {
+// newConfig builds a coord.Config for a role. Per-coord CheckoutRoot
+// is distinct so two children running in the same workspace do not
+// collide on checkout state. Per ADR 0047 chat lives on a workspace-
+// shared JetStream stream — no per-coord chat fossil. This harness
+// tests Phase 3+4 primitives and does not exercise any code-artifact
+// write path, so no per-coord FossilRepoPath is needed.
+func newConfig(agentID, natsURL, _, checkoutRoot string) coord.Config {
 	return coord.Config{
-		AgentID:            agentID,
-		NATSURL:            natsURL,
-		ChatFossilRepoPath: chatRepo,
-		CheckoutRoot:       checkoutRoot,
+		AgentID:      agentID,
+		NATSURL:      natsURL,
+		CheckoutRoot: checkoutRoot,
 		// Tuning: zero — coord.Open fills sane defaults via defaultTuning.
+		// Per ADR 0047 chat lives on a JetStream stream; no chatRepo
+		// path needed (parameter retained for caller compat).
 	}
 }
 

@@ -5,12 +5,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danmestas/EdgeSync/leaf/agent/notify"
+	"github.com/danmestas/bones/internal/chat"
 )
 
-// reactionBodyPrefix is the in-band tag that marks a notify.Message as
+// reactionBodyPrefix is the in-band tag that marks a chat.Envelope as
 // a reaction rather than a chat post. Bodies that start with this
-// prefix are translated into Reaction events by eventFromMessage;
+// prefix are translated into Reaction events by eventFromEnvelope;
 // every other body surfaces as ChatMessage. Kept private because the
 // encoding is a substrate detail per ADR 0003 — callers React and
 // receive Reaction, they never observe the wire format.
@@ -84,8 +84,8 @@ func (m ChatMessage) Timestamp() time.Time { return m.timestamp }
 // or the empty string for a top-level post.
 func (m ChatMessage) ReplyTo() string { return m.replyTo }
 
-// eventFromMessage translates a substrate notify.Message into the
-// public coord event. Unexported so notify.Message never crosses the
+// eventFromEnvelope translates a substrate chat.Envelope into the
+// public coord event. Unexported so chat.Envelope never crosses the
 // package boundary per ADR 0003. Mirrors the taskFromRecord helper in
 // coord/types.go.
 //
@@ -93,20 +93,20 @@ func (m ChatMessage) ReplyTo() string { return m.replyTo }
 // malformed REACT body (missing the second colon) surfaces as an
 // ordinary ChatMessage, so garbage on the wire degrades to a visible
 // chat post rather than being silently dropped.
-func eventFromMessage(msg notify.Message) Event {
-	if m, ok := mediaFromMessage(msg); ok {
+func eventFromEnvelope(env chat.Envelope) Event {
+	if m, ok := mediaFromEnvelope(env); ok {
 		return m
 	}
-	if r, ok := reactionFromMessage(msg); ok {
+	if r, ok := reactionFromEnvelope(env); ok {
 		return r
 	}
 	return ChatMessage{
-		from:      msg.From,
-		thread:    msg.ThreadShort(),
-		messageID: msg.ID,
-		body:      msg.Body,
-		timestamp: msg.Timestamp,
-		replyTo:   msg.ReplyTo,
+		from:      env.From,
+		thread:    env.Thread,
+		messageID: env.ID,
+		body:      env.Body,
+		timestamp: env.Timestamp,
+		replyTo:   env.ReplyTo,
 	}
 }
 
@@ -153,29 +153,29 @@ func (r Reaction) Body() string { return r.reaction }
 // Timestamp returns the UTC wall-clock time the reaction was created.
 func (r Reaction) Timestamp() time.Time { return r.timestamp }
 
-// reactionFromMessage parses a notify.Message into a Reaction when its
+// reactionFromEnvelope parses a chat.Envelope into a Reaction when its
 // body matches the REACT-prefix encoding. The format is
 // "REACT:<messageID>:<reaction>" — the first colon after the prefix
 // splits target from reaction content, so a reaction payload may itself
 // contain colons without ambiguity. A body that starts with the prefix
 // but lacks a second colon is treated as malformed and returns
-// (Reaction{}, false), letting eventFromMessage fall through to
+// (Reaction{}, false), letting eventFromEnvelope fall through to
 // ChatMessage translation.
-func reactionFromMessage(msg notify.Message) (Reaction, bool) {
-	if !strings.HasPrefix(msg.Body, reactionBodyPrefix) {
+func reactionFromEnvelope(env chat.Envelope) (Reaction, bool) {
+	if !strings.HasPrefix(env.Body, reactionBodyPrefix) {
 		return Reaction{}, false
 	}
-	rest := msg.Body[len(reactionBodyPrefix):]
+	rest := env.Body[len(reactionBodyPrefix):]
 	idx := strings.IndexByte(rest, ':')
 	if idx < 0 {
 		return Reaction{}, false
 	}
 	return Reaction{
-		from:      msg.From,
-		thread:    msg.ThreadShort(),
+		from:      env.From,
+		thread:    env.Thread,
 		target:    rest[:idx],
 		reaction:  rest[idx+1:],
-		timestamp: msg.Timestamp,
+		timestamp: env.Timestamp,
 	}, true
 }
 
@@ -210,25 +210,25 @@ type mediaEnvelope struct {
 	Size     int    `json:"size"`
 }
 
-func mediaFromMessage(msg notify.Message) (MediaMessage, bool) {
-	if !strings.HasPrefix(msg.Body, mediaBodyPrefix) {
+func mediaFromEnvelope(env chat.Envelope) (MediaMessage, bool) {
+	if !strings.HasPrefix(env.Body, mediaBodyPrefix) {
 		return MediaMessage{}, false
 	}
-	var env mediaEnvelope
-	if err := json.Unmarshal([]byte(msg.Body[len(mediaBodyPrefix):]), &env); err != nil {
+	var ev mediaEnvelope
+	if err := json.Unmarshal([]byte(env.Body[len(mediaBodyPrefix):]), &ev); err != nil {
 		return MediaMessage{}, false
 	}
-	if env.Rev == "" || env.Path == "" || env.MIMEType == "" || env.Size <= 0 {
+	if ev.Rev == "" || ev.Path == "" || ev.MIMEType == "" || ev.Size <= 0 {
 		return MediaMessage{}, false
 	}
 	return MediaMessage{
-		from:      msg.From,
-		thread:    msg.ThreadShort(),
-		rev:       RevID(env.Rev),
-		path:      env.Path,
-		mimeType:  env.MIMEType,
-		size:      env.Size,
-		timestamp: msg.Timestamp,
+		from:      env.From,
+		thread:    env.Thread,
+		rev:       RevID(ev.Rev),
+		path:      ev.Path,
+		mimeType:  ev.MIMEType,
+		size:      ev.Size,
+		timestamp: env.Timestamp,
 	}, true
 }
 

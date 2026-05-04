@@ -5,9 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/danmestas/EdgeSync/leaf/agent/notify"
-
 	"github.com/danmestas/bones/internal/assert"
+	"github.com/danmestas/bones/internal/chat"
 )
 
 // Subscribe returns a channel of coord.Event values for messages that
@@ -59,17 +58,17 @@ func (c *Coord) Subscribe(
 	return out, closer, nil
 }
 
-// watchChat returns a <-chan notify.Message matching pattern. An empty
+// watchChat returns a <-chan chat.Envelope matching pattern. An empty
 // pattern routes through chat.WatchAll (project-wide wildcard); a
 // non-empty pattern is passed through to chat.Watch as a caller
 // thread name — chat.Watch hashes it into the same deterministic
-// ThreadShort that chat.Send uses, so publishers and subscribers
-// converge on one NATS subject without coordination. Extracted so
-// Subscribe stays below the 70-line funlen cap and so the
-// empty-is-project-wide branch has a single home.
+// short that chat.Send uses, so publishers and subscribers converge
+// on one NATS subject without coordination. Per ADR 0047 the channel
+// element type is chat.Envelope (bones-owned wire format) rather than
+// notify.Message.
 func (c *Coord) watchChat(
 	ctx context.Context, pattern string,
-) <-chan notify.Message {
+) <-chan chat.Envelope {
 	if pattern == "" {
 		return c.sub.chat.WatchAll(ctx)
 	}
@@ -91,7 +90,7 @@ func (c *Coord) reserveSubscriberSlot(prefix string) error {
 	return nil
 }
 
-// relaySubscribe translates notify.Message values from src into coord
+// relaySubscribe translates chat.Envelope values from src into coord
 // events on out. It is the sole owner of out's close: when src closes
 // (caller's ctx canceled OR explicit close closure ran), the relay
 // closes out and signals done so the close closure knows the goroutine
@@ -101,21 +100,21 @@ func (c *Coord) reserveSubscriberSlot(prefix string) error {
 // through this single close(out), so invariant 17 is preserved without
 // a second sync.Once on the channel.
 func (c *Coord) relaySubscribe(
-	src <-chan notify.Message,
+	src <-chan chat.Envelope,
 	out chan<- Event,
 	done chan<- struct{},
 ) {
 	defer close(done)
 	defer close(out)
-	for msg := range src {
-		evt := eventFromMessage(msg)
+	for env := range src {
+		evt := eventFromEnvelope(env)
 		select {
 		case out <- evt:
 		default:
-			// Slow consumer: drop to keep the relay moving. The
-			// notify substrate is read-now-or-miss-now by design
-			// (ADR 0008); dropping here preserves that posture and
-			// avoids blocking the chat Watch goroutine upstream.
+			// Slow consumer: drop the live event. Per ADR 0047 the
+			// stream retains the message regardless, so any later
+			// consumer can replay; this drop only affects this
+			// subscriber's live channel.
 		}
 	}
 }

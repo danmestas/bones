@@ -24,6 +24,12 @@ type TuningConfig struct {
 	// Default: 8.
 	MaxSubscribers int
 
+	// ChatRetentionMaxAge bounds the JetStream chat stream's MaxAge. Per
+	// ADR 0047 the default is 0 (unbounded) so coord.Prime preserves
+	// agent context across long absences. Operators with high chat
+	// volume can set a positive duration to age out old messages.
+	ChatRetentionMaxAge time.Duration
+
 	// MaxTaskFiles caps the number of files a single task may touch.
 	// Default: 16.
 	MaxTaskFiles int
@@ -107,11 +113,6 @@ type Config struct {
 	// it lives on Config because it is operator-supplied input.
 	NATSURL string
 
-	// ChatFossilRepoPath is the filesystem path at which coord.Open
-	// creates or opens this agent's chat Fossil repo. The operator owns
-	// cleanup; coord never calls RemoveAll. In tests, pass t.TempDir().
-	ChatFossilRepoPath string
-
 	// CheckoutRoot is the absolute directory under which per-agent
 	// working-copy checkouts live per ADR 0010. Coord writes to
 	// CheckoutRoot/<AgentID>/. In tests, pass t.TempDir().
@@ -152,11 +153,6 @@ func (c Config) Validate() error {
 	}
 	if c.NATSURL == "" {
 		return fmt.Errorf("coord.Config: NATSURL: must be non-empty")
-	}
-	if c.ChatFossilRepoPath == "" {
-		return fmt.Errorf(
-			"coord.Config: ChatFossilRepoPath: must be non-empty",
-		)
 	}
 	if c.CheckoutRoot == "" {
 		return fmt.Errorf(
