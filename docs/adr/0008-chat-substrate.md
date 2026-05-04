@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted 2026-04-19.
+Superseded by ADR 0047 (2026-05-04). Originally accepted 2026-04-19. ADR 0047 supersedes only the chat-message substrate; the deterministic-thread-hash invariant and the raw-NATS Ask path described below carry forward unchanged.
 
 ## Context
 

@@ -9,9 +9,9 @@ have overlapping concerns. `coord/` was originally placed at the module
 root, which obscured its role as a substrate (NATS, Fossil, presence,
 transport) sitting beneath the higher-level domain packages.
 
-ADRs 0008 and 0010 already record `coord/` as the substrate/transport
-layer; this ADR turns that informal convention into a path-and-lint
-contract.
+ADRs 0010 and 0047 (which supersedes ADR 0008) already record `coord/`
+as the substrate/transport layer; this ADR turns that informal
+convention into a path-and-lint contract.
 
 ## Decision
 
@@ -65,5 +65,5 @@ and the depguard rule keeps them that way.
 
 ## References
 
-- ADR 0008 (chat substrate)
+- ADR 0047 (chat substrate, supersedes ADR 0008)
 - ADR 0010 (Fossil code-artifact substrate)

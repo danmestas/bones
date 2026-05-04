@@ -8,10 +8,11 @@ for code artifacts.
 ## Context
 
 Tasks and chat have their substrates pinned. Tasks live on NATS
-JetStream KV (ADR 0005); chat rides EdgeSync notify with Fossil as the
-backing store (ADR 0008). Code artifacts — the actual files agents
-write — need a substrate. Fossil is the natural fit: ADR 0004 already
-assumes that placement when reasoning about code-artifact forks.
+JetStream KV (ADR 0005); chat lives on a JetStream stream (ADR 0047,
+which supersedes ADR 0008's notify-plus-Fossil-sidecar arrangement).
+Code artifacts — the actual files agents write — need a substrate.
+Fossil is the natural fit: ADR 0004 already assumes that placement
+when reasoning about code-artifact forks.
 
 The implementation needs a `*Coord` surface to write files, a contract
 with the hold protocol for file-path ownership during a commit, and a
@@ -344,5 +345,7 @@ coord is the coordination surface, not the binary-artifact pipe.
 - **ADR 0007** — Claim orders task-CAS before holds; scoped-hold
   primitive that gates `Commit`. A `Claim` followed by `Commit` and
   then release is the canonical write path.
-- **ADR 0008** — chat as notify-backed substrate; the conflict
-  notification is a `ChatMessage` on that substrate.
+- **ADR 0047** — chat on JetStream (supersedes ADR 0008); the
+  conflict notification is a `ChatMessage` on the chat substrate.
+  The post-on-conflict behavior is substrate-agnostic; only the
+  underlying transport changed.
