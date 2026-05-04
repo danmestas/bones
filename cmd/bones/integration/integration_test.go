@@ -87,9 +87,14 @@ func killPidFile(t *testing.T, path string) {
 
 // newWorkspace bootstraps a workspace in a tmpdir and returns it. The caller
 // registers killPidFile cleanup itself via t.Cleanup (done once per test).
+//
+// Pins HOME to a temp dir so any subprocess whose path reaches
+// hub.Start (via workspace.Join) does NOT write to the operator's real
+// ~/.bones/workspaces/. See issue #180.
 func newWorkspace(t *testing.T) string {
 	t.Helper()
 	requireBinaries(t)
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	t.Cleanup(func() { killPidFile(t, filepath.Join(dir, ".bones", "leaf.pid")) })
 	if _, stderr, code := runCmd(t, bonesBin, dir, "init"); code != 0 {

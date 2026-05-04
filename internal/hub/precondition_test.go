@@ -23,6 +23,10 @@ func TestStart_FailsFastOnEmptyGitRepo(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
+	// Defensive isolation: precondition fires before registry.Write,
+	// but pin HOME to a tempdir so a regression that reorders the
+	// check cannot leak into ~/.bones/workspaces/. See #180.
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	if out, err := exec.Command("git", "-C", root, "init", "-q").CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
