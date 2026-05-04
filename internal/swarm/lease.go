@@ -938,6 +938,13 @@ func commitViaLeaf(
 // Soft-fail-friendly: returns SyncResult and error separately so the
 // caller can warn on push failure without rolling back the local
 // commit.
+//
+// This site uses libfossil directly because ResumedLease.Commit stops
+// the leaf agent BEFORE calling pushLeafFossil — the EdgeSync
+// agent.SyncTo API requires a running agent. Migrating to agent.SyncTo
+// would require a swarm-flow change (push-before-stop), which is out
+// of scope for the rest of the libfossil-exit and stays on the
+// libfossil-direct path.
 func pushLeafFossil(
 	ctx context.Context, workspaceDir, slot, fossilUser, hubURL string,
 ) (*libfossil.SyncResult, error) {

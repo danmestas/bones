@@ -239,12 +239,10 @@ func OpenLeaf(ctx context.Context, cfg LeafConfig) (*Leaf, error) {
 }
 
 // startLeafAgent constructs and starts the agent.Agent that owns the
-// leaf's libfossil.Repo. Sets SQLite busy_timeout on the resulting
-// repo so concurrent writes (Leaf.Commit vs in-flight SyncNow) wait
-// for the WAL lock instead of failing with SQLITE_BUSY. The pragma
-// is per-connection, so MaxOpenConns is pinned to 1 to make it apply
-// to all queries — internal/fossil/fossil.go's prior setup surfaced
-// the pool semantics in Phase 1.
+// leaf's repo. EdgeSync v0.0.10's agent.New applies the busy_timeout
+// PRAGMA internally (and deliberately does NOT cap MaxOpenConns(1) —
+// see EdgeSync#120 for the deadlock that capping caused), so bones no
+// longer reaches into the SQLite handle from this layer.
 //
 // FossilUser becomes the User field on sync handshakes. The earlier
 // clone is always unauthenticated ("nobody") regardless of
@@ -274,11 +272,6 @@ func startLeafAgent(cfg LeafConfig, repoPath, hubNATSUpstream string) (*agent.Ag
 		_ = a.Stop()
 		return nil, fmt.Errorf("coord.OpenLeaf: agent.Start: %w", err)
 	}
-	a.Repo().DB().SqlDB().SetMaxOpenConns(1)
-	if _, err := a.Repo().DB().Exec(`PRAGMA busy_timeout = 30000`); err != nil {
-		_ = a.Stop()
-		return nil, fmt.Errorf("coord.OpenLeaf: busy_timeout: %w", err)
-	}
 	return a, nil
 }
 
@@ -291,7 +284,7 @@ func readProjectCodeIfAutosync(a *agent.Agent, autosync bool) (string, error) {
 	if !autosync {
 		return "", nil
 	}
-	pc, err := a.Repo().Config("project-code")
+	pc, err := a.Config("project-code")
 	if err != nil {
 		return "", fmt.Errorf("coord.OpenLeaf: read project-code for autosync: %w", err)
 	}
@@ -467,8 +460,12 @@ func (l *Leaf) Commit(
 		return "", err
 	}
 
-	// Write through the agent's repo handle — the only *libfossil.Repo
-	// that should ever touch leaf.fossil in this process.
+	// Write through the agent's repo handle. EdgeSync v0.0.10's
+	// agent.Commit does not yet surface ParentID/MergeParents — the
+	// trunk-based-development invariant requires explicitly chaining
+	// onto the trunk tip, which the wrapped API can't express, so this
+	// site stays on the libfossil-typed CommitOpts path. media.go and
+	// compact.go (which don't set ParentID) use the wrapped API.
 	repo := l.agent.Repo()
 
 	// Pull from hub before resolving the trunk tip so the new commit's
@@ -575,18 +572,17 @@ func isBranchTipMissing(err error) bool {
 }
 
 // pullFromHub runs a one-shot fossil pull against the configured hub
-// over libfossil's HTTP transport. Authenticates as l.fossilUser
-// (which has 'i' caps from ensureSlotUser) when set; otherwise falls
-// back to anonymous "nobody" (the hub grants gio to anonymous which
-// is enough for a pull). Used by Leaf.Commit when autosync is on so
-// the next BranchTip("trunk") sees the hub's latest tip.
+// via the EdgeSync agent's libfossil-hidden SyncTo API. Authenticates
+// as l.fossilUser (which has 'i' caps from ensureSlotUser) when set;
+// otherwise falls back to anonymous "nobody" (the hub grants gio to
+// anonymous which is enough for a pull). Used by Leaf.Commit when
+// autosync is on so the next branch-tip read sees the hub's latest tip.
 func (l *Leaf) pullFromHub(ctx context.Context) error {
-	transport := libfossil.NewHTTPTransport(l.hubHTTPAddr)
 	user := l.fossilUser
 	if user == "" {
 		user = l.slotID
 	}
-	if _, err := l.agent.Repo().Sync(ctx, transport, libfossil.SyncOpts{
+	if _, err := l.agent.SyncTo(ctx, l.hubHTTPAddr, agent.SyncOpts{
 		Pull:        true,
 		Push:        false,
 		User:        user,
@@ -627,30 +623,17 @@ func normalizeLeadingSlash(p string) string {
 	return p
 }
 
-// Tip returns the manifest UUID at the head of the leaf's current
-// branch, or "" on a fresh repo with no checkins.
+// Tip returns the manifest UUID at the head of the leaf's trunk
+// branch, or "" on a fresh repo with no checkins. Routes through the
+// EdgeSync agent's libfossil-hidden Tip API.
 func (l *Leaf) Tip(ctx context.Context) (string, error) {
 	assert.NotNil(l, "coord.Leaf.Tip: receiver is nil")
 	assert.NotNil(ctx, "coord.Leaf.Tip: ctx is nil")
-	repo := l.agent.Repo()
-	var uuid string
-	err := repo.DB().QueryRow(`
-		SELECT b.uuid FROM leaf l
-		JOIN event e ON e.objid=l.rid
-		JOIN blob b ON b.rid=l.rid
-		WHERE e.type='ci'
-		ORDER BY e.mtime DESC, l.rid DESC LIMIT 1
-	`).Scan(&uuid)
-	// sql.ErrNoRows on a fresh repo is empty-tip, not an error.
-	// Other errors (DB faults, schema corruption) must propagate so
-	// Commit's post-sync divergence check sees them.
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
+	rev, err := l.agent.Tip(ctx, "trunk")
 	if err != nil {
 		return "", fmt.Errorf("coord.Leaf.Tip: %w", err)
 	}
-	return uuid, nil
+	return string(rev), nil
 }
 
 // WT returns the worktree path under which the slot's working copy lives.
@@ -659,17 +642,14 @@ func (l *Leaf) WT() string {
 	return l.wtPath
 }
 
-// OpenWorktree creates a fossil checkout at dir using the leaf's
-// repo handle and extracts trunk's files into it. dir must already
-// exist. The Checkout handle is closed before return: bones doesn't
-// drive commits through it (Leaf.Commit writes through the repo
-// handle directly per the "one *libfossil.Repo per fossil file"
-// invariant); what downstream readers need is the on-disk `.fslckout`
-// plus the materialized files.
+// OpenWorktree creates a working tree at dir and extracts the leaf's
+// trunk-tip files into it. dir must already exist. Routes through the
+// EdgeSync agent's libfossil-hidden ExtractTo API; bones no longer
+// holds a libfossil.Checkout handle. Downstream readers see the
+// on-disk `.fslckout` plus the materialized files.
 //
-// On a fresh repo with no checkins this is a no-op: libfossil refuses
-// to create a checkout without a checkin, and there are no files to
-// write anyway. The next Acquire after the first slot commits will
+// On a fresh repo with no checkins this is a no-op: there are no files
+// to extract. The next Acquire after the first slot commits will
 // populate the worktree.
 func (l *Leaf) OpenWorktree(ctx context.Context, dir string) error {
 	assert.NotNil(l, "coord.Leaf.OpenWorktree: receiver is nil")
@@ -680,21 +660,10 @@ func (l *Leaf) OpenWorktree(ctx context.Context, dir string) error {
 	if tip == "" {
 		return nil
 	}
-	repo := l.agent.Repo()
-	co, err := repo.CreateCheckout(dir, libfossil.CheckoutCreateOpts{})
-	if err != nil {
-		return fmt.Errorf("coord.Leaf.OpenWorktree: create checkout: %w", err)
-	}
-	tipRID, err := repo.ResolveVersion(tip)
-	if err != nil {
-		_ = co.Close()
-		return fmt.Errorf("coord.Leaf.OpenWorktree: resolve tip: %w", err)
-	}
-	if err := co.Extract(tipRID, libfossil.ExtractOpts{}); err != nil {
-		_ = co.Close()
+	if err := l.agent.ExtractTo(ctx, dir, agent.RevID(tip)); err != nil {
 		return fmt.Errorf("coord.Leaf.OpenWorktree: extract trunk: %w", err)
 	}
-	return co.Close()
+	return nil
 }
 
 // Metadata returns the value associated with key in the harness-supplied

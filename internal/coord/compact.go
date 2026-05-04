@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/danmestas/libfossil"
+	"github.com/danmestas/EdgeSync/leaf/agent"
 
 	"github.com/danmestas/bones/internal/assert"
 	"github.com/danmestas/bones/internal/tasks"
@@ -148,13 +148,12 @@ func (l *Leaf) compactOne(
 	level := rec.CompactLevel + 1
 	path := compactArtifactPath(TaskID(rec.ID), level)
 	body := compactArtifactBody(input, summary)
-	repo := l.agent.Repo()
-	_, uuid, err := repo.Commit(libfossil.CommitOpts{
-		Files: []libfossil.FileToCommit{
+	uuid, err := l.agent.Commit(ctx, agent.CommitOpts{
+		Files: []agent.FileToCommit{
 			{Name: normalizeLeadingSlash(path), Content: []byte(body)},
 		},
-		Comment: compactCommitMessage(rec.ID, level),
-		User:    l.slotID,
+		Message: compactCommitMessage(rec.ID, level),
+		Author:  l.slotID,
 	})
 	if err != nil {
 		return CompactedTask{}, fmt.Errorf("coord.Leaf.Compact: commit %s: %w", rec.ID, err)
