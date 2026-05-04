@@ -31,17 +31,17 @@ jobs:
       # Check out bones into ./bones so the sibling EdgeSync
       # clone can sit at ../EdgeSync.
       - name: Checkout bones
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: bones
 
       - name: Checkout EdgeSync (sibling dir)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: danmestas/EdgeSync
           path: EdgeSync
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.26.0'
           cache: true
