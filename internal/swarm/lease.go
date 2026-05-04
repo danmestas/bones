@@ -843,9 +843,14 @@ func defaultAcquireOpts(opts AcquireOpts) (func() time.Time, string, string) {
 	return now, hubURL, caps
 }
 
-// openLeafAndClaim opens the per-slot coord.Leaf and acquires a
-// claim on the named task. On error, any partially-opened leaf is
-// stopped before return.
+// openLeafAndClaim opens the per-slot coord.Leaf, probes the substrate
+// for end-to-end reachability, and acquires a claim on the named task.
+// On error, any partially-opened leaf is stopped before return.
+//
+// The substrate probe (Leaf.ProbeSubstrate) gates the rest of the join
+// flow on holds-bucket reachability so a doomed-at-commit-time
+// substrate fails fast at join time with the same root-cause error
+// rather than later (#155).
 func openLeafAndClaim(
 	ctx context.Context, info workspace.Info,
 	slot, fossilUser, hubURL, taskID string, hub *coord.Hub, autosync bool,
@@ -853,6 +858,12 @@ func openLeafAndClaim(
 	leaf, err := openLeaf(ctx, info, slot, fossilUser, hubURL, hub, autosync)
 	if err != nil {
 		return nil, nil, fmt.Errorf("swarm.Acquire: open leaf: %w", err)
+	}
+	if perr := leaf.ProbeSubstrate(ctx); perr != nil {
+		_ = leaf.Stop()
+		return nil, nil, fmt.Errorf(
+			"swarm.Acquire: hub up but holds bucket unreachable on %s: %w",
+			hubURL, perr)
 	}
 	if err := os.MkdirAll(leaf.WT(), 0o755); err != nil {
 		_ = leaf.Stop()
