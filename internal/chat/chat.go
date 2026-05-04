@@ -302,12 +302,25 @@ func (m *Manager) watchSubject(
 		close(out)
 		return out
 	}
+	// Teardown is mutex-gated: every callback dispatch holds mu while
+	// it does its select, and the close goroutine takes mu before
+	// close(out). Without this, a callback that already committed to
+	// `case out <- env:` would race close(out) and panic on a closed
+	// channel under -race. The closed flag keeps callbacks scheduled
+	// after teardown from re-entering the select once out is closed.
+	// Mirrors the pattern in EdgeSync's notify.Service.Watch.
+	var (
+		mu     sync.Mutex
+		closed bool
+	)
 	consumeCtx, err := cons.Consume(func(msg jetstream.Msg) {
 		var env Envelope
 		if err := json.Unmarshal(msg.Data(), &env); err != nil {
-			// Malformed envelope on the stream: skip rather than
-			// blocking the consumer. Same posture as ADR 0008's
-			// "garbage on the wire degrades silently."
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if closed {
 			return
 		}
 		select {
@@ -322,7 +335,10 @@ func (m *Manager) watchSubject(
 	go func() {
 		<-ctx.Done()
 		consumeCtx.Stop()
+		mu.Lock()
+		closed = true
 		close(out)
+		mu.Unlock()
 	}()
 	return out
 }
@@ -452,21 +468,28 @@ func (m *Manager) scanStream(ctx context.Context) (map[string][]Envelope, error)
 	}
 	scanCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	var seen uint64
+	// Mutex-gated callback: out map and seen counter are written from
+	// the JS callback goroutine and read after the select; without the
+	// lock -race fires on concurrent map writes. sync.Once on done
+	// guards against the late-arrival case where two callbacks observe
+	// seen >= target before the goroutine notices done is closed.
+	var (
+		mu       sync.Mutex
+		seen     uint64
+		doneOnce sync.Once
+	)
 	done := make(chan struct{})
 	consumeCtx, err := cons.Consume(func(msg jetstream.Msg) {
 		var env Envelope
-		if err := json.Unmarshal(msg.Data(), &env); err != nil {
-			seen++
-			if seen >= target {
-				close(done)
-			}
-			return
+		_ = json.Unmarshal(msg.Data(), &env) // skip-on-error below
+		mu.Lock()
+		defer mu.Unlock()
+		if env.Thread != "" {
+			out[env.Thread] = append(out[env.Thread], env)
 		}
-		out[env.Thread] = append(out[env.Thread], env)
 		seen++
 		if seen >= target {
-			close(done)
+			doneOnce.Do(func() { close(done) })
 		}
 	})
 	if err != nil {
@@ -477,6 +500,11 @@ func (m *Manager) scanStream(ctx context.Context) (map[string][]Envelope, error)
 	case <-done:
 	case <-scanCtx.Done():
 	}
+	// Take the lock once more to synchronize with any in-flight
+	// callback that finished increment-but-not-return before we
+	// received on done.
+	mu.Lock()
+	defer mu.Unlock()
 	return out, nil
 }
 
