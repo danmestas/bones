@@ -6,28 +6,29 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/danmestas/libfossil"
+	"github.com/danmestas/EdgeSync/leaf/agent"
 
 	"github.com/danmestas/bones/internal/assert"
 )
 
-// PostMedia stores opaque bytes in the leaf's libfossil repo and
-// publishes an in-band media reference on the chat thread. Subscribers
-// receive a MediaMessage event.
+// PostMedia stores opaque bytes in the leaf's repo and publishes an
+// in-band media reference on the chat thread. Subscribers receive a
+// MediaMessage event.
 //
-// All writes route through l.agent.Repo() — the only *libfossil.Repo
-// handle to leaf.fossil in this process. After the commit, SyncNow
-// triggers a sync round so the artifact propagates to the hub before
-// the chat reference is published; subscribers can then resolve the
-// reference against any peer that has caught up.
+// Writes route through the EdgeSync agent's libfossil-hidden code-
+// artifact API (agent.Commit) per ADR 0010's evolution under
+// EdgeSync v0.0.10. After the commit, SyncNow triggers a sync round so
+// the artifact propagates to the hub before the chat reference is
+// published; subscribers can then resolve the reference against any
+// peer that has caught up.
 //
 // Invariants asserted (panics on violation — programmer errors):
 // 1 (ctx non-nil), receiver non-nil, thread/mimeType non-empty, data
 // non-empty.
 //
-// Operator errors returned: any error from the libfossil commit, the
-// JSON envelope encode, or the chat substrate Send — surfaced wrapped
-// with the coord.Leaf.PostMedia prefix.
+// Operator errors returned: any error from agent.Commit, the JSON
+// envelope encode, or the chat substrate Send — surfaced wrapped with
+// the coord.Leaf.PostMedia prefix.
 func (l *Leaf) PostMedia(
 	ctx context.Context,
 	thread, mimeType string,
@@ -40,19 +41,18 @@ func (l *Leaf) PostMedia(
 	assert.Precondition(len(data) > 0, "coord.Leaf.PostMedia: data is empty")
 	now := time.Now().UTC()
 	path := mediaArtifactPath(l.slotID, now)
-	repo := l.agent.Repo()
-	_, uuid, err := repo.Commit(libfossil.CommitOpts{
-		Files: []libfossil.FileToCommit{
+	uuid, err := l.agent.Commit(ctx, agent.CommitOpts{
+		Files: []agent.FileToCommit{
 			{Name: normalizeLeadingSlash(path), Content: data},
 		},
-		Comment: fmt.Sprintf("post media to %s (%s)", thread, mimeType),
-		User:    l.slotID,
+		Message: fmt.Sprintf("post media to %s (%s)", thread, mimeType),
+		Author:  l.slotID,
 	})
 	if err != nil {
 		return fmt.Errorf("coord.Leaf.PostMedia: commit media: %w", err)
 	}
 	l.agent.SyncNow()
-	body, err := mediaBody(uuid, path, mimeType, len(data))
+	body, err := mediaBody(string(uuid), path, mimeType, len(data))
 	if err != nil {
 		return fmt.Errorf("coord.Leaf.PostMedia: encode body: %w", err)
 	}
