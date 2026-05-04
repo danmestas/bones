@@ -51,7 +51,7 @@ Deferred / rejected:
   later is source-compatible.
 - `authored-by`, `assigned-to`, `approved-by`, `attests` — governance-flavored.
   Require an ACL model. Not useful without one.
-- `replies-to` — already lives on `ChatMessage` (ADR 0008). Duplicating into
+- `replies-to` — already lives on `ChatMessage` (ADR 0047). Duplicating into
   task-edges would confuse the two substrates.
 - `conditional-blocks` — requires a condition-evaluator machinery we don't
   ship. Degenerate relative to `blocks` once a gate system exists.
