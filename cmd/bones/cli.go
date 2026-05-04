@@ -23,6 +23,11 @@ type CLI struct {
 	Env    bonescli.EnvCmd    `cmd:"" group:"daily" help:"Emit shell exports for current workspace"`
 	Rename bonescli.RenameCmd `cmd:"" group:"daily" help:"Set workspace display name"`
 
+	// Workspaces (#174) — top-level "is bones up for project X?" view.
+	// Separated from the daily block above so gofmt does not realign
+	// the longer field name and overflow lll's 100-column limit.
+	Workspaces bonescli.WorkspacesCmd `cmd:"" group:"daily" help:"List/inspect known workspaces"`
+
 	// Repository.
 	Repo libfossilcli.RepoCmd `cmd:"" group:"repo" help:"Fossil repository operations"`
 

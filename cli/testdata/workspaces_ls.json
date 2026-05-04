@@ -1,0 +1,22 @@
+[
+  {
+    "id": "<id>",
+    "name": "alpha",
+    "cwd": "<cwd>",
+    "hub_status": "stopped",
+    "last_touched": "<time>",
+    "agent_id": "x",
+    "nats_url": "nats://127.0.0.1:1",
+    "hub_url": "http://127.0.0.1:1"
+  },
+  {
+    "id": "<id>",
+    "name": "beta",
+    "cwd": "<cwd>",
+    "hub_status": "stopped",
+    "last_touched": "<time>",
+    "agent_id": "x",
+    "nats_url": "nats://127.0.0.1:2",
+    "hub_url": "http://127.0.0.1:2"
+  }
+]
