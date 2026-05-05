@@ -307,3 +307,68 @@ func TestPreCommitHookLabel_Disambiguated(t *testing.T) {
 			"label, got:\n%s", out)
 	}
 }
+
+// TestIsEdgeSyncWorkspace pins #232: detection must be true when a
+// `.fossil` repo or `.fslckout` checkout marker is present at cwd or
+// any parent, and false on a plain bones workspace whose only fossil
+// state is the nested `.bones/hub.fossil` (which lives under .bones/
+// and is invisible to a glob over the root level).
+func TestIsEdgeSyncWorkspace(t *testing.T) {
+	t.Run("plain-bones-workspace-no-edgesync", func(t *testing.T) {
+		root := t.TempDir()
+		// Bones workspace shape: .bones/agent.id + .bones/hub.fossil.
+		// The nested .fossil at .bones/hub.fossil must NOT be treated
+		// as an EdgeSync repo (it lives below the root level glob).
+		if err := os.MkdirAll(filepath.Join(root, ".bones"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".bones", "agent.id"),
+			[]byte("test-agent-id\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".bones", "hub.fossil"),
+			[]byte("placeholder\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if isEdgeSyncWorkspace(root) {
+			t.Error("plain bones workspace mis-detected as EdgeSync")
+		}
+	})
+
+	t.Run("edgesync-workspace-with-fossil-file", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "myrepo.fossil"),
+			[]byte("placeholder\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if !isEdgeSyncWorkspace(root) {
+			t.Error("workspace with .fossil at root not detected as EdgeSync")
+		}
+	})
+
+	t.Run("edgesync-workspace-with-fslckout", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, ".fslckout"),
+			[]byte("placeholder\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if !isEdgeSyncWorkspace(root) {
+			t.Error("workspace with .fslckout not detected as EdgeSync")
+		}
+	})
+
+	t.Run("nested-cwd-walks-up-to-edgesync-root", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "myrepo.fossil"),
+			[]byte("placeholder\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		nested := filepath.Join(root, "sub", "deep")
+		if err := os.MkdirAll(nested, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if !isEdgeSyncWorkspace(nested) {
+			t.Error("walk-up from nested cwd did not find EdgeSync root")
+		}
+	})
+}

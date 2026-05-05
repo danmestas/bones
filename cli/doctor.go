@@ -69,7 +69,18 @@ func (c *DoctorCmd) Run(g *repocli.Globals) (err error) {
 	// The EdgeSync side returns an error on failed checks; surface
 	// that error AFTER our additional report so operators see the
 	// swarm picture even when an upstream check failed.
-	baseErr := c.DoctorCmd.Run(g)
+	//
+	// Per #232, the EdgeSync delegation is gated on actually being
+	// inside an EdgeSync workspace (`.fossil` file or `.fslckout`
+	// checkout DB at cwd or any parent). Outside one, EdgeSync's
+	// doctor surfaces irrelevant warnings (missing `.fossil`, NATS
+	// at :4222 unreachable) since bones uses ephemeral NATS on a
+	// hub-assigned port.
+	var baseErr error
+	cwd, _ := os.Getwd()
+	if isEdgeSyncWorkspace(cwd) {
+		baseErr = c.DoctorCmd.Run(g)
+	}
 	baseFailed = baseErr != nil
 	swarmErr := c.runSwarmReport()
 	swarmFailed = swarmErr != nil
@@ -623,6 +634,44 @@ func classifySwarmSession(s swarm.Session, host string) string {
 	staleSec := int64(time.Since(s.LastRenewed).Seconds())
 	return classifyState(s, host, staleSec)
 }
+
+// isEdgeSyncWorkspace reports whether cwd is inside an EdgeSync
+// workspace (a directory tree containing a `.fossil` repo file or a
+// `.fslckout` checkout database). Mirrors libfossil's findRepo walk:
+// from cwd, ascend to the filesystem root, returning true on the
+// first hit. Outside an EdgeSync workspace, `bones doctor` skips the
+// edgesync-doctor delegation per #232 so its EdgeSync-specific checks
+// (`.fossil` presence, external NATS at :4222) don't surface as
+// irrelevant warnings on plain bones workspaces.
+func isEdgeSyncWorkspace(cwd string) bool {
+	if cwd == "" {
+		return false
+	}
+	dir, err := filepath.Abs(cwd)
+	if err != nil {
+		return false
+	}
+	for range maxEdgeSyncWalkDepth {
+		if _, err := os.Stat(filepath.Join(dir, ".fslckout")); err == nil {
+			return true
+		}
+		matches, _ := filepath.Glob(filepath.Join(dir, "*.fossil"))
+		if len(matches) > 0 {
+			return true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false
+		}
+		dir = parent
+	}
+	return false
+}
+
+// maxEdgeSyncWalkDepth caps the upward walk in isEdgeSyncWorkspace.
+// 64 levels is preposterous for any real filesystem; the cap defends
+// against a runtime anomaly that would otherwise loop indefinitely.
+const maxEdgeSyncWalkDepth = 64
 
 func labelFor(state string) string {
 	switch state {
