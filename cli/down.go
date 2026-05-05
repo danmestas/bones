@@ -177,6 +177,8 @@ func planDown(root string, c *DownCmd) []downAction {
 	plan = append(plan, planRemoveAgentsMD(root)...)
 	plan = append(plan, planRemoveHooks(root, c)...)
 	plan = append(plan, planRemoveFossilMarkers(root)...)
+	plan = append(plan, planRemoveGitignoreEntries(root)...)
+	plan = append(plan, planRemoveEmptyClaudeDir(root, c)...)
 	return plan
 }
 
@@ -542,6 +544,15 @@ func planRemoveFossilMarkers(root string) []downAction {
 //
 // Other hooks are preserved verbatim. Empty hook groups and the
 // "hooks" top-level key are pruned when removal leaves them empty.
+//
+// Symmetric with `bones up` (#235): when stripping the bones-owned
+// hooks leaves the file with no remaining top-level keys, the file
+// is deleted entirely. Bones up only writes a "hooks" object, so an
+// empty post-strip object means the file is bones-owned end to end —
+// keeping a stub `{}` behind would leak a `.claude/settings.json` the
+// user never authored. User-authored keys (theme, env, permissions,
+// etc.) at the top level keep the file intact with those keys
+// preserved byte-for-byte.
 func removeBonesHooks(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -551,29 +562,40 @@ func removeBonesHooks(path string) error {
 		return err
 	}
 	if len(data) == 0 {
-		return nil
+		// An empty file was not bones-authored (bones up always writes
+		// at least `{"hooks": {...}}`). Remove it for symmetry: an empty
+		// settings.json carries no information and survives only as
+		// noise. Issue #235.
+		return os.Remove(path)
 	}
 	var rootObj map[string]any
 	if err := json.Unmarshal(data, &rootObj); err != nil {
 		return fmt.Errorf("parse %s: %w", path, err)
 	}
 	hooks, _ := rootObj["hooks"].(map[string]any)
-	if hooks == nil {
-		return nil
+	if hooks != nil {
+		pruneHookEvent(hooks, "SessionStart", "hub-bootstrap.sh")         // legacy
+		pruneHookEvent(hooks, "SessionStart", "bones hub start")          // current (ADR 0041)
+		pruneHookEvent(hooks, "SessionStart", "bones tasks prime --json") // task priming
+		pruneHookEvent(hooks, "PreCompact", "bones tasks prime --json")   // task priming
+		// Current installs land under SessionEnd; the legacy Stop event
+		// is also pruned so workspaces installed before the migration
+		// are still cleaned up by `bones down`.
+		pruneHookEvent(hooks, "SessionEnd", "hub-shutdown.sh")
+		pruneHookEvent(hooks, "Stop", "hub-shutdown.sh")
+		if len(hooks) == 0 {
+			delete(rootObj, "hooks")
+		} else {
+			rootObj["hooks"] = hooks
+		}
 	}
-	pruneHookEvent(hooks, "SessionStart", "hub-bootstrap.sh")         // legacy
-	pruneHookEvent(hooks, "SessionStart", "bones hub start")          // current (ADR 0041)
-	pruneHookEvent(hooks, "SessionStart", "bones tasks prime --json") // task priming
-	pruneHookEvent(hooks, "PreCompact", "bones tasks prime --json")   // task priming
-	// Current installs land under SessionEnd; the legacy Stop event
-	// is also pruned so workspaces installed before the migration
-	// are still cleaned up by `bones down`.
-	pruneHookEvent(hooks, "SessionEnd", "hub-shutdown.sh")
-	pruneHookEvent(hooks, "Stop", "hub-shutdown.sh")
-	if len(hooks) == 0 {
-		delete(rootObj, "hooks")
-	} else {
-		rootObj["hooks"] = hooks
+	// Issue #235: if no top-level keys remain, the file held only
+	// bones-owned hooks. Delete it so post-down state matches pre-up.
+	// Any user-authored top-level key (theme, model, env, permissions,
+	// includeCoAuthoredBy, …) keeps the file alive and the keys are
+	// preserved verbatim.
+	if len(rootObj) == 0 {
+		return os.Remove(path)
 	}
 	out, err := json.MarshalIndent(rootObj, "", "  ")
 	if err != nil {
@@ -649,4 +671,193 @@ func fileExists(path string) bool {
 func dirExists(path string) bool {
 	fi, err := os.Stat(path)
 	return err == nil && fi.IsDir()
+}
+
+// planRemoveEmptyClaudeDir removes the workspace's `.claude/` directory
+// if it ends up empty after the rest of the down plan executes (i.e.
+// all bones-owned content under it — settings.json, skills/ — has
+// already been removed). Symmetric with `bones up` which creates the
+// directory on a fresh tree (#235).
+//
+// Skipped when --keep-skills or --keep-hooks is set: those flags
+// preserve content under `.claude/`, so the directory must stay too.
+//
+// The action's thunk re-checks emptiness at execution time. A no-op
+// when the directory still has user-authored content (anything bones
+// didn't install) ensures the user's pre-existing `.claude/` survives
+// teardown unchanged.
+func planRemoveEmptyClaudeDir(root string, c *DownCmd) []downAction {
+	if c.KeepSkills || c.KeepHooks {
+		return nil
+	}
+	dir := filepath.Join(root, ".claude")
+	if !dirExists(dir) {
+		return nil
+	}
+	return []downAction{{
+		description: "remove " + dir + " if empty",
+		do: func() error {
+			empty, err := dirIsEmpty(dir)
+			if err != nil || !empty {
+				// nil here when not empty: the directory has user
+				// content (custom skills, agent files, etc.) and
+				// must be preserved. Errors stat'ing fall through
+				// silently — the operator already saw the rest of
+				// the plan succeed.
+				return nil
+			}
+			return os.Remove(dir)
+		},
+	}}
+}
+
+// dirIsEmpty reports whether dir contains any entries. Returns false
+// on stat errors so callers default to the safe "leave it alone"
+// branch. The check is shallow — a `.claude/skills/.bones-manifest.json`
+// (the issue #210 manifest) parent directory still counts as non-empty
+// from this function's perspective, which is correct: if anything
+// under .claude/ survives the rest of the plan, .claude/ stays.
+func dirIsEmpty(dir string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false, err
+	}
+	return len(entries) == 0, nil
+}
+
+// bonesGitignoreEntries lists the lines `bones up` adds to the
+// project root's .gitignore via ensureGitignoreEntries (cli/orchestrator.go).
+// Kept in lockstep with that helper — drift means down asymmetric with up.
+var bonesGitignoreEntries = []string{
+	".fslckout",
+	".fossil-settings/",
+	".bones/",
+}
+
+// bonesGitignoreHeader is the comment line `bones up` writes above its
+// gitignore additions. Stripped exactly as written; a user who edited
+// the comment text will keep their edited version (which is the right
+// outcome — bones treats edited comments as user content).
+const bonesGitignoreHeader = "# Bones runtime + Fossil checkout-at-root (ADRs 0023, 0041)"
+
+// planRemoveGitignoreEntries removes the lines `bones up` appended to
+// the project's .gitignore (#237). Symmetric with up's auto-add: any
+// of the 3 bones-owned entries (.fslckout, .fossil-settings/, .bones/)
+// still present in the file is dropped, along with the bones header
+// comment if it survived unchanged. User-authored lines — including
+// bones-entries the user duplicated below their own comment block —
+// are removed by exact-line match too, which is the documented
+// behavior: a user who pre-existed `.bones/` in their gitignore had
+// the same line bones would have added, so the post-down state is
+// indistinguishable from "bones never touched it".
+//
+// The file is rewritten with:
+//   - bones-owned lines removed
+//   - the bones header line removed
+//   - a single trailing blank-line run between adjacent kept blocks
+//     collapsed (so removing a 4-line block in the middle doesn't
+//     leave a 3-line gap)
+//
+// If removal leaves the file empty (or whitespace-only) the file is
+// deleted — `bones up` creates .gitignore on a fresh tree, so an
+// empty post-down file is the same asymmetry as #235's empty
+// settings.json.
+func planRemoveGitignoreEntries(root string) []downAction {
+	path := filepath.Join(root, ".gitignore")
+	if !fileExists(path) {
+		return nil
+	}
+	return []downAction{{
+		description: "remove bones entries from " + path,
+		do:          func() error { return removeBonesGitignoreEntries(path) },
+	}}
+}
+
+// removeBonesGitignoreEntries does the actual rewrite. Pure file I/O,
+// extracted so the plan thunk stays a one-liner and the logic is
+// directly unit-testable without going through planDown.
+//
+// Algorithm:
+//  1. Read all lines.
+//  2. Drop lines that match (after TrimSpace) any bonesGitignoreEntries
+//     entry, or that match the bones header verbatim (TrimSpace).
+//  3. Collapse runs of 2+ blank lines down to 1 (the removal of a 4-line
+//     block sandwiched by blanks would otherwise produce a visible gap).
+//  4. If the result is empty/whitespace, delete the file.
+//  5. Otherwise, write back with a trailing newline if the original
+//     ended with one.
+func removeBonesGitignoreEntries(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	bonesSet := map[string]bool{}
+	for _, e := range bonesGitignoreEntries {
+		bonesSet[e] = true
+	}
+
+	// Preserve the file's trailing-newline state: a gitignore that
+	// ends with "\n" should still end with "\n" after rewrite.
+	hadTrailingNewline := len(data) > 0 && data[len(data)-1] == '\n'
+
+	lines := strings.Split(string(data), "\n")
+	// strings.Split on "a\n" yields ["a", ""] — drop the trailing empty
+	// element so we don't double-count it as a blank line during
+	// collapse. We re-add the trailing newline at write time.
+	if hadTrailingNewline && len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	var kept []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if bonesSet[trimmed] {
+			continue
+		}
+		if trimmed == bonesGitignoreHeader {
+			continue
+		}
+		kept = append(kept, line)
+	}
+
+	// Collapse 2+ consecutive blanks to 1. The bones header + 3 entries
+	// occupy 4 lines preceded by an inserted blank (header line in
+	// ensureGitignoreEntries starts with "\n"); after stripping, that
+	// inserted blank can sit next to the user's pre-existing trailing
+	// blank, giving a 2-line gap. Collapse keeps the file tidy.
+	var collapsed []string
+	prevBlank := false
+	for _, line := range kept {
+		isBlank := strings.TrimSpace(line) == ""
+		if isBlank && prevBlank {
+			continue
+		}
+		collapsed = append(collapsed, line)
+		prevBlank = isBlank
+	}
+	// Drop a single leading blank if present (the bones block was
+	// prefixed with one and the user's original gitignore didn't start
+	// with one).
+	for len(collapsed) > 0 && strings.TrimSpace(collapsed[0]) == "" {
+		collapsed = collapsed[1:]
+	}
+	// Drop any trailing blanks before deciding emptiness.
+	for len(collapsed) > 0 && strings.TrimSpace(collapsed[len(collapsed)-1]) == "" {
+		collapsed = collapsed[:len(collapsed)-1]
+	}
+
+	// If nothing survives, the file was bones-only. Delete it.
+	if len(collapsed) == 0 {
+		return os.Remove(path)
+	}
+
+	out := strings.Join(collapsed, "\n")
+	if hadTrailingNewline {
+		out += "\n"
+	}
+	return os.WriteFile(path, []byte(out), 0o644)
 }
