@@ -322,10 +322,10 @@ func upsertManagedBlock(path, body string) error {
 
 // stripManagedBlock removes the bones-managed section (markers and
 // body) from the file at path. User content outside the markers is
-// preserved byte-for-byte. The blank-line separator that
-// upsertManagedBlock added between user content and the BEGIN marker
-// is collapsed back to a single trailing newline so a strip-then-
-// upsert cycle round-trips cleanly.
+// preserved byte-for-byte (issue #236): the strip removes only the
+// bytes upsertManagedBlock added — the single separator '\n' before
+// BEGIN, the markers, the body, and the single trailing '\n' after
+// END — leaving the user's original trailing-whitespace shape intact.
 //
 // Nested marker pairs in the body are handled by findManagedBlock —
 // only the outer block is removed, even when the body itself contains
@@ -354,18 +354,16 @@ func stripManagedBlock(path string) error {
 		end++
 	}
 
-	// Collapse trailing newlines on the prefix (including the blank
-	// separator we added on upsert) so we restore exactly one trailing
-	// newline — matching the user's original "ends with \n" shape.
+	// Consume exactly the single '\n' separator that upsertManagedBlock
+	// inserts before BEGIN (see upsert: it adds one '\n' to the user
+	// prefix). Do NOT collapse multiple trailing newlines: that would
+	// eat the user's own blank-line trailers and break the byte-for-
+	// byte invariant (issue #236).
 	trimEnd := begin
-	for trimEnd > 0 && s[trimEnd-1] == '\n' {
+	if trimEnd > 0 && s[trimEnd-1] == '\n' {
 		trimEnd--
 	}
-	prefix := s[:trimEnd]
-	if prefix != "" {
-		prefix += "\n"
-	}
-	out := prefix + s[end:]
+	out := s[:trimEnd] + s[end:]
 
 	if out == "" {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
