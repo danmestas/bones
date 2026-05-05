@@ -695,6 +695,12 @@ func (l *ResumedLease) Close(ctx context.Context, opts CloseOpts) error {
 			fmt.Fprintf(os.Stderr,
 				"swarm.ResumedLease.Close: preserved %d file(s) at %s (#156)\n",
 				count, path)
+			// Discoverability hint (#234): point operators at the
+			// `bones apply --slot --to` verb so they don't have to
+			// grep `.bones/recovery/` to retrieve committed slot work.
+			fmt.Fprintf(os.Stderr,
+				"artifacts available via: bones apply --slot=%s --to=<dir>\n",
+				l.slot)
 		}
 		// Best-effort idempotent removal: missing wt is fine. A
 		// permission-style error would propagate via os.RemoveAll's
