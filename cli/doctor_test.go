@@ -283,3 +283,27 @@ func TestCheckAgentsMD_MarkerBlock(t *testing.T) {
 		})
 	}
 }
+
+// TestPreCommitHookLabel_Disambiguated pins #231: bones substrate
+// pre-commit hook check must use a label distinct from EdgeSync's
+// "pre-commit hook" label. Without disambiguation, `bones doctor`
+// emits two contradictory lines under identical labels.
+func TestPreCommitHookLabel_Disambiguated(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	tmp := t.TempDir()
+	// Make .git so the hook check fires (vs the no-git INFO branch).
+	if err := os.MkdirAll(filepath.Join(tmp, ".git", "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	_, _ = runBypassReportTo(&buf, tmp)
+	out := buf.String()
+	// The bones substrate gates emit a "bones substrate pre-commit hook"
+	// label. EdgeSync's doctor uses the bare "pre-commit hook" label;
+	// the two must not collide. Either WARN (missing) or OK (installed)
+	// path satisfies — both go through the disambiguated label.
+	if !strings.Contains(out, "bones substrate pre-commit hook") {
+		t.Errorf("expected disambiguated 'bones substrate pre-commit hook' "+
+			"label, got:\n%s", out)
+	}
+}
