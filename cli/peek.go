@@ -67,6 +67,12 @@ func (c *PeekCmd) Run(g *repocli.Globals) error {
 		return nil
 	}
 
+	// Vanilla fossil rejects hub.fossil when the WAL is un-checkpointed
+	// (bones #211 / #212). Run a passive checkpoint best-effort so the
+	// shell-out below sees a self-contained main file. Safe to call
+	// while the hub is running — PASSIVE never blocks readers/writers.
+	passiveCheckpointHubFossil(hubRepo)
+
 	port := c.Port
 	if port == 0 {
 		port = pickPeekPort()

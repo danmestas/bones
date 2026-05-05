@@ -258,6 +258,10 @@ func runApplyPreflight(cwd string) (*applyPreflight, error) {
 				"install via `brew install fossil` (or apt) and re-run",
 		)
 	}
+	// Vanilla fossil rejects hub.fossil when its WAL is un-checkpointed
+	// (bones #211 / #212). Run a passive checkpoint best-effort before
+	// apply shells to `fossil` for trunk manifest / open / merge.
+	passiveCheckpointHubFossil(hubRepo)
 	return &applyPreflight{
 		WorkspaceDir: root,
 		HubFossil:    hubRepo,
