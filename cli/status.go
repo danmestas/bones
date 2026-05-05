@@ -92,6 +92,23 @@ func (c *StatusCmd) Run(g *repocli.Globals) error {
 		}
 		return renderStatusAll(os.Stdout)
 	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("cwd: %w", err)
+	}
+	root, err := resolveStatusRoot(cwd)
+	if err != nil {
+		return err
+	}
+	// Read-only hub probe (#207). If the hub isn't healthy, render
+	// the existing degraded-mode branch (HubAvailable=false) without
+	// touching workspace.Join — Join would lazy-start the hub via
+	// hubStartFunc, contradicting the lazy-hub promise printed by
+	// `bones up` and silently writing .bones/pids/ + URL files on
+	// every `bones status` invocation.
+	if !workspace.HubIsHealthy(root) {
+		return renderStatus(degradedStatusReport(root), os.Stdout)
+	}
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
 		return err
@@ -102,6 +119,32 @@ func (c *StatusCmd) Run(g *repocli.Globals) error {
 		return err
 	}
 	return renderStatus(report, os.Stdout)
+}
+
+// resolveStatusRoot walks up from cwd to the workspace marker
+// (.bones/agent.id) without touching the hub, mirroring
+// resolveDownRoot's #138 fix. `bones status` is read-only and has a
+// fully degraded HubAvailable=false render path; routing through
+// workspace.Join would lazy-start the hub on every invocation,
+// contradicting the lazy-hub promise printed by `bones up` (#207).
+func resolveStatusRoot(cwd string) (string, error) {
+	return workspace.FindRoot(cwd)
+}
+
+// degradedStatusReport assembles a statusReport with HubAvailable=false
+// for workspaces whose hub isn't running. Populated fields are limited
+// to what's available from on-disk state (workspace dir, scaffold
+// stamp); NATS-backed views (tasks, sessions, fossil timeline) stay
+// empty so the renderer's degraded branch fires.
+func degradedStatusReport(root string) statusReport {
+	stamp, _ := scaffoldver.Read(root)
+	return statusReport{
+		WorkspaceDir:     root,
+		GeneratedAt:      timeNow(),
+		TasksByStatus:    map[tasks.Status]int{},
+		TasksByID:        map[string]tasks.Task{},
+		ScaffoldComplete: stamp != "",
+	}
 }
 
 // gatherStatus collects every input the snapshot needs. NATS-side

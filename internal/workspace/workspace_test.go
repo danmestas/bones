@@ -253,7 +253,7 @@ func TestJoin_NoOpWhenHubHealthy(t *testing.T) {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
-	// Stand up a tiny healthz server so hubIsHealthy's GET succeeds.
+	// Stand up a tiny healthz server so HubIsHealthy's GET succeeds.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 	}))

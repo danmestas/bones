@@ -6,9 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/registry"
 	"github.com/danmestas/bones/internal/swarm"
@@ -243,6 +246,144 @@ func TestStatusAllEmptyRegistry(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "No workspaces running") {
 		t.Fatalf("expected 'No workspaces running', got: %s", buf.String())
+	}
+}
+
+// TestResolveStatusRoot_DoesNotAutoStartHub mirrors the #138 item 7
+// fix for `bones down` (TestResolveDownRoot_DoesNotAutoStartHub) for
+// `bones status` (#207). Pre-fix, every CLI verb resolved the
+// workspace via workspace.Join, which lazy-starts the hub via
+// hubStartFunc when none is healthy. That contradicts the lazy-hub
+// promise printed by `bones up` ("hub: not yet started — will start
+// on next session or first verb that needs it"): a read-only verb
+// like status would silently boot a hub on every invocation.
+//
+// Post-fix, status's root resolver calls workspace.FindRoot
+// (read-only), so no hub start is attempted at all. The renderer's
+// existing degraded-mode branch (HubAvailable=false) handles output
+// when the hub is genuinely down.
+func TestResolveStatusRoot_DoesNotAutoStartHub(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".bones"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".bones", "agent.id"),
+		[]byte("test-agent-id\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := resolveStatusRoot(root)
+	if err != nil {
+		t.Fatalf("resolveStatusRoot: %v", err)
+	}
+	if got != root {
+		t.Errorf("resolveStatusRoot: got %q, want %q", got, root)
+	}
+
+	// Hub state files must NOT have been created. workspace.Join would
+	// have written hub-fossil-url and hub-nats-url and started a leaf;
+	// FindRoot writes nothing.
+	for _, name := range []string{"hub-fossil-url", "hub-nats-url"} {
+		path := filepath.Join(root, ".bones", name)
+		if _, err := os.Stat(path); err == nil {
+			t.Errorf("resolveStatusRoot must not auto-start hub; "+
+				"found %s (#207)", path)
+		} else if !os.IsNotExist(err) {
+			t.Errorf("stat %s: unexpected error: %v", path, err)
+		}
+	}
+	// pids dir is hub.Start's first side effect; presence indicates
+	// the auto-start branch ran.
+	if _, err := os.Stat(filepath.Join(root, ".bones", "pids")); err == nil {
+		t.Errorf("resolveStatusRoot created .bones/pids/; hub auto-start ran (#207)")
+	}
+}
+
+// TestStatusRun_NoHub_DoesNotStartOne is the end-to-end pin of #207.
+// Against a fresh workspace marker with no hub running, StatusCmd.Run
+// must:
+//   - exit 0 (degraded mode is non-error),
+//   - emit the "Hub fossil unavailable" hint from the existing
+//     HubAvailable=false renderer branch,
+//   - leave the workspace's .bones/ directory in the same shape it
+//     found (no pids/, no hub-*-url files).
+//
+// Pre-fix this would emit `bones: starting hub for workspace ...` to
+// stderr and write hub state.
+func TestStatusRun_NoHub_DoesNotStartOne(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".bones"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".bones", "agent.id"),
+		[]byte("test-agent-id\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// scaffold_version stamp keeps the WARN out of output (separate
+	// concern from #207); this test is about the hub-start side effect.
+	if err := os.WriteFile(filepath.Join(root, ".bones", "scaffold_version"),
+		[]byte("0001\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+
+	// Capture stdout to verify the degraded-mode hint appears and no
+	// "starting hub" line leaks. finish() closes the pipe writer and
+	// drains the reader; must run BEFORE inspecting the buffer.
+	stdout, finish := captureStdout(t)
+
+	cmd := &StatusCmd{}
+	runErr := cmd.Run(&repocli.Globals{})
+	finish()
+	if runErr != nil {
+		t.Fatalf("StatusCmd.Run: %v", runErr)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "Hub fossil unavailable") {
+		t.Errorf("expected degraded-mode hint in output, got:\n%s", out)
+	}
+	if strings.Contains(out, "starting hub for workspace") {
+		t.Errorf("status auto-started hub (#207); output:\n%s", out)
+	}
+
+	// No hub state files created.
+	for _, name := range []string{"hub-fossil-url", "hub-nats-url"} {
+		path := filepath.Join(root, ".bones", name)
+		if _, err := os.Stat(path); err == nil {
+			t.Errorf("status created %s; #207 says it must not write hub state", path)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, ".bones", "pids")); err == nil {
+		t.Errorf("status created .bones/pids/; #207 says it must not write hub state")
+	}
+}
+
+// captureStdout swaps os.Stdout for a pipe and returns a buffer plus
+// a finish func. Caller must invoke finish() AFTER the function under
+// test returns and BEFORE reading the buffer — finish closes the
+// writer, drains the reader goroutine, and restores os.Stdout. Used
+// because StatusCmd.Run writes directly to os.Stdout and we want to
+// assert on its content in-process.
+func captureStdout(t *testing.T) (*bytes.Buffer, func()) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	buf := &bytes.Buffer{}
+	done := make(chan struct{})
+	go func() {
+		_, _ = buf.ReadFrom(r)
+		close(done)
+	}()
+	return buf, func() {
+		_ = w.Close()
+		<-done
+		os.Stdout = orig
+		_ = r.Close()
 	}
 }
 
