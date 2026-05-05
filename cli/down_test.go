@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -876,8 +877,8 @@ func readJSON(t *testing.T, path string) map[string]any {
 }
 
 // TestRemoveBonesSkills_PreservesUserModified pins the down-side
-// contract for the skill bundle: hash-matching files (the unmodified
-// embedded source) get cleaned, user-edited files survive teardown.
+// contract for the skill bundle: manifest-matching files (the unmodified
+// installed source) get cleaned, user-edited files survive teardown.
 func TestRemoveBonesSkills_PreservesUserModified(t *testing.T) {
 	dir := t.TempDir()
 	fp := scaffoldFootprint{HooksAddedByEvent: map[string]int{}}
@@ -889,21 +890,29 @@ func TestRemoveBonesSkills_PreservesUserModified(t *testing.T) {
 	if err := os.WriteFile(userSkill, []byte("USER OVERRIDE\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	removed, err := removeBonesSkills(dir)
+	res, err := removeBonesSkills(dir)
 	if err != nil {
 		t.Fatalf("removeBonesSkills: %v", err)
 	}
 	// orchestrator should NOT be in removed (user-modified).
-	for _, name := range removed {
+	for _, name := range res.RemovedSkills {
 		if name == "orchestrator" {
 			t.Errorf("orchestrator should be preserved (user-modified) but was removed")
 		}
 	}
-	// Other bundled skills with no user edits should be removed.
-	for _, name := range []string{"using-bones-powers", "systematic-debugging"} {
-		dir := filepath.Join(dir, ".claude", "skills", name)
-		_ = name
-		_ = dir
+	// The user-modified path must be surfaced in res.PreservedFiles so
+	// the down summary can warn the operator instead of silently
+	// retaining the file (issue #210).
+	relUser := filepath.Join(".claude", "skills", "orchestrator", "SKILL.md")
+	foundPreserved := false
+	for _, p := range res.PreservedFiles {
+		if p == relUser {
+			foundPreserved = true
+		}
+	}
+	if !foundPreserved {
+		t.Errorf("user-modified path missing from PreservedFiles: got %v",
+			res.PreservedFiles)
 	}
 	got, err := os.ReadFile(userSkill)
 	if err != nil {
@@ -911,6 +920,96 @@ func TestRemoveBonesSkills_PreservesUserModified(t *testing.T) {
 	}
 	if string(got) != "USER OVERRIDE\n" {
 		t.Errorf("user content corrupted: %q", got)
+	}
+}
+
+// TestRemoveBonesSkills_BundleVersionSkew pins the issue #210 regression:
+// when the binary is upgraded between `bones up` and `bones down`, the
+// embedded skill bundle's bytes change. The unmodified on-disk copy
+// from the older install must still be recognized as bones-owned (via
+// the install-time manifest) and removed cleanly, NOT preserved as if
+// the user had edited it.
+//
+// Pre-fix, removeBonesSkills compared on-disk bytes to the currently-
+// embedded bundle — any divergence (legitimate version drift) classified
+// the file as "user-modified" and silently retained the directory,
+// violating the CLAUDE.md contract that `bones down` removes the
+// bones-owned skill files.
+func TestRemoveBonesSkills_BundleVersionSkew(t *testing.T) {
+	dir := t.TempDir()
+	fp := scaffoldFootprint{HooksAddedByEvent: map[string]int{}}
+	if err := writeBonesSkills(dir, &fp); err != nil {
+		t.Fatalf("writeBonesSkills: %v", err)
+	}
+
+	// Simulate a binary upgrade between `bones up` and `bones down`.
+	// The older binary's install path wrote skill files AND stamped
+	// the manifest with their hashes. After the binary upgrade, the
+	// embedded bundle's bytes have moved on, so on-disk content no
+	// longer matches the embed. But it DOES still match the manifest
+	// — which is the authoritative record of what bones installed.
+	//
+	// Walk every file the real install just placed, replace each with
+	// "stale" bytes (modeling: the older binary's bundle), and
+	// rewrite the manifest to record those stale hashes. After this,
+	// on-disk bytes match the manifest but mismatch the current
+	// embed — exactly the issue #210 skew shape.
+	manifest := skillManifest{
+		Version: "0.0.0-test-prior",
+		Files:   map[string]string{},
+	}
+	for _, name := range bonesOwnedSkills {
+		skillDir := filepath.Join(dir, ".claude", "skills", name)
+		walkErr := filepath.WalkDir(skillDir, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			rel, _ := filepath.Rel(dir, path)
+			stale := []byte("stale-bundle-content for " + rel + "\n")
+			if err := os.WriteFile(path, stale, 0o644); err != nil {
+				return err
+			}
+			manifest.Files[filepath.ToSlash(rel)] = hashHex(stale)
+			return nil
+		})
+		if walkErr != nil {
+			t.Fatalf("seed stale %s: %v", name, walkErr)
+		}
+	}
+	mPath := filepath.Join(dir, filepath.FromSlash(manifestRel))
+	out, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(mPath, append(out, '\n'), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	res, err := removeBonesSkills(dir)
+	if err != nil {
+		t.Fatalf("removeBonesSkills: %v", err)
+	}
+	// Every bundled skill directory must be gone — including stale-
+	// bytes ones. Pre-fix this assertion fails because hash mismatch
+	// against the new embed silently retains the directories.
+	for _, name := range bonesOwnedSkills {
+		skillDir := filepath.Join(dir, ".claude", "skills", name)
+		if _, err := os.Stat(skillDir); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("skill dir %s survived `bones down` despite stale-but-"+
+				"unedited content (issue #210): err=%v", name, err)
+		}
+	}
+	if len(res.PreservedFiles) != 0 {
+		t.Errorf("no files were user-edited; got PreservedFiles=%v",
+			res.PreservedFiles)
+	}
+	// The empty .claude/skills/ root must also be cleaned up.
+	skillsDir := filepath.Join(dir, ".claude", "skills")
+	if _, err := os.Stat(skillsDir); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("empty .claude/skills/ should be removed; err=%v", err)
 	}
 }
 

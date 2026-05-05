@@ -422,8 +422,23 @@ func planRemoveSkills(root string, c *DownCmd) []downAction {
 		plan = append(plan, downAction{
 			description: "remove bundled skills (preserves user-modified files)",
 			do: func() error {
-				_, err := removeBonesSkills(root)
-				return err
+				res, err := removeBonesSkills(root)
+				if err != nil {
+					return err
+				}
+				// Issue #210: silent retention is no longer
+				// acceptable. When the manifest+disk hashes diverge
+				// (i.e. the user edited a bundled skill) emit a
+				// visible warning naming each preserved path. Pre-
+				// fix this branch was hit silently for *every* binary
+				// upgrade — now it only fires for genuine user edits,
+				// and the operator sees exactly what bones spared.
+				for _, p := range res.PreservedFiles {
+					fmt.Fprintf(os.Stderr,
+						"down: WARN preserved user-modified bundled "+
+							"skill file: %s\n", p)
+				}
+				return nil
 			},
 		})
 	}
