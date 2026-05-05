@@ -1434,3 +1434,35 @@ func TestAgentsMDTemplate_ConsistentAcrossAllShapes(t *testing.T) {
 		})
 	}
 }
+
+// TestAgentsMDTemplate_TeachesPerSlotSerialization pins issue #214: the
+// bundled AGENTS.md template must teach the one-leaf-per-slot rule so
+// plan-authoring agents (including third-party `writing-plans` skills
+// that read AGENTS.md) stop packing many tasks into one slot. The
+// template must:
+//
+//   - State that bones runs at most one leaf per slot at a time and
+//     therefore tasks sharing a slot run serially.
+//   - State that parallelism comes from N distinct slots, not from
+//     packing one slot.
+//   - Point at the inspection command (`bones tasks list --by-slot`)
+//     so an author can audit a plan's slot distribution before dispatch.
+func TestAgentsMDTemplate_TeachesPerSlotSerialization(t *testing.T) {
+	tmpl := string(agentsMDTemplate)
+	mustContain := []string{
+		// Names the rule explicitly; matches the canonical wording from
+		// ADR 0028 architectural invariant 1.
+		"one leaf per slot",
+		// Names the consequence so plan authors understand the cost.
+		"serial",
+		// Points at the inspection command from fix A.
+		"--by-slot",
+	}
+	for _, sub := range mustContain {
+		if !strings.Contains(strings.ToLower(tmpl), strings.ToLower(sub)) {
+			t.Errorf("AGENTS.md template missing required teaching substring %q "+
+				"(issue #214: per-slot serialization rule must be surfaced "+
+				"to plan-authoring agents)", sub)
+		}
+	}
+}
