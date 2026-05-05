@@ -124,7 +124,8 @@ func TestRemoveBonesHooks_NoHooksKey(t *testing.T) {
 
 // TestRemoveBonesHooks_OnlyBonesHooks: when settings.json has only
 // the bones-installed hooks and no others, the entire hooks key is
-// removed (no empty container left behind).
+// removed AND the file itself is deleted (#235). A settings.json that
+// would be left as `{}` post-strip is bones-owned end to end.
 func TestRemoveBonesHooks_OnlyBonesHooks(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
@@ -158,15 +159,16 @@ func TestRemoveBonesHooks_OnlyBonesHooks(t *testing.T) {
 	if err := removeBonesHooks(path); err != nil {
 		t.Fatalf("removeBonesHooks: %v", err)
 	}
-	got := readJSON(t, path)
-	if _, ok := got["hooks"]; ok {
-		t.Errorf("hooks key should be removed; got %+v", got)
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("settings.json with only bones hooks should be deleted; "+
+			"stat err=%v", err)
 	}
 }
 
 // TestRemoveBonesHooks_LegacyStopHook: bones down on a workspace
 // installed before the SessionEnd migration must still clean up the
-// shim that lives under the old "Stop" event.
+// shim that lives under the old "Stop" event. Per #235 the resulting
+// empty settings.json is also removed.
 func TestRemoveBonesHooks_LegacyStopHook(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
@@ -189,9 +191,9 @@ func TestRemoveBonesHooks_LegacyStopHook(t *testing.T) {
 	if err := removeBonesHooks(path); err != nil {
 		t.Fatalf("removeBonesHooks: %v", err)
 	}
-	got := readJSON(t, path)
-	if _, ok := got["hooks"]; ok {
-		t.Errorf("legacy Stop hook should be cleaned up; got %+v", got)
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("legacy-Stop-only settings.json should be deleted; "+
+			"stat err=%v", err)
 	}
 }
 
@@ -200,6 +202,7 @@ func TestRemoveBonesHooks_LegacyStopHook(t *testing.T) {
 // `bones hub start`, `bones tasks prime --json` under SessionStart,
 // and `bones tasks prime --json` under PreCompact. User-authored
 // hooks at the same events are preserved (covered by a sibling test).
+// Per #235 the resulting empty settings.json is also removed.
 func TestRemoveBonesHooks_StripsAllBonesOwned(t *testing.T) {
 	dir := t.TempDir()
 	settings := filepath.Join(dir, "settings.json")
@@ -230,16 +233,8 @@ func TestRemoveBonesHooks_StripsAllBonesOwned(t *testing.T) {
 	if err := removeBonesHooks(settings); err != nil {
 		t.Fatalf("removeBonesHooks: %v", err)
 	}
-	got, err := os.ReadFile(settings)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	s := string(got)
-	if strings.Contains(s, "bones hub start") {
-		t.Errorf("settings still contains 'bones hub start':\n%s", s)
-	}
-	if strings.Contains(s, "bones tasks prime --json") {
-		t.Errorf("settings still contains 'bones tasks prime --json':\n%s", s)
+	if _, err := os.Stat(settings); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("bones-only settings.json should be deleted; stat err=%v", err)
 	}
 }
 
@@ -1010,6 +1005,350 @@ func TestRemoveBonesSkills_BundleVersionSkew(t *testing.T) {
 	skillsDir := filepath.Join(dir, ".claude", "skills")
 	if _, err := os.Stat(skillsDir); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("empty .claude/skills/ should be removed; err=%v", err)
+	}
+}
+
+// TestRemoveBonesHooks_DeletesEmptyFile pins issue #235: when stripping
+// bones-owned hooks leaves settings.json with no remaining top-level
+// keys, the file is deleted entirely. Bones up only writes a "hooks"
+// object on a fresh tree, so an empty post-strip object means the file
+// is bones-owned end to end — leaving `{}` behind leaks a settings.json
+// the user never authored.
+func TestRemoveBonesHooks_DeletesEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	writeJSON(t, path, map[string]any{
+		"hooks": map[string]any{
+			"SessionStart": []any{
+				map[string]any{
+					"matcher": "",
+					"hooks": []any{
+						map[string]any{
+							"command": "bones hub start",
+							"type":    "command",
+						},
+					},
+				},
+			},
+		},
+	})
+
+	if err := removeBonesHooks(path); err != nil {
+		t.Fatalf("removeBonesHooks: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("settings.json should be deleted when only bones hooks "+
+			"remained; stat err=%v", err)
+	}
+}
+
+// TestRemoveBonesHooks_PreservesUserKeys pins the non-clobber half of
+// #235: settings.json with non-hooks user keys (theme, env, …) survives
+// down with those keys preserved byte-for-byte. Only bones-owned hooks
+// are stripped.
+func TestRemoveBonesHooks_PreservesUserKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	writeJSON(t, path, map[string]any{
+		"theme": "dark",
+		"env":   map[string]any{"FOO": "bar"},
+		"hooks": map[string]any{
+			"SessionStart": []any{
+				map[string]any{
+					"matcher": "",
+					"hooks": []any{
+						map[string]any{
+							"command": "bones hub start",
+							"type":    "command",
+						},
+					},
+				},
+			},
+		},
+	})
+
+	if err := removeBonesHooks(path); err != nil {
+		t.Fatalf("removeBonesHooks: %v", err)
+	}
+
+	// File must survive.
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("settings.json should be preserved with user keys: %v", err)
+	}
+	got := readJSON(t, path)
+	if got["theme"] != "dark" {
+		t.Errorf("theme: got %v, want dark", got["theme"])
+	}
+	envMap, _ := got["env"].(map[string]any)
+	if envMap["FOO"] != "bar" {
+		t.Errorf("env.FOO: got %v, want bar", envMap["FOO"])
+	}
+	if _, ok := got["hooks"]; ok {
+		t.Errorf("hooks key should be removed; got %+v", got["hooks"])
+	}
+}
+
+// TestRemoveBonesHooks_DeletesLiteralEmptyJSON pins the #235 edge case:
+// a settings.json that is already `{}` (no keys) is bones-owned by
+// definition and gets removed.
+func TestRemoveBonesHooks_DeletesLiteralEmptyJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeBonesHooks(path); err != nil {
+		t.Fatalf("removeBonesHooks: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("empty {} settings.json should be deleted; stat err=%v", err)
+	}
+}
+
+// TestRunDown_RemovesEmptyClaudeDir pins issue #235's symmetry
+// invariant end-to-end: on a workspace where bones up created
+// .claude/ (no pre-existing user content), bones down removes it
+// completely. settings.json gets stripped → file empty → deleted →
+// .claude/ now empty → directory removed.
+func TestRunDown_RemovesEmptyClaudeDir(t *testing.T) {
+	dir := t.TempDir()
+	mkdir(t, filepath.Join(dir, ".bones"))
+	mkdir(t, filepath.Join(dir, ".claude"))
+	// Bones-owned settings.json with only the bones hub-start hook.
+	writeFile(t, filepath.Join(dir, ".claude", "settings.json"), `{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"command": "bones hub start", "type": "command", "timeout": 10}
+        ]
+      }
+    ]
+  }
+}`)
+
+	if err := runDown(dir, &DownCmd{Yes: true, KeepHub: true},
+		strings.NewReader("")); err != nil {
+		t.Fatalf("runDown: %v", err)
+	}
+
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	if _, err := os.Stat(settingsPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("settings.json should be removed: %v", err)
+	}
+	claudeDir := filepath.Join(dir, ".claude")
+	if _, err := os.Stat(claudeDir); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf(".claude/ should be removed (was empty): %v", err)
+	}
+}
+
+// TestRunDown_PreservesNonEmptyClaudeDir pins the inverse invariant:
+// a .claude/ that still contains user files after bones-owned content
+// is stripped must survive. Down does not nuke user-authored agent
+// configs, custom skills, etc.
+func TestRunDown_PreservesNonEmptyClaudeDir(t *testing.T) {
+	dir := t.TempDir()
+	mkdir(t, filepath.Join(dir, ".bones"))
+	mkdir(t, filepath.Join(dir, ".claude"))
+	// User-authored file in .claude/. Bones never wrote this.
+	writeFile(t, filepath.Join(dir, ".claude", "user-notes.md"),
+		"my own notes\n")
+	// Bones-owned settings.json — gets removed.
+	writeFile(t, filepath.Join(dir, ".claude", "settings.json"), `{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {"command": "bones hub start", "type": "command", "timeout": 10}
+        ]
+      }
+    ]
+  }
+}`)
+
+	if err := runDown(dir, &DownCmd{Yes: true, KeepHub: true},
+		strings.NewReader("")); err != nil {
+		t.Fatalf("runDown: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, ".claude")); err != nil {
+		t.Errorf(".claude/ should be preserved (has user file): %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".claude", "user-notes.md")); err != nil {
+		t.Errorf("user file should be preserved: %v", err)
+	}
+}
+
+// TestPlanRemoveEmptyClaudeDir_KeepFlagsSuppress: --keep-skills or
+// --keep-hooks must suppress the empty-dir cleanup, since either flag
+// implies content under .claude/ is being kept and the directory must
+// stay too.
+func TestPlanRemoveEmptyClaudeDir_KeepFlagsSuppress(t *testing.T) {
+	dir := t.TempDir()
+	mkdir(t, filepath.Join(dir, ".claude"))
+
+	if plan := planRemoveEmptyClaudeDir(dir, &DownCmd{KeepSkills: true}); plan != nil {
+		t.Errorf("KeepSkills should suppress empty-claude cleanup; got %d actions",
+			len(plan))
+	}
+	if plan := planRemoveEmptyClaudeDir(dir, &DownCmd{KeepHooks: true}); plan != nil {
+		t.Errorf("KeepHooks should suppress empty-claude cleanup; got %d actions",
+			len(plan))
+	}
+}
+
+// TestRemoveBonesGitignoreEntries_RemovesAllThree pins issue #237: the
+// 3 lines bones up adds (.fslckout, .fossil-settings/, .bones/) plus
+// the bones header comment are all stripped on down. Symmetric with up.
+func TestRemoveBonesGitignoreEntries_RemovesAllThree(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gitignore")
+	// Layout matches what ensureGitignoreEntries writes when starting
+	// from an empty file (or appending to a user-authored file).
+	body := "node_modules/\n*.log\n\n" +
+		"# Bones runtime + Fossil checkout-at-root (ADRs 0023, 0041)\n" +
+		".fslckout\n.fossil-settings/\n.bones/\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removeBonesGitignoreEntries(path); err != nil {
+		t.Fatalf("removeBonesGitignoreEntries: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	for _, banned := range []string{
+		".fslckout", ".fossil-settings/", ".bones/",
+		"# Bones runtime",
+	} {
+		if strings.Contains(string(got), banned) {
+			t.Errorf(".gitignore still contains %q:\n%s", banned, got)
+		}
+	}
+	// User content survives.
+	if !strings.Contains(string(got), "node_modules/") {
+		t.Errorf("user line node_modules/ stripped:\n%s", got)
+	}
+	if !strings.Contains(string(got), "*.log") {
+		t.Errorf("user line *.log stripped:\n%s", got)
+	}
+}
+
+// TestRemoveBonesGitignoreEntries_DeletesEmptyFile pins the symmetric
+// case of #237: a .gitignore that bones up created on a fresh tree
+// (no pre-existing user content) is removed entirely on down.
+func TestRemoveBonesGitignoreEntries_DeletesEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gitignore")
+	body := "\n# Bones runtime + Fossil checkout-at-root (ADRs 0023, 0041)\n" +
+		".fslckout\n.fossil-settings/\n.bones/\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removeBonesGitignoreEntries(path); err != nil {
+		t.Fatalf("removeBonesGitignoreEntries: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("bones-only .gitignore should be deleted; stat err=%v", err)
+	}
+}
+
+// TestRemoveBonesGitignoreEntries_UserDuplicatedEntry documents the
+// edge case noted in the issue brief: when the user has manually added
+// `.bones/` (or another bones-owned line) to their gitignore, exact-
+// match removal still drops it. This is correct: bones-owned line
+// content is bones-owned line content regardless of who typed it, and
+// the post-down state is indistinguishable from "bones never touched
+// the file" — which IS the byte-for-byte uninstall promise. A user who
+// wants `.bones/` ignored independently can re-add it after down.
+func TestRemoveBonesGitignoreEntries_UserDuplicatedEntry(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gitignore")
+	// User had .bones/ themselves before bones up ran — it sits
+	// outside the bones header block. ensureGitignoreEntries skips
+	// duplicates so it won't appear under the header. After down,
+	// exact-match removal removes the user's line too.
+	body := "node_modules/\n.bones/\n*.log\n\n" +
+		"# Bones runtime + Fossil checkout-at-root (ADRs 0023, 0041)\n" +
+		".fslckout\n.fossil-settings/\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removeBonesGitignoreEntries(path); err != nil {
+		t.Fatalf("removeBonesGitignoreEntries: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if strings.Contains(string(got), ".bones/") {
+		t.Errorf("user-duplicated .bones/ line should be removed; got:\n%s", got)
+	}
+	if !strings.Contains(string(got), "node_modules/") {
+		t.Errorf("user line node_modules/ stripped:\n%s", got)
+	}
+}
+
+// TestRemoveBonesGitignoreEntries_MissingFile is a no-op (idempotent
+// on a tree without a .gitignore).
+func TestRemoveBonesGitignoreEntries_MissingFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := removeBonesGitignoreEntries(filepath.Join(dir, "missing")); err != nil {
+		t.Errorf("missing file should be no-op, got: %v", err)
+	}
+}
+
+// TestPlanRemoveGitignoreEntries_OmitsWhenAbsent: no .gitignore →
+// no plan action. The plan output reflects what's present on disk.
+func TestPlanRemoveGitignoreEntries_OmitsWhenAbsent(t *testing.T) {
+	dir := t.TempDir()
+	if plan := planRemoveGitignoreEntries(dir); plan != nil {
+		t.Errorf("expected nil plan for missing .gitignore; got %d actions",
+			len(plan))
+	}
+}
+
+// TestUpDown_GitignoreSymmetry pins the round-trip invariant: after
+// `bones up` adds entries to a .gitignore that previously held only
+// user content, `bones down` produces a file byte-identical to the
+// pre-up state. Catches drift between bonesGitignoreEntries (down) and
+// the entries ensureGitignoreEntries actually writes (up).
+func TestUpDown_GitignoreSymmetry(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gitignore")
+	preUp := "node_modules/\n*.log\n"
+	if err := os.WriteFile(path, []byte(preUp), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureGitignoreEntries(dir, nil); err != nil {
+		t.Fatalf("ensureGitignoreEntries: %v", err)
+	}
+	// Sanity: up actually added something.
+	mid, _ := os.ReadFile(path)
+	if string(mid) == preUp {
+		t.Fatal("ensureGitignoreEntries was a no-op; test setup is wrong")
+	}
+
+	if err := removeBonesGitignoreEntries(path); err != nil {
+		t.Fatalf("removeBonesGitignoreEntries: %v", err)
+	}
+
+	postDown, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read post-down: %v", err)
+	}
+	if string(postDown) != preUp {
+		t.Errorf("up→down not symmetric:\npre-up:\n%q\npost-down:\n%q",
+			preUp, postDown)
 	}
 }
 
