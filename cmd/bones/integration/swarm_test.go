@@ -622,3 +622,221 @@ func TestCLI_SwarmAutoDiscover(t *testing.T) {
 		t.Fatalf("swarm close exit=%d stderr=%s", code, stderr)
 	}
 }
+
+// TestCLI_SwarmClose_FailLoudWithoutCommit pins the #233 fix: a slot
+// that joined but never committed must NOT silently close success.
+// `bones swarm close --result=success` exits non-zero with a
+// diagnostic naming the precondition and pointing at --no-artifact
+// for the legitimate-empty-close path. Subagents that hallucinate the
+// "no Write" policy from #233 will surface this error to the
+// orchestrator instead of writing a bogus reason string.
+func TestCLI_SwarmClose_FailLoudWithoutCommit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	requireBinaries(t)
+	dir := setupSwarmWorkspace(t)
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	httpPort, natsPort := pickPortPair(t)
+	startSwarmHub(t, dir, httpPort, natsPort)
+	hubURL := fmt.Sprintf("http://127.0.0.1:%d", httpPort)
+
+	slot := "rendering"
+	taskID := createSwarmTaskNoFiles(t, dir, slot, "[slot: rendering] no-commit task")
+
+	if _, stderr, code := runCmd(t, bonesBin, dir,
+		"swarm", "join",
+		"--slot="+slot, "--task-id="+taskID,
+		"--hub-url="+hubURL,
+	); code != 0 {
+		t.Fatalf("swarm join exit=%d stderr=%s", code, stderr)
+	}
+
+	// No commit. Close should refuse with non-zero exit and a message
+	// that names the precondition + --no-artifact escape hatch.
+	stdout, stderr, code := runCmd(t, bonesBin, dir,
+		"swarm", "close",
+		"--slot="+slot, "--result=success",
+		"--summary=should be refused",
+		"--hub-url="+hubURL,
+	)
+	if code == 0 {
+		t.Fatalf("swarm close unexpectedly succeeded: stdout=%s stderr=%s",
+			stdout, stderr)
+	}
+	combined := stderr + stdout
+	if !strings.Contains(combined, "no work committed") {
+		t.Errorf("error missing precondition mention: %s", combined)
+	}
+	if !strings.Contains(combined, "--no-artifact") {
+		t.Errorf("error missing --no-artifact escape hatch: %s", combined)
+	}
+
+	// Session must still exist (close was refused before any state
+	// mutation), so a follow-up close --no-artifact can converge.
+	statusOut, _, _ := runCmd(t, bonesBin, dir, "swarm", "status", "--json")
+	if !strings.Contains(statusOut, slot) {
+		t.Errorf("session evaporated after refused close: %s", statusOut)
+	}
+}
+
+// TestCLI_SwarmClose_NoArtifactBypass pins the legitimate-empty-close
+// path: when an operator (or a research subagent that genuinely has
+// nothing to commit) explicitly opts in via --no-artifact, swarm close
+// succeeds. The per-slot log records `no_artifact: true` as a structured
+// boolean — NOT a free-form reason string. The boolean shape is the
+// fix shape for #233: a flag that flips, not a reason string an agent
+// can hallucinate.
+func TestCLI_SwarmClose_NoArtifactBypass(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	requireBinaries(t)
+	dir := setupSwarmWorkspace(t)
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	httpPort, natsPort := pickPortPair(t)
+	startSwarmHub(t, dir, httpPort, natsPort)
+	hubURL := fmt.Sprintf("http://127.0.0.1:%d", httpPort)
+
+	slot := "rendering"
+	taskID := createSwarmTaskNoFiles(t, dir, slot, "[slot: rendering] research-only task")
+
+	if _, stderr, code := runCmd(t, bonesBin, dir,
+		"swarm", "join",
+		"--slot="+slot, "--task-id="+taskID,
+		"--hub-url="+hubURL,
+	); code != 0 {
+		t.Fatalf("swarm join exit=%d stderr=%s", code, stderr)
+	}
+
+	if _, stderr, code := runCmd(t, bonesBin, dir,
+		"swarm", "close",
+		"--slot="+slot, "--result=success",
+		"--summary=research returned inline",
+		"--no-artifact",
+		"--hub-url="+hubURL,
+	); code != 0 {
+		t.Fatalf("swarm close --no-artifact exit=%d stderr=%s", code, stderr)
+	}
+
+	logBytes, err := os.ReadFile(filepath.Join(dir, ".bones", "swarm", slot, "log"))
+	if err != nil {
+		t.Fatalf("read slot log: %v", err)
+	}
+	var closeLine map[string]interface{}
+	for _, line := range strings.Split(strings.TrimSpace(string(logBytes)), "\n") {
+		if line == "" {
+			continue
+		}
+		var row map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatalf("parse slot log line %q: %v", line, err)
+		}
+		if row["event"] == "close" {
+			closeLine = row
+		}
+	}
+	if closeLine == nil {
+		t.Fatalf("no close event in slot log:\n%s", logBytes)
+	}
+	got, ok := closeLine["no_artifact"]
+	if !ok {
+		t.Fatalf("close event missing no_artifact field: %v", closeLine)
+	}
+	gotBool, isBool := got.(bool)
+	if !isBool {
+		t.Fatalf("no_artifact must be a structured boolean, got %T = %v",
+			got, got)
+	}
+	if !gotBool {
+		t.Errorf("no_artifact: want true, got false")
+	}
+}
+
+// TestCLI_SwarmClose_HappyPathRegression is the regression guard:
+// after a normal join + commit + close --result=success cycle, the
+// per-slot log records the close WITHOUT a no_artifact field. The fix
+// for #233 must not regress this shape — operators reading the log
+// expect no_artifact to appear only on the explicit-empty-close path.
+func TestCLI_SwarmClose_HappyPathRegression(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	requireBinaries(t)
+	dir := setupSwarmWorkspace(t)
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	httpPort, natsPort := pickPortPair(t)
+	startSwarmHub(t, dir, httpPort, natsPort)
+	hubURL := fmt.Sprintf("http://127.0.0.1:%d", httpPort)
+
+	relFile := "rendering/normal.txt"
+	absFile := filepath.Join(dir, relFile)
+	taskID := createSwarmTask(t, dir, absFile, "[slot: rendering] normal task")
+	slot := "rendering"
+
+	if _, stderr, code := runCmd(t, bonesBin, dir,
+		"swarm", "join",
+		"--slot="+slot, "--task-id="+taskID,
+		"--hub-url="+hubURL,
+	); code != 0 {
+		t.Fatalf("swarm join exit=%d stderr=%s", code, stderr)
+	}
+
+	wt := filepath.Join(dir, ".bones", "swarm", slot, "wt")
+	filePath := filepath.Join(wt, "rendering", "normal.txt")
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		t.Fatalf("mkdir wt subdir: %v", err)
+	}
+	if err := os.WriteFile(filePath, []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if _, stderr, code := runCmd(t, bonesBin, dir,
+		"swarm", "commit",
+		"--slot="+slot, "-m=normal commit",
+		"--hub-url="+hubURL,
+		"rendering/normal.txt",
+	); code != 0 {
+		t.Fatalf("swarm commit exit=%d stderr=%s", code, stderr)
+	}
+
+	if _, stderr, code := runCmd(t, bonesBin, dir,
+		"swarm", "close",
+		"--slot="+slot, "--result=success", "--summary=done",
+		"--hub-url="+hubURL,
+	); code != 0 {
+		t.Fatalf("swarm close exit=%d stderr=%s", code, stderr)
+	}
+
+	logBytes, err := os.ReadFile(filepath.Join(dir, ".bones", "swarm", slot, "log"))
+	if err != nil {
+		t.Fatalf("read slot log: %v", err)
+	}
+	var closeLine map[string]interface{}
+	for _, line := range strings.Split(strings.TrimSpace(string(logBytes)), "\n") {
+		if line == "" {
+			continue
+		}
+		var row map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatalf("parse slot log line %q: %v", line, err)
+		}
+		if row["event"] == "close" {
+			closeLine = row
+		}
+	}
+	if closeLine == nil {
+		t.Fatalf("no close event in slot log:\n%s", logBytes)
+	}
+	if _, present := closeLine["no_artifact"]; present {
+		t.Errorf("happy path must not record no_artifact field: %v", closeLine)
+	}
+	if closeLine["result"] != "success" {
+		t.Errorf("close result: want success, got %v", closeLine["result"])
+	}
+}

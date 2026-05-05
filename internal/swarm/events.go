@@ -61,7 +61,7 @@ type Event struct {
 	AgentID    string    `json:"agent_id,omitempty"`
 	Host       string    `json:"host,omitempty"`
 	Result     string    `json:"result,omitempty"`
-	NoArtifact string    `json:"no_artifact,omitempty"`
+	NoArtifact bool      `json:"no_artifact,omitempty"`
 	CommitUUID string    `json:"commit_uuid,omitempty"`
 }
 
