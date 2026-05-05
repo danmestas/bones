@@ -227,3 +227,59 @@ func TestRunSwarmReport_DoesNotAutoStartHub(t *testing.T) {
 		t.Errorf("runSwarmReport created .bones/pids/; #228 says it must not write hub state")
 	}
 }
+
+// TestCheckAgentsMD_MarkerBlock pins #230: an AGENTS.md authored by
+// the user (no first-line marker) but carrying a bones-managed
+// `<!-- BONES:BEGIN --> … <!-- BONES:END -->` block IS bones-managed.
+// The check must report OK rather than the misleading "present but
+// not bones-managed" INFO that pre-fix bones doctor emitted against
+// every workspace where bones up appended its marker block to a
+// pre-existing AGENTS.md.
+func TestCheckAgentsMD_MarkerBlock(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		wantOK  string
+		wantNot string
+	}{
+		{
+			name: "whole-file-bones-owned",
+			content: agentsMDMarker + "\n\n## Agent Setup (REQUIRED)\n" +
+				"body\n",
+			wantOK:  "OK    AGENTS.md scaffolded with bones-required sections",
+			wantNot: "not bones-managed",
+		},
+		{
+			name: "user-authored-with-marker-block",
+			content: "# My Project\n\nUser content here.\n\n" +
+				bonesBlockBegin + "\nbones-managed body\n" + bonesBlockEnd + "\n",
+			wantOK:  "OK    AGENTS.md has bones-managed marker block",
+			wantNot: "not bones-managed",
+		},
+		{
+			name: "user-only-no-bones-content",
+			content: "# My Project\n\nNot bones-managed content.\n" +
+				"Nothing to see here.\n",
+			wantOK:  "INFO  AGENTS.md present but not bones-managed",
+			wantNot: "marker block",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cwd := t.TempDir()
+			if err := os.WriteFile(filepath.Join(cwd, "AGENTS.md"),
+				[]byte(tc.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var buf bytes.Buffer
+			_ = checkAgentsMD(&buf, cwd)
+			out := buf.String()
+			if !strings.Contains(out, tc.wantOK) {
+				t.Errorf("expected %q in output, got:\n%s", tc.wantOK, out)
+			}
+			if strings.Contains(out, tc.wantNot) {
+				t.Errorf("did not expect %q in output, got:\n%s", tc.wantNot, out)
+			}
+		})
+	}
+}
