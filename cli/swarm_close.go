@@ -38,7 +38,7 @@ type SwarmCloseCmd struct {
 	// these markers are bones-side observations.
 	SubstrateError string `name:"substrate-error" help:"free-text substrate failure (#159)"`
 	SubstrateFault string `name:"substrate-fault" help:"substrate fault category (#159)"`
-	NoArtifact     string `name:"no-artifact" help:"reason for closing success without a commit"`
+	NoArtifact     bool   `name:"no-artifact" help:"acknowledge an intentional empty close"`
 	KeepWT         bool   `name:"keep-wt" help:"retain wt dir on success (default: remove)"`
 }
 
@@ -91,11 +91,13 @@ func (c *SwarmCloseCmd) Run(g *repocli.Globals) error {
 		"result":  c.Result,
 		"summary": c.Summary,
 	}
-	// Per b61574e, the no-artifact reason must appear in the audit trail
-	// so post-hoc inspection can distinguish legitimate artifact-free closes
-	// from silent precondition violations.
-	if c.NoArtifact != "" {
-		closeFields["no_artifact"] = c.NoArtifact
+	// Per #233, no_artifact is a structured boolean — true when the
+	// caller explicitly acknowledged an intentional empty close, absent
+	// otherwise. The bool shape replaces the prior free-form reason
+	// string (b61574e) so a hallucinated rationale ("harness blocked
+	// file write") cannot leak into the audit trail.
+	if c.NoArtifact {
+		closeFields["no_artifact"] = true
 	}
 	appendSlotEvent(info.WorkspaceDir, lease.Slot(), logwriter.Event{
 		Timestamp: timeNow(),

@@ -374,7 +374,7 @@ func TestClose_DeletesRecordAndPidFile(t *testing.T) {
 	// cleanup path is what's exercised.
 	if err := resumed.Close(ctx, CloseOpts{
 		CloseTaskOnSuccess: true,
-		NoArtifact:         "test: covers cleanup path",
+		NoArtifact:         true,
 	}); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -602,7 +602,7 @@ func TestClose_RefusesSuccessWithoutCommit(t *testing.T) {
 	// caller's recovery path is to commit, then retry close.
 	if err := resumed.Close(ctx, CloseOpts{
 		CloseTaskOnSuccess: true,
-		NoArtifact:         "test-bypass",
+		NoArtifact:         true,
 	}); err != nil {
 		t.Fatalf("Close with NoArtifact bypass: %v", err)
 	}
@@ -639,7 +639,7 @@ func TestClose_RemovesWTOnSuccess(t *testing.T) {
 	}
 	if err := resumed.Close(ctx, CloseOpts{
 		CloseTaskOnSuccess: true,
-		NoArtifact:         "test: covers wt-removal path",
+		NoArtifact:         true,
 	}); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -704,7 +704,7 @@ func TestClose_KeepWTOnSuccess(t *testing.T) {
 	}
 	if err := resumed.Close(ctx, CloseOpts{
 		CloseTaskOnSuccess: true,
-		NoArtifact:         "test: covers keep-wt path",
+		NoArtifact:         true,
 		KeepWT:             true,
 	}); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -746,7 +746,7 @@ func TestClose_IdempotentMissingWT(t *testing.T) {
 	}
 	if err := resumed.Close(ctx, CloseOpts{
 		CloseTaskOnSuccess: true,
-		NoArtifact:         "test: covers idempotent missing-wt",
+		NoArtifact:         true,
 	}); err != nil {
 		t.Fatalf("Close (wt already missing): %v", err)
 	}

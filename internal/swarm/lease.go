@@ -97,12 +97,13 @@ var ErrCrossHostOperation = errors.New(
 // without producing an artifact severs the audit trail bones is
 // supposed to preserve. Callers that have a legitimate reason to
 // close success without a commit (e.g. a research subagent that
-// returned findings inline) must pass CloseOpts.NoArtifact with an
-// explicit reason; the reason is recorded so the post-mortem question
-// "why did this slot leave no commit?" has a documented answer.
+// returned findings inline) must opt in via CloseOpts.NoArtifact;
+// per #233 this is a boolean opt-in (not a free-form reason string)
+// so a hallucinated rationale cannot leak into the audit trail.
 var ErrCloseRequiresArtifact = errors.New(
-	"swarm: close --result=success refused — no commit landed since join; " +
-		"either commit the slot's artifact first or pass --no-artifact=<reason>",
+	"swarm: close --result=success refused — slot was joined but no work " +
+		"committed; either run `bones swarm commit` first, or pass " +
+		"--no-artifact to acknowledge an intentional empty close",
 )
 
 // AcquireOpts tunes Acquire and Resume. Zero-value defaults are
@@ -182,14 +183,14 @@ type CloseOpts struct {
 	// and fork leave it false.
 	CloseTaskOnSuccess bool
 
-	// NoArtifact, when non-empty, bypasses the
-	// "success requires a commit since join" precondition. The
-	// string is the operator's reason (e.g. "inline-only research
-	// findings") and is recorded in the lifecycle event log so the
-	// audit trail has a documented explanation for the missing
-	// artifact. Ignored when CloseTaskOnSuccess is false (fail and
-	// fork results have no artifact requirement).
-	NoArtifact string
+	// NoArtifact, when true, bypasses the "success requires a commit
+	// since join" precondition. Per #233 this is a structured boolean
+	// opt-in (not a free-form reason string) so a hallucinated
+	// rationale cannot leak into the audit trail; the lifecycle event
+	// records `no_artifact: true` when set. Ignored when
+	// CloseTaskOnSuccess is false (fail and fork results have no
+	// artifact requirement).
+	NoArtifact bool
 
 	// Reaped, when true, tags the emitted lifecycle event as
 	// EventSlotReap rather than EventSlotClose. Set by the
@@ -730,7 +731,7 @@ func (l *ResumedLease) Close(ctx context.Context, opts CloseOpts) error {
 // converges idempotently — the missing record itself implies the
 // caller already closed and we have nothing to refuse).
 func (l *ResumedLease) checkArtifactPrecondition(ctx context.Context, opts CloseOpts) error {
-	if !opts.CloseTaskOnSuccess || opts.NoArtifact != "" {
+	if !opts.CloseTaskOnSuccess || opts.NoArtifact {
 		return nil
 	}
 	if l.sessions == nil {
