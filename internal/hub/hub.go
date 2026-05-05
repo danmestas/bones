@@ -193,22 +193,33 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 	if err := os.MkdirAll(p.natsStore, 0o755); err != nil {
 		return fmt.Errorf("hub: nats store dir: %w", err)
 	}
+	// Write pid files BEFORE NewHub binds the HTTP listener. edgehub.NewHub
+	// calls net.Listen at construction (the HTTP socket is up before
+	// ServeHTTP runs), and the kernel SYN-ACKs connections to a bound-but-
+	// unaccepted socket — so the detach parent's waitForTCP probe succeeds
+	// the moment NewHub returns. If we wrote pids after NewHub, the
+	// parent's port-collision check (readPid against cmd.Process.Pid)
+	// would race ahead of the pid write and fire a false-positive
+	// "fossil port responded but pids/fossil.pid does not name our child
+	// (recorded 0)" error on every detach start. Pid files name the
+	// foreground process either way (os.Getpid() is stable across the
+	// NewHub call), so writing them first is correct.
+	if err := writePid(p.fossilPid, os.Getpid()); err != nil {
+		return fmt.Errorf("hub: write fossil.pid: %w", err)
+	}
+	if err := writePid(p.natsPid, os.Getpid()); err != nil {
+		_ = os.Remove(p.fossilPid)
+		return fmt.Errorf("hub: write nats.pid: %w", err)
+	}
 	freshSeed := false
 	if _, err := os.Stat(p.hubRepo); errors.Is(err, os.ErrNotExist) {
 		freshSeed = true
 	}
 	h, err := openAndSeedHub(ctx, p, o, freshSeed)
 	if err != nil {
-		return err
-	}
-	if err := writePid(p.fossilPid, os.Getpid()); err != nil {
-		_ = h.Stop()
-		return fmt.Errorf("hub: write fossil.pid: %w", err)
-	}
-	if err := writePid(p.natsPid, os.Getpid()); err != nil {
 		_ = os.Remove(p.fossilPid)
-		_ = h.Stop()
-		return fmt.Errorf("hub: write nats.pid: %w", err)
+		_ = os.Remove(p.natsPid)
+		return err
 	}
 	httpDone := make(chan struct{})
 	httpCtx, httpCancel := context.WithCancel(context.Background())

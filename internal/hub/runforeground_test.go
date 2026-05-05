@@ -65,6 +65,50 @@ func TestWaitOrTimeout_ZeroFallsBackToDefault(t *testing.T) {
 	}
 }
 
+// TestRunForeground_PidsWrittenBeforeHubOpen pins the fix for the
+// detach pid-race regression introduced by the libfossil-exit migration.
+// edgehub.NewHub binds the HTTP listener at construction (the kernel
+// SYN-ACKs on the bound socket immediately), so the detach parent's
+// waitForTCP would race ahead of the child's writePid if pid writes
+// happened post-NewHub. Verifies fossil.pid + nats.pid both name the
+// foreground process by the time openAndSeedHub is invoked. Runs a
+// synthetic seed-failure to keep the test fast: we only need to assert
+// pid files are present on entry into the seed step, not that the full
+// hub bring-up succeeds.
+func TestRunForeground_PidsWrittenBeforeHubOpen(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".bones", "pids"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p, err := newPaths(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	orig := seedHubRepoFunc
+	defer func() { seedHubRepoFunc = orig }()
+	var fossilPidAtSeed, natsPidAtSeed int
+	seedHubRepoFunc = func(_ context.Context, _ *edgehub.Hub, p paths) error {
+		// Read pid files at the moment seedHubRepo runs — well after
+		// runForeground's writePid calls completed but before any of
+		// the post-NewHub return paths could clean them up.
+		fossilPidAtSeed, _ = readPid(p.fossilPid)
+		natsPidAtSeed, _ = readPid(p.natsPid)
+		return errors.New("synthetic seed failure to short-circuit")
+	}
+
+	_ = runForeground(context.Background(), p, opts{})
+
+	if fossilPidAtSeed != os.Getpid() {
+		t.Errorf("fossil.pid at seed time: got %d, want %d (foreground process)",
+			fossilPidAtSeed, os.Getpid())
+	}
+	if natsPidAtSeed != os.Getpid() {
+		t.Errorf("nats.pid at seed time: got %d, want %d (foreground process)",
+			natsPidAtSeed, os.Getpid())
+	}
+}
+
 // TestRunForeground_SeedFailureCleansSidecars asserts that when seed
 // fails after libfossil has begun creating SQLite sidecar files,
 // runForeground removes the orphan -shm/-wal (and any partial
