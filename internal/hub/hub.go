@@ -20,6 +20,12 @@ import (
 	"github.com/danmestas/bones/internal/telemetry"
 )
 
+// acquireWorkspaceLockFunc is a seam over registry.AcquireWorkspaceLock
+// so tests can substitute a no-op or contention stub without spawning
+// real subprocesses. Production callers reach the real flock-based
+// implementation.
+var acquireWorkspaceLockFunc = registry.AcquireWorkspaceLock
+
 // detachEnv, when set, signals to a fork-exec'd child process that it
 // should run Start in foreground regardless of the --detach flag. The
 // CLI sets this on the child to break the recursion.
@@ -128,6 +134,17 @@ func Start(ctx context.Context, root string, options ...Option) (err error) {
 	if pidIsLive(p.fossilPid) && pidIsLive(p.natsPid) {
 		return nil
 	}
+
+	// Workspace-scoped lock guard (#208 prevention layer). Acquire
+	// BEFORE port resolution, URL-file writes, or fork-exec so a
+	// second concurrent `bones hub start` against the same workspace
+	// fails fast without side effects. Skip in the detached child:
+	// the parent already gated the start.
+	releaseLock, lockErr := acquireStartLock(p.root, isDetachChild)
+	if lockErr != nil {
+		return lockErr
+	}
+	defer releaseLock()
 
 	// Seed precondition (#138 item 9): a fresh hub start needs at least
 	// one git-tracked file to seed the hub fossil from. Without this
@@ -243,6 +260,11 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 	drainErr := drainHub(h, httpDone, o.drainTimeout)
 	_ = os.Remove(p.fossilPid)
 	_ = os.Remove(p.natsPid)
+	// Drop our own per-pid registry entry (#208 layout) so a clean
+	// hub exit does not leave a stale record for `bones doctor` or
+	// `bones status --all` to filter out via pidAlive. Dead-pid
+	// pruning still handles the unclean-exit case.
+	_ = registry.RemoveByPID(p.root, os.Getpid())
 	return drainErr
 }
 
@@ -535,6 +557,23 @@ func activeSlotNames(root string) ([]string, error) {
 		names = append(names, s.Name)
 	}
 	return names, nil
+}
+
+// acquireStartLock takes the workspace-scoped hub lock (#208) when
+// the caller is not the detached child. The detached child must NOT
+// contend for the lock — the parent still holds it for the lifetime
+// of waitForTCP and only releases on return. Returns a release func
+// (no-op when the caller is the detached child) plus any acquisition
+// error, wrapped with the "hub: " prefix the rest of Start uses.
+func acquireStartLock(root string, isDetachChild bool) (func(), error) {
+	if isDetachChild {
+		return func() {}, nil
+	}
+	rel, err := acquireWorkspaceLockFunc(root)
+	if err != nil {
+		return nil, fmt.Errorf("hub: %w", err)
+	}
+	return rel, nil
 }
 
 // terminateProcess sends SIGTERM, polls until stopGrace elapses, and

@@ -95,7 +95,7 @@ func Orphans() ([]Entry, error) {
 // a process that, by definition, isn't going to come back.
 func Reap(e Entry) error {
 	if !pidAlive(e.HubPID) {
-		return Remove(e.Cwd)
+		return RemoveByPID(e.Cwd, e.HubPID)
 	}
 	proc, err := os.FindProcess(e.HubPID)
 	if err != nil {
@@ -107,7 +107,7 @@ func Reap(e Entry) error {
 	deadline := time.Now().Add(reapGrace)
 	for time.Now().Before(deadline) {
 		if !pidAlive(e.HubPID) {
-			return Remove(e.Cwd)
+			return RemoveByPID(e.Cwd, e.HubPID)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -121,5 +121,5 @@ func Reap(e Entry) error {
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	return Remove(e.Cwd)
+	return RemoveByPID(e.Cwd, e.HubPID)
 }

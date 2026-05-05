@@ -194,6 +194,7 @@ func runBypassReportTo(w io.Writer, cwd string) (warns int, err error) {
 
 	warns += checkScaffoldGates(w, cwd)
 	warns += checkOrphanHubs(w)
+	warns += checkDuplicateHubs(w, cwd)
 	warns += checkStaleSlotDirs(w, cwd)
 
 	switch tip, head, drifted := fossilDrift(cwd); {
@@ -385,6 +386,41 @@ func checkOrphanHubs(w io.Writer) int {
 			e.HubPID, e.Cwd, age)
 	}
 	return len(orphans)
+}
+
+// checkDuplicateHubs reads the cross-workspace registry and reports
+// any live duplicate hub processes for the current workspace (#208).
+// A duplicate is two or more registry entries whose canonical Cwd
+// resolves to cwd AND whose HubPID is alive — the hallmark of two
+// concurrent `bones hub start` invocations against one workspace,
+// each silently overwriting the other's recorded URL files.
+//
+// Read-only: emits one WARN per duplicate naming the PID, fossil URL,
+// nats URL, and age. Reaping is a separate operator action (per the
+// brief and ADR 0043's read-only-doctor doctrine). Returns the warn
+// count.
+func checkDuplicateHubs(w io.Writer, cwd string) int {
+	dups, err := registry.Duplicates(cwd)
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "  WARN  duplicate-hub registry read: %v\n", err)
+		return 1
+	}
+	if len(dups) == 0 {
+		_, _ = fmt.Fprintln(w, "  OK    no duplicate hub processes for this workspace")
+		return 0
+	}
+	for _, e := range dups {
+		age := "?"
+		if !e.StartedAt.IsZero() {
+			age = time.Since(e.StartedAt).Round(time.Second).String()
+		}
+		_, _ = fmt.Fprintf(w,
+			"  WARN  duplicate hub: pid=%d fossil=%s nats=%s age=%s — "+
+				"another hub is serving this workspace; "+
+				"kill the stale pid or run `bones hub reap`\n",
+			e.HubPID, e.HubURL, e.NATSURL, age)
+	}
+	return len(dups)
 }
 
 // checkStaleSlotDirs reports per-slot directories under
