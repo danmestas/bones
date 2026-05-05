@@ -42,6 +42,20 @@ Some harnesses (browser-based agents, simple chat UIs) have no programmatic hook
 
 The mechanical enforcement Claude Code provides via hooks downgrades to "agent must follow this directive" for everyone else. The substance is identical.
 
+## One leaf per slot (serialization rule)
+
+Bones runs at most one `coord.Leaf` per slot at a time (ADR 0023's slot disjointness contract; ADR 0028's architectural invariant 1: "Per-slot leaf process — each active slot owns exactly one `coord.Leaf`"). The substrate enforces this — the surface a plan author works with does not.
+
+The practical consequence: **N tasks sharing one slot run serially, regardless of file-disjointness or task-graph independence.** Parallelism in bones comes from N distinct slots, not from packing tasks into one slot. A 22-task plan with 10 tasks in slot `frontend` runs those 10 tasks serially even though the orchestrator dispatched them as one fan-out.
+
+When authoring a plan or creating tasks by hand, audit slot distribution before dispatch:
+
+```
+bones tasks list --by-slot
+```
+
+Slots with more than 4 open tasks are flagged `HOT` — almost always a planner packing mistake. `bones tasks create --slot=<name>` also prints a one-line stderr warning when the slot's open count crosses that threshold; the create still succeeds (the threshold is advisory, not a refusal), but the warning is the cue to spread tasks across more slots.
+
 ## Orchestrator workflow
 
 When the user runs a plan that contains `[slot: name]` task annotations and asks for parallel execution, you are the orchestrator. Your job is to validate the plan, dispatch one subagent per slot, monitor progress, dispatch a Phase 2 integration agent to wire the slots together, and surface completion state.
