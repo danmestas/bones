@@ -389,12 +389,25 @@ func planRemoveOrchestrator(root string, c *DownCmd) []downAction {
 	}}
 }
 
+// planRemoveSkills schedules removal of bones-owned skill content from
+// `<workspace>/.claude/skills/`. Two classes:
+//
+//   - Legacy names (legacyBonesSkills): nuked outright. These are
+//     pre-bundle dirs that no longer have any successor in the current
+//     scaffold, so any content under them is bones-owned by definition.
+//   - Bundled names (bonesOwnedSkills): hash-checked file by file via
+//     removeBonesSkills. Files matching the embedded source are removed;
+//     user-modified files are preserved so the operator never loses
+//     their edits to a teardown.
+//
+// Honors --keep-skills (used by ADR-0048 contributors who want bones
+// machinery gone but the bones-bundled skill discipline kept).
 func planRemoveSkills(root string, c *DownCmd) []downAction {
 	if c.KeepSkills {
 		return nil
 	}
 	var plan []downAction
-	for _, name := range []string{"orchestrator", "subagent", "uninstall-bones"} {
+	for _, name := range legacyBonesSkills {
 		dir := filepath.Join(root, ".claude", "skills", name)
 		if !dirExists(dir) {
 			continue
@@ -402,6 +415,16 @@ func planRemoveSkills(root string, c *DownCmd) []downAction {
 		plan = append(plan, downAction{
 			description: "remove " + dir,
 			do:          func() error { return os.RemoveAll(dir) },
+		})
+	}
+	skillsDir := filepath.Join(root, ".claude", "skills")
+	if dirExists(skillsDir) {
+		plan = append(plan, downAction{
+			description: "remove bundled skills (preserves user-modified files)",
+			do: func() error {
+				_, err := removeBonesSkills(root)
+				return err
+			},
 		})
 	}
 	return plan

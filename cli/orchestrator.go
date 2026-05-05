@@ -33,21 +33,35 @@ const (
 )
 
 // claudeManagedBody is the body of the bones-managed block inserted
-// into a user-authored CLAUDE.md. CLAUDE.md is a pointer file; the
-// agent contract itself lives in AGENTS.md. Kept short on purpose: the
-// user already has their own CLAUDE.md content and we want our
-// addition to be unobtrusive.
-const claudeManagedBody = "Bones is active in this workspace. " +
-	"The full agent contract is in AGENTS.md.\n\n" +
-	"On `bones down` the agent removes this entire block " +
-	"(markers and all) from CLAUDE.md and deletes AGENTS.md."
+// into a user-authored CLAUDE.md. The block must be self-sufficient:
+// Claude Code does NOT auto-read AGENTS.md on session start, so a
+// pointer alone leaves the inner session bones-blind (#169). Inline
+// the directive that names the using-bones-powers skill and the
+// orchestrator skill explicitly so the Skill tool picks them up. On
+// `bones down` the entire block is stripped (markers and all).
+const claudeManagedBody = "**MANDATORY**: this workspace is managed by bones. " +
+	"Before responding to ANY prompt — including clarifying questions — " +
+	"invoke the `using-bones-powers` skill via the Skill tool. " +
+	"That skill establishes how to use bones-specific verbs " +
+	"(`bones tasks`, `bones swarm`, `bones hub`, `bones plan`) and " +
+	"overrides default workflow behaviors (brainstorm → spec → plan loops, " +
+	"\"let's think about this together\" patterns) for bones primitives.\n\n" +
+	"For multi-slot or multi-agent work, also invoke the `orchestrator` skill. " +
+	"Other bundled skills available via the Skill tool: `using-bones-swarm`, " +
+	"`finishing-a-bones-leaf`, `systematic-debugging`, `test-driven-development`.\n\n" +
+	"Full reference: AGENTS.md in this workspace.\n\n" +
+	"`bones down` removes this entire block (markers and all) from CLAUDE.md " +
+	"and the bones-owned skill files from `.claude/skills/`."
 
-// legacyBonesSkills are the per-skill directories `bones up` used to
-// scaffold under .claude/skills/ before ADR 0042. They are wiped on
-// every `bones up` so the workspace converges on the AGENTS.md model.
-// User-authored skills under .claude/skills/ that don't match these
-// names are left alone.
-var legacyBonesSkills = []string{"orchestrator", "subagent", "uninstall-bones"}
+// legacyBonesSkills are the per-skill directories `bones up` scaffolded
+// under .claude/skills/ before the skills bundle reintroduced them.
+// "subagent" and "uninstall-bones" have no successor in the current
+// bundle, so they are wiped on every `bones up`. The current bundle's
+// names (orchestrator, etc.) are owned by writeBonesSkills and live in
+// bonesOwnedSkills (see cli/skills.go) — they are NOT in this list.
+// User-authored skills under .claude/skills/ that don't match either
+// list are left alone.
+var legacyBonesSkills = []string{"subagent", "uninstall-bones"}
 
 // scaffoldFootprint captures what scaffoldOrchestrator did during a
 // single invocation, for surfacing in the default-mode `bones up`
@@ -72,6 +86,13 @@ type scaffoldFootprint struct {
 	// keyed by event name (e.g. "SessionStart": 2, "PreCompact": 1).
 	// Existing duplicates are not counted.
 	HooksAddedByEvent map[string]int
+
+	// SkillsModified lists workspace-relative paths under
+	// .claude/skills/<bones-owned skill>/ that diverged from the
+	// embedded source. Bones never overwrites these — the up summary
+	// surfaces them so the operator knows their edits are persistent
+	// but won't get fresh skill content on bones release upgrades.
+	SkillsModified []string
 }
 
 // hooksAdded returns the total count of new hook entries written, summed
@@ -105,6 +126,9 @@ func scaffoldOrchestrator(root string) (scaffoldFootprint, error) {
 
 	if err := removeLegacyBonesSkills(root); err != nil {
 		return fp, fmt.Errorf("legacy skills cleanup: %w", err)
+	}
+	if err := writeBonesSkills(root, &fp); err != nil {
+		return fp, fmt.Errorf("skills bundle: %w", err)
 	}
 	if err := writeAgentsMD(root, &fp); err != nil {
 		return fp, fmt.Errorf("agents.md: %w", err)
