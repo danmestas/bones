@@ -17,6 +17,14 @@ import (
 // TasksListCmd lists tasks. Filter flags compose: status → ready → stale →
 // orphans. --ready and --orphans require a coord session; --stale and the
 // others run from the in-memory task list only.
+//
+// --by-slot is the inspection mode added for issue #214: it groups open
+// tasks by Context["slot"] and flags slots whose open-task count exceeds
+// HotSlotThreshold, so plan authors see the cost of slot packing before
+// dispatch (per ADR 0023's slot disjointness contract and ADR 0028's
+// per-slot leaf invariant). When set, --by-slot replaces the per-task
+// rendering with a per-slot summary; the other filter flags still scope
+// which tasks the grouping considers (e.g. `--by-slot --status=open`).
 type TasksListCmd struct {
 	All       bool   `name:"all" help:"include closed tasks"`
 	Status    string `name:"status" help:"open|claimed|closed"`
@@ -24,6 +32,7 @@ type TasksListCmd struct {
 	Ready     bool   `name:"ready" help:"only tasks ready to claim (open, unblocked, not deferred)"`
 	Stale     int    `name:"stale" help:"only tasks not updated in N days; 0 = off"`
 	Orphans   bool   `name:"orphans" help:"only claimed tasks whose claimer is offline"`
+	BySlot    bool   `name:"by-slot" help:"group by slot; flag hot slots"`
 	JSON      bool   `name:"json" help:"emit JSON"`
 }
 
@@ -92,6 +101,16 @@ func (c *TasksListCmd) Run(g *repocli.Globals) error {
 				return err
 			}
 			out = filterOrphans(out, liveAgentSet(peers))
+		}
+
+		// --by-slot replaces the per-task rendering with the per-slot
+		// summary (issue #214). Composes with the other filters: e.g.
+		// `--by-slot --claimed-by=-` shows hot slots among unclaimed
+		// open work. groupBySlot drops closed tasks even when --all is
+		// set — closed tasks free the slot, so counting them would
+		// misrepresent the serialization depth.
+		if c.BySlot {
+			return emitBySlot(os.Stdout, groupBySlot(out), c.JSON)
 		}
 
 		return emitTasks(out, c.JSON)
