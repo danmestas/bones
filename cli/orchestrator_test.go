@@ -1306,3 +1306,131 @@ func TestHasManagedBlock_RejectsBareSubstring(t *testing.T) {
 		t.Errorf("hasManagedBlock should be true for a real block:\n%s", real)
 	}
 }
+
+// TestAgentsMDTemplate_NoFalseSymlinkClaim pins issue #206: the
+// AGENTS.md template must not assert that CLAUDE.md is a symlink to
+// this file as a structural fact, because that claim is false in two
+// of the four ADR 0045 shapes (user-authored regular file with a
+// marker block, and the refused unrelated-symlink case). The template
+// is one set of bytes that may be installed as a whole file or
+// embedded inside a marker block; whichever shape CLAUDE.md takes is
+// orthogonal to AGENTS.md's installation. The template must therefore
+// be shape-agnostic about CLAUDE.md.
+func TestAgentsMDTemplate_NoFalseSymlinkClaim(t *testing.T) {
+	tmpl := string(agentsMDTemplate)
+	// The original prose at line 5: "`CLAUDE.md` in the workspace root
+	// is a symbolic link to this file." This is the load-bearing false
+	// claim the issue calls out.
+	bad := []string{
+		"CLAUDE.md` in the workspace root is a symbolic link to this file",
+		"CLAUDE.md in the workspace root is a symbolic link to this file",
+		"is a symbolic link to this file",
+	}
+	for _, s := range bad {
+		if strings.Contains(tmpl, s) {
+			t.Errorf("AGENTS.md template asserts a structural symlink relationship "+
+				"that does not hold for ADR 0045 user-authored or refused shapes; "+
+				"found: %q", s)
+		}
+	}
+}
+
+// TestAgentsMDTemplate_UninstallCoversAllShapes pins issue #206's
+// uninstall-section defect: the prose describing what `bones down`
+// removes must not assume CLAUDE.md is always a bones-owned
+// symlink/fallback. ADR 0045 establishes four shapes; the user-
+// authored shape gets a marker block, not whole-file ownership, and
+// the uninstall prose must mention block-stripping in the auto path
+// (not just the manual fallback).
+func TestAgentsMDTemplate_UninstallCoversAllShapes(t *testing.T) {
+	tmpl := string(agentsMDTemplate)
+	// The original line 154 wording lists only "the bones-owned files
+	// (this AGENTS.md and the CLAUDE.md symlink/fallback)" as what
+	// `bones down` removes, omitting the marker-block path entirely.
+	if strings.Contains(tmpl, "CLAUDE.md symlink/fallback") {
+		t.Errorf("AGENTS.md uninstall prose still uses the symlink/fallback-only " +
+			"phrasing that omits the user-authored marker-block path " +
+			"(ADR 0045 case 3)")
+	}
+	// Whatever the new wording is, it must mention the marker-block
+	// teardown alongside the bones-owned-file teardown so an in-loop
+	// agent reading the auto-path description sees both cases.
+	uninstallStart := strings.Index(tmpl, "## Uninstall")
+	if uninstallStart < 0 {
+		t.Fatal("AGENTS.md template missing Uninstall section header")
+	}
+	manualStart := strings.Index(tmpl[uninstallStart:], "Manual fallback")
+	if manualStart < 0 {
+		t.Fatal("AGENTS.md template missing Manual fallback subsection")
+	}
+	autoSection := tmpl[uninstallStart : uninstallStart+manualStart]
+	if !strings.Contains(autoSection, "BONES:BEGIN") &&
+		!strings.Contains(autoSection, "marker") &&
+		!strings.Contains(autoSection, "managed block") {
+		t.Errorf("AGENTS.md uninstall auto-path prose does not mention the " +
+			"marker-block teardown for user-authored CLAUDE.md/AGENTS.md " +
+			"(ADR 0045 case 3)")
+	}
+}
+
+// TestAgentsMDTemplate_ConsistentAcrossAllShapes is the integration
+// check for issue #206: scaffold each of ADR 0045's four CLAUDE.md
+// shapes and verify that the resulting AGENTS.md prose contains no
+// structural claim about CLAUDE.md that contradicts the on-disk
+// state. The prose must be true in every shape.
+func TestAgentsMDTemplate_ConsistentAcrossAllShapes(t *testing.T) {
+	cases := []struct {
+		name    string
+		preSeed func(t *testing.T, dir string)
+	}{
+		{
+			name:    "absent CLAUDE.md (shape 1: bones writes symlink/fallback)",
+			preSeed: func(t *testing.T, dir string) {},
+		},
+		{
+			name: "bones-owned CLAUDE.md (shape 2: rewrite in place)",
+			preSeed: func(t *testing.T, dir string) {
+				p := filepath.Join(dir, "CLAUDE.md")
+				if err := os.WriteFile(p, agentsMDTemplate, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "user-authored CLAUDE.md (shape 3: marker block appended)",
+			preSeed: func(t *testing.T, dir string) {
+				p := filepath.Join(dir, "CLAUDE.md")
+				if err := os.WriteFile(p, []byte("# User rules\n\nDo X.\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	// Shape 4 (CLAUDE.md as symlink to non-AGENTS) is refused, so
+	// scaffoldOrchestrator returns an error and no AGENTS.md is written.
+	// The shape-agnostic prose contract is irrelevant in that case
+	// because the workspace never enters the scaffolded state.
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tc.preSeed(t, dir)
+			if _, err := scaffoldOrchestrator(dir); err != nil {
+				t.Fatalf("scaffoldOrchestrator: %v", err)
+			}
+			agents, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+			if err != nil {
+				t.Fatalf("read AGENTS.md: %v", err)
+			}
+			// The "is a symbolic link to this file" claim is only true
+			// when CLAUDE.md is a symlink. In shape 3 it is a regular
+			// file; in shape 1 with no symlink support it is a regular
+			// file. Asserting the symlink relationship structurally is
+			// therefore unsafe.
+			if strings.Contains(string(agents), "is a symbolic link to this file") {
+				t.Errorf("AGENTS.md asserts CLAUDE.md is a symlink to this file, "+
+					"but that is not guaranteed in ADR 0045 shape %q", tc.name)
+			}
+		})
+	}
+}

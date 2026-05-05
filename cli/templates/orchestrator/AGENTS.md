@@ -2,7 +2,7 @@
 
 This file is read by AI coding agents (Claude Code, Codex, Cursor, Aider, Gemini CLI, Zed, Junie, Warp, and any other tool that follows the [agents.md](https://agents.md) convention) before they touch the workspace. `bones up` scaffolds it; `bones down` removes it.
 
-`CLAUDE.md` in the workspace root is a symbolic link to this file.
+AGENTS.md is the agent contract for this workspace. CLAUDE.md, when present, points back here — depending on what the workspace already had when `bones up` ran, that pointer may be a symlink to AGENTS.md, a bones-owned regular file, or a marker-delimited block appended to a user-authored CLAUDE.md (see ADR 0045). Run `ls -l CLAUDE.md` to see the local shape; the contract this file describes is the same in every shape.
 
 ## Project context
 
@@ -151,17 +151,7 @@ When the user explicitly asks to remove bones from this project, prefer:
 bones down              # confirms before removing
 ```
 
-`bones down` is the supported uninstaller. It stops the hub, removes `.bones/`, removes the bones-owned files (this AGENTS.md and the CLAUDE.md symlink/fallback), removes the bones-owned hook entries from `.claude/settings.json` (leaving unrelated hooks intact), and removes the Fossil checkout markers (`.fslckout`, `.fossil-settings/`).
-
-If the workspace had a user-authored CLAUDE.md or AGENTS.md when `bones up` ran, bones did not overwrite it — instead a marker-delimited block was appended:
-
-```
-<!-- BONES:BEGIN -->
-…bones content…
-<!-- BONES:END -->
-```
-
-`bones down` strips that block and leaves the user's content otherwise byte-for-byte unchanged.
+`bones down` is the supported uninstaller. It stops the hub, removes `.bones/`, removes the bones-owned hook entries from `.claude/settings.json` (leaving unrelated hooks intact), and removes the Fossil checkout markers (`.fslckout`, `.fossil-settings/`). For each of `AGENTS.md` and `CLAUDE.md`, `bones down` checks the on-disk shape (per ADR 0045): if the file is bones-owned outright (whole file or symlink), it is removed; if user content sits alongside a `<!-- BONES:BEGIN --> … <!-- BONES:END -->` block, only the block is stripped and the user's content is left byte-for-byte unchanged.
 
 Manual fallback (only if `bones down` fails or the user wants to inspect each step):
 
