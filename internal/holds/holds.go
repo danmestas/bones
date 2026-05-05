@@ -92,6 +92,33 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Manager, error) {
 	return &Manager{cfg: cfg, nc: nc, js: js, kv: kv, buf: buf}, nil
 }
 
+// probeKey is the sentinel KV key Probe reads. Reserved name in the
+// bucket's allowed alphabet ([A-Za-z0-9/_=.-]+) — never written, so a
+// successful Probe always observes ErrKeyNotFound.
+const probeKey = "_probe"
+
+// Probe verifies the bucket is reachable end-to-end by issuing a Get
+// on a sentinel key that is never written. A healthy bucket returns
+// ErrKeyNotFound (which Probe maps to nil); any other error is
+// returned verbatim so callers see the underlying transport failure
+// (commonly nats.ErrNoResponders when JetStream KV is unreachable).
+//
+// Used by `bones swarm join` as a preflight: the alternative is
+// accepting the join and failing later at commit time with the same
+// underlying error but a worse failure surface (#155).
+func (m *Manager) Probe(ctx context.Context) error {
+	assert.NotNil(m, "holds.Probe: receiver is nil")
+	assert.NotNil(ctx, "holds.Probe: ctx is nil")
+	if m.done.Load() {
+		return ErrClosed
+	}
+	_, err := m.kv.Get(ctx, probeKey)
+	if err == nil || errors.Is(err, jetstream.ErrKeyNotFound) {
+		return nil
+	}
+	return fmt.Errorf("holds.Probe: %w", err)
+}
+
 // Close releases resources held by the Manager. It closes every live
 // Subscribe channel and marks the Manager as closed so subsequent
 // public calls return ErrClosed. Safe to call more than once.

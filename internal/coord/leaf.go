@@ -395,6 +395,18 @@ func (l *Leaf) AnnounceHolds(
 	return rel, nil
 }
 
+// ProbeSubstrate verifies the hub's holds-bucket KV is reachable
+// end-to-end. Returns nil when the substrate is healthy; surfaces the
+// underlying transport error otherwise (commonly nats.ErrNoResponders
+// when JetStream KV cannot be reached). Used by `bones swarm join` as
+// a preflight so a doomed-at-commit-time substrate fails fast at join
+// time with the same root-cause error rather than later (#155).
+func (l *Leaf) ProbeSubstrate(ctx context.Context) error {
+	assert.NotNil(l, "coord.Leaf.ProbeSubstrate: receiver is nil")
+	assert.NotNil(ctx, "coord.Leaf.ProbeSubstrate: ctx is nil")
+	return l.coord.sub.holds.Probe(ctx)
+}
+
 // Commit writes files into the leaf's libfossil repo as a new checkin
 // authored by the slot, then triggers a sync round (SyncNow).
 //

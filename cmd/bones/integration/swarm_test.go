@@ -182,6 +182,79 @@ func TestCLI_Swarm(t *testing.T) {
 	})
 }
 
+// TestCLI_SwarmCommit_AfterHubRestart exercises the regression
+// surface from #155 + #157: a hub stop/start cycle must leave the
+// substrate healthy enough that a fresh slot's join + commit
+// succeeds. With the swarm.Acquire preflight in place
+// (Leaf.ProbeSubstrate), an unreachable holds bucket would be
+// surfaced at join time with "hub up but holds bucket unreachable"
+// rather than the original "no responders" at commit time.
+func TestCLI_SwarmCommit_AfterHubRestart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	requireBinaries(t)
+	dir := setupSwarmWorkspace(t)
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	httpPort, natsPort := pickPortPair(t)
+	startSwarmHub(t, dir, httpPort, natsPort)
+
+	// Stop the hub via the CLI (matches the operator-visible repro).
+	if _, stderr, code := runCmd(t, bonesBin, dir, "hub", "stop"); code != 0 {
+		t.Fatalf("hub stop exit=%d stderr=%s", code, stderr)
+	}
+	// Restart on the same recorded ports — #157's fix preserves the
+	// URL across restart so leaf-side discovery doesn't drift.
+	if _, stderr, code := runCmd(t, bonesBin, dir, "hub", "start", "--detach"); code != 0 {
+		t.Fatalf("hub restart exit=%d stderr=%s", code, stderr)
+	}
+
+	// The recorded URL after restart is the source of truth.
+	hubURLBytes, err := os.ReadFile(filepath.Join(dir, ".bones", "hub-fossil-url"))
+	if err != nil {
+		t.Fatalf("read hub-fossil-url: %v", err)
+	}
+	hubURL := strings.TrimSpace(string(hubURLBytes))
+
+	relFile := "rendering/post-restart.txt"
+	absFile := filepath.Join(dir, relFile)
+	taskID := createSwarmTask(t, dir, absFile, "[slot: rendering] post-restart")
+	slot := "rendering"
+
+	if _, stderr, code := runCmd(t, bonesBin, dir,
+		"swarm", "join",
+		"--slot="+slot, "--task-id="+taskID,
+		"--hub-url="+hubURL,
+	); code != 0 {
+		t.Fatalf("swarm join after restart exit=%d stderr=%s", code, stderr)
+	}
+
+	wt := filepath.Join(dir, ".bones", "swarm", slot, "wt")
+	filePath := filepath.Join(wt, "rendering", "post-restart.txt")
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		t.Fatalf("mkdir wt subdir: %v", err)
+	}
+	if err := os.WriteFile(filePath, []byte("post-restart\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	stdout, stderr, code := runCmd(t, bonesBin, dir,
+		"swarm", "commit",
+		"--slot="+slot, "-m=post-restart commit",
+		"--hub-url="+hubURL,
+		"rendering/post-restart.txt",
+	)
+	if code != 0 {
+		t.Fatalf("swarm commit after restart exit=%d stderr=%s stdout=%s",
+			code, stderr, stdout)
+	}
+	if uuid := firstLine(stdout); len(uuid) < 16 {
+		t.Errorf("expected commit uuid on first line, got %q", stdout)
+	}
+}
+
 // TestCLI_SwarmReap exercises the end-to-end reap flow: join a
 // slot, never commit, then run `bones swarm reap --threshold=1ms`
 // to force the session into stale classification and verify it

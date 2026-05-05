@@ -178,6 +178,32 @@ func TestWhoHas_NotClaimed_ReturnsFalse(t *testing.T) {
 	}
 }
 
+// TestProbe_HappyPath asserts that Probe returns nil against a healthy
+// JetStream KV bucket — the sentinel key is intentionally never written
+// so a successful round-trip surfaces ErrKeyNotFound, which Probe maps
+// to nil. This is the swarm-join preflight's success path (#155).
+func TestProbe_HappyPath(t *testing.T) {
+	m, _, cleanup := openTestManager(t)
+	defer cleanup()
+	if err := m.Probe(context.Background()); err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+}
+
+// TestProbe_AfterClose asserts that Probe returns ErrClosed once the
+// Manager has been closed, mirroring the contract of the other public
+// methods.
+func TestProbe_AfterClose(t *testing.T) {
+	m, _, cleanup := openTestManager(t)
+	defer cleanup()
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := m.Probe(context.Background()); !errors.Is(err, holds.ErrClosed) {
+		t.Fatalf("Probe after Close: got %v, want ErrClosed", err)
+	}
+}
+
 func TestKeyEncoding_PreservesPathWithSpaces(t *testing.T) {
 	m, _, cleanup := openTestManager(t)
 	defer cleanup()
