@@ -73,7 +73,7 @@ jobs:
         if: steps.in.outputs.skip != 'true'
         id: idem
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
           BRANCH: ${{ steps.in.outputs.branch }}
         run: |
           if gh pr list --repo "${{ github.repository }}" --head "$BRANCH" --state open --json number -q '.[0].number' | grep -q .; then
@@ -85,6 +85,13 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          # PAT preferred so the bot push + `gh pr create` originate from a
+          # real user identity, which lets pull_request workflows trigger on
+          # the resulting PR. With the default GITHUB_TOKEN, GitHub's
+          # recursion safeguard suppresses workflow runs and CI never fires
+          # on the bump PR. Configure RELEASE_PUSH_TOKEN as a fine-grained
+          # PAT with contents:write + pull-requests:write on this repo.
+          token: ${{ secrets.RELEASE_PUSH_TOKEN || github.token }}
 
       - if: steps.in.outputs.skip != 'true' && steps.idem.outputs.exists != 'true'
         uses: actions/setup-go@v6
@@ -125,7 +132,7 @@ jobs:
       - if: steps.in.outputs.skip != 'true' && steps.idem.outputs.exists != 'true' && steps.bump.outputs.noop != 'true'
         name: Commit + push + open PR
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
           BRANCH: ${{ steps.in.outputs.branch }}
           REPO: ${{ steps.in.outputs.repo }}
           VERSION: ${{ steps.in.outputs.version }}
