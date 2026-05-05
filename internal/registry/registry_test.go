@@ -76,7 +76,8 @@ func TestWrite(t *testing.T) {
 	if err := Write(e); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	path := filepath.Join(dir, ".bones", "workspaces", WorkspaceID(e.Cwd)+".json")
+	// Per-pid filename scheme (#208): <id>-<pid>.json.
+	path := EntryPath(e.Cwd, e.HubPID)
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected file at %s: %v", path, err)
 	}

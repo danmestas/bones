@@ -1,10 +1,10 @@
 package registry
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -70,7 +70,7 @@ func ListInfo() ([]Info, error) {
 		}
 		info := Info{
 			Entry:       e,
-			ID:          strings.TrimSuffix(filepath.Base(path), ".json"),
+			ID:          idFromFilename(path),
 			AgentID:     readAgentIDFile(e.Cwd),
 			HubStatus:   probeStatus(e),
 			LastTouched: fi.ModTime(),
@@ -86,20 +86,26 @@ func ListInfo() ([]Info, error) {
 	return out, nil
 }
 
-// readEntryAtPath is the path-keyed sibling of Read. Read is cwd-keyed and
-// recomputes the filename via WorkspaceID; ListInfo already has the path,
-// so we read it directly to avoid the extra hash + to surface decode
-// errors at the right path.
-func readEntryAtPath(path string) (Entry, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return Entry{}, err
+// idFromFilename strips the ".json" suffix and the trailing
+// "-<pid>" so the surfaced ID equals WorkspaceID(Cwd) regardless of
+// whether the file is in the new <id>-<pid>.json scheme or the legacy
+// <id>.json scheme. WorkspaceID is 16 hex chars with no hyphens, so
+// the first hyphen in the basename is unambiguously the id/pid
+// separator.
+//
+// Two files (one per pid) for the same cwd produce the same Info.ID —
+// callers that need pid-level identity read the embedded Entry.HubPID.
+func idFromFilename(path string) string {
+	base := strings.TrimSuffix(filepath.Base(path), ".json")
+	if idx := strings.Index(base, "-"); idx >= 0 {
+		// Only strip when the suffix parses as an integer pid (positive
+		// or negative); legacy <id>.json never contained a hyphen so
+		// this is a no-op there.
+		if _, err := strconv.Atoi(base[idx+1:]); err == nil {
+			return base[:idx]
+		}
 	}
-	var e Entry
-	if err := json.Unmarshal(data, &e); err != nil {
-		return Entry{}, err
-	}
-	return e, nil
+	return base
 }
 
 // readAgentIDFile reads <cwd>/.bones/agent.id and trims trailing whitespace,

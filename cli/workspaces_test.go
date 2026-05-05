@@ -337,8 +337,10 @@ func TestRunPrune_YesRemovesStopped(t *testing.T) {
 	if len(after) != 1 || after[0].Cwd != wsC {
 		t.Errorf("after prune: want only wsC=%s, got %+v", wsC, after)
 	}
-	for _, cwd := range []string{wsA, wsB} {
-		if _, err := os.Stat(registry.EntryPath(cwd)); !os.IsNotExist(err) {
+	for i, cwd := range []string{wsA, wsB} {
+		// HubPID values seeded by seedTwoWorkspaces are -1 (wsA) and -2 (wsB).
+		pid := -(i + 1)
+		if _, err := os.Stat(registry.EntryPath(cwd, pid)); !os.IsNotExist(err) {
 			t.Errorf("entry file for %s should be removed; err=%v", cwd, err)
 		}
 	}
@@ -373,8 +375,9 @@ func TestRunPrune_NoConfirmKeepsEntries(t *testing.T) {
 		t.Errorf("output should not contain any pruned: lines:\n%s", out)
 	}
 
-	for _, cwd := range []string{wsA, wsB} {
-		if _, err := os.Stat(registry.EntryPath(cwd)); err != nil {
+	for i, cwd := range []string{wsA, wsB} {
+		pid := -(i + 1)
+		if _, err := os.Stat(registry.EntryPath(cwd, pid)); err != nil {
 			t.Errorf("entry for %s should still exist after abort; err=%v", cwd, err)
 		}
 	}
