@@ -116,6 +116,8 @@ When all Phase 1 subagents return DONE, **dispatch one more subagent** to wire t
 3. Print a summary: slots completed, tasks per slot, integration commits, peek URL.
 4. Tell the user: "Swarm complete. Browse the timeline with `bones peek`, review changes with `git diff`, stage with `git add`, then `git commit`."
 
+Use `bones apply --slot=<X> --to=<dir>` to materialize committed slot work outside the trunk fan-in path.
+
 The hub stays running across the session — your harness's session-end hook (or manual `bones hub stop`) tears it down.
 
 ## Subagent workflow
