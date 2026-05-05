@@ -363,9 +363,15 @@ func workspaceMarkerPresent(root string) bool {
 }
 
 // checkOrphanHubs reads the cross-workspace registry and reports
-// any orphan hub processes — alive PIDs whose workspace directory
-// no longer exists or has been trashed (per ADR 0043). Returns the
-// number of WARN-class findings emitted (one per orphan).
+// any orphan hub processes — alive PIDs whose workspace marker has
+// been scrubbed or whose cwd resolves into the user's Trash (per ADR
+// 0043). Returns the number of WARN-class findings emitted (one per
+// orphan).
+//
+// Since #229 the registry self-prunes entries whose cwd no longer
+// exists at all (and entries with dead pids), so this report only
+// surfaces orphans the operator can still action — not the stale
+// crud that pre-#229 accumulated indefinitely.
 func checkOrphanHubs(w io.Writer) int {
 	orphans, err := registry.Orphans()
 	if err != nil {

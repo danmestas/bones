@@ -90,8 +90,13 @@ func TestWrite(t *testing.T) {
 func TestRead(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
+	// Use a real (existing) cwd and a live pid so the read-time
+	// self-prune (#229) doesn't drop our entry on the floor. Pre-#229
+	// this test passed with cwd=/x and pid=1; that combo now reads as
+	// stale registry crud and is pruned by Read().
+	cwd := t.TempDir()
 	want := Entry{
-		Cwd: "/x", Name: "x", HubURL: "u", HubPID: 1,
+		Cwd: cwd, Name: "x", HubURL: "u", HubPID: os.Getpid(),
 		StartedAt: time.Now().UTC().Truncate(time.Second),
 	}
 	if err := Write(want); err != nil {
@@ -112,9 +117,15 @@ func TestRead(t *testing.T) {
 func TestList(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
+	// Real cwds + live pid so List's self-prune (#229) leaves these
+	// entries in place. Pre-#229 this test got away with placeholder
+	// cwds (/a, /b) because List didn't check existence on read.
+	cwdA := t.TempDir()
+	cwdB := t.TempDir()
+	now := time.Now().UTC().Truncate(time.Second)
 	entries := []Entry{
-		{Cwd: "/a", Name: "a", HubPID: 1, StartedAt: time.Now().UTC().Truncate(time.Second)},
-		{Cwd: "/b", Name: "b", HubPID: 2, StartedAt: time.Now().UTC().Truncate(time.Second)},
+		{Cwd: cwdA, Name: "a", HubPID: os.Getpid(), StartedAt: now},
+		{Cwd: cwdB, Name: "b", HubPID: os.Getpid(), StartedAt: now},
 	}
 	for _, e := range entries {
 		if err := Write(e); err != nil {

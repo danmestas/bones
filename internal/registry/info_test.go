@@ -25,19 +25,23 @@ func TestListInfoEnumerates(t *testing.T) {
 	mustWriteAgentID(t, wsB, "agent-b")
 
 	now := time.Now().UTC().Truncate(time.Second)
+	// Use the test's own pid for HubPID — alive on this host, so the
+	// read-time prune (#229) keeps the entries. The probeStatus call
+	// still resolves to HubStopped because the URL is unreachable.
+	pid := os.Getpid()
 	entries := []Entry{
 		{
 			Cwd: wsA, Name: "alpha",
 			HubURL:    "http://127.0.0.1:1", // unreachable
 			NATSURL:   "nats://127.0.0.1:1",
-			HubPID:    -1, // pidAlive returns false on pid<=0
+			HubPID:    pid,
 			StartedAt: now,
 		},
 		{
 			Cwd: wsB, Name: "beta",
 			HubURL:    "http://127.0.0.1:2",
 			NATSURL:   "nats://127.0.0.1:2",
-			HubPID:    -2,
+			HubPID:    pid,
 			StartedAt: now,
 		},
 	}
@@ -107,7 +111,7 @@ func TestListInfoSkipsCorrupt(t *testing.T) {
 	mustWriteAgentID(t, good, "good")
 	if err := Write(Entry{
 		Cwd: good, Name: "good",
-		HubURL: "http://127.0.0.1:0", HubPID: -1,
+		HubURL: "http://127.0.0.1:0", HubPID: os.Getpid(),
 		StartedAt: time.Now().UTC().Truncate(time.Second),
 	}); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -125,15 +129,19 @@ func TestListInfoSkipsCorrupt(t *testing.T) {
 	}
 }
 
-// TestListInfoMissingAgentID: registry entry whose cwd no longer has a
-// .bones/agent.id (workspace removed underneath us) reports AgentID="".
+// TestListInfoMissingAgentID: registry entry whose cwd exists but
+// has no .bones/agent.id (workspace marker scrubbed underneath us)
+// reports AgentID="". Pre-#229 this test used a non-existent cwd
+// path; #229's read-time self-prune now removes such entries (cwd
+// gone == registry crud), so the test uses an existing-but-marker-
+// less directory to preserve the original intent.
 func TestListInfoMissingAgentID(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	gone := filepath.Join(t.TempDir(), "gone") // never created
+	bare := t.TempDir() // exists, no .bones/agent.id marker
 	if err := Write(Entry{
-		Cwd: gone, Name: "gone",
-		HubURL: "http://127.0.0.1:0", HubPID: -1,
+		Cwd: bare, Name: "bare",
+		HubURL: "http://127.0.0.1:0", HubPID: os.Getpid(),
 		StartedAt: time.Now().UTC().Truncate(time.Second),
 	}); err != nil {
 		t.Fatalf("Write: %v", err)

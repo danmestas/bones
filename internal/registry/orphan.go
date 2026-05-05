@@ -25,8 +25,14 @@ var reapGrace = 2 * time.Second
 //     XDG-Trash equivalent on Linux)
 //
 // The PID-alive check is the same one IsAlive uses; an entry whose
-// PID is dead is not an orphan (it's a stale entry awaiting prune)
-// and will be reported by IsAlive returning false.
+// PID is dead is not an orphan (it's a stale entry that the read-
+// time prune will delete; see prune.go).
+//
+// Since #229's read-time self-prune, signal (1) and the dead-PID
+// case are removed at the registry layer before IsOrphan is reached.
+// IsOrphan still tests them defensively in case a new caller routes
+// around List/Orphans, but in practice this function returns true
+// only for the marker-missing or trashed-cwd signals.
 func IsOrphan(e Entry) bool {
 	if !pidAlive(e.HubPID) {
 		return false

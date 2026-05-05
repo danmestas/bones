@@ -95,6 +95,11 @@ var ErrNotFound = errors.New("registry: entry not found")
 // entries exist (the duplicate-hub case), the alive one with the
 // latest StartedAt wins; if none are alive, the latest StartedAt is
 // returned. Use Duplicates(cwd) when the caller wants every entry.
+//
+// Self-prunes the cwd-scoped entries on read (#229): any matched file
+// whose HubPID is dead OR whose Cwd no longer exists is removed
+// before the survivors compete for "best." Returns ErrNotFound when
+// every entry was crud (or none existed to start).
 func Read(cwd string) (Entry, error) {
 	matches, err := matchingPaths(cwd)
 	if err != nil {
@@ -108,6 +113,10 @@ func Read(cwd string) (Entry, error) {
 	for _, p := range matches {
 		e, err := readEntryAtPath(p)
 		if err != nil {
+			continue
+		}
+		if isStaleEntry(e) {
+			_ = os.Remove(p)
 			continue
 		}
 		if !bestSet ||
@@ -141,25 +150,18 @@ func readEntryAtPath(path string) (Entry, error) {
 // List returns all registry entries, skipping corrupt files. Includes
 // every per-pid entry so two concurrent hubs against one workspace
 // surface as two list rows (caller decides whether to dedupe).
+//
+// Self-prunes stale entries on read (#229): any entry whose HubPID is
+// not alive on this host OR whose Cwd no longer exists is deleted from
+// disk before the surviving set is returned. ADR 0043 promises the
+// registry "prunes on read"; pre-#229 only the in-memory filter
+// honored that — the on-disk files accumulated indefinitely.
 func List() ([]Entry, error) {
-	matches, err := filepath.Glob(filepath.Join(RegistryDir(), "*.json"))
+	_, entries, err := pruneStale()
 	if err != nil {
 		return nil, fmt.Errorf("registry glob: %w", err)
 	}
-	out := make([]Entry, 0, len(matches))
-	for _, path := range matches {
-		// Skip atomic-write tmp files; only top-level *.json files are
-		// real entries (matches the ListInfo skip).
-		if strings.Contains(filepath.Base(path), ".tmp.") {
-			continue
-		}
-		e, err := readEntryAtPath(path)
-		if err != nil {
-			continue
-		}
-		out = append(out, e)
-	}
-	return out, nil
+	return entries, nil
 }
 
 // Remove deletes ALL registry entries for the given workspace cwd —
