@@ -266,6 +266,16 @@ Existing prompts using `bones tasks claim/close` keep working —
 (`.claude/skills/orchestrator/SKILL.md`) uses the `swarm` verbs; the
 `tasks`-based template stays for backward compat.
 
+`bones tasks close` is bridged to `bones swarm close` per ADR 0049:
+when the closing task is bound to a live session in
+`bones-swarm-sessions`, `tasks close` auto-runs the swarm-close path
+on the matching slot atomically with the task close, sharing the
+artifact precondition as a single decision point. The bridge
+preserves the orchestrator's primary `swarm close` flow (still the
+intended teardown) and adds a safety net for operator-driven
+`tasks close` invocations so a slot is not orphaned when the
+orchestrator-side close is skipped.
+
 ## References
 
 - ADR 0010: Fossil code artifacts (per-leaf checkouts)
@@ -277,3 +287,4 @@ Existing prompts using `bones tasks claim/close` keep working —
 - ADR 0030: Real-substrate tests over mocks (Lease tests follow this
   discipline)
 - ADR 0034: `swarm.Sessions` narrowing of the substrate-adapter type
+- ADR 0049: `bones tasks close` auto-releases the matching swarm slot
