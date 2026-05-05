@@ -221,12 +221,6 @@ func gatherStatus(ctx context.Context, info workspace.Info) (statusReport, error
 	if _, statErr := os.Stat(hubRepo); statErr == nil && lookErr == nil {
 		rep.HubAvailable = true
 		rep.HubRepoPath = hubRepo
-		// Vanilla fossil rejects hub.fossil when its WAL is un-
-		// checkpointed (bones #211 / #212). Run a passive checkpoint
-		// best-effort before the `fossil leaves` and `fossil timeline`
-		// shell-outs below; otherwise status silently drops the
-		// "open leaves" and "recent activity" sections on a busy hub.
-		passiveCheckpointHubFossil(hubRepo)
 		leaves, _ := openLeavesOnTrunk(fossilBin, hubRepo)
 		rep.OpenLeaves = leaves
 		if len(leaves) > 0 {
