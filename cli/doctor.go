@@ -159,11 +159,12 @@ func runBypassReportTo(w io.Writer, cwd string) (warns int, err error) {
 			_, _ = fmt.Fprintf(w, "  WARN  hook read failed: %v\n", hookErr)
 			warns++
 		case !installed:
-			_, _ = fmt.Fprintln(w, "  WARN  pre-commit hook missing — run `bones up` to reinstall")
+			_, _ = fmt.Fprintln(w,
+				"  WARN  bones substrate pre-commit hook missing — run `bones up` to reinstall")
 			printFix(w, FixForMissingHook())
 			warns++
 		default:
-			_, _ = fmt.Fprintln(w, "  OK    pre-commit hook installed")
+			_, _ = fmt.Fprintln(w, "  OK    bones substrate pre-commit hook installed")
 		}
 	}
 
