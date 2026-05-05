@@ -17,6 +17,7 @@ import (
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/githook"
+	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/registry"
 	"github.com/danmestas/bones/internal/scaffoldver"
 	"github.com/danmestas/bones/internal/slotgc"
@@ -512,6 +513,15 @@ func short(h string) string {
 // Errors connecting to NATS surface as warnings rather than fail
 // the whole doctor — `bones doctor` is meant to be informational
 // even on a half-broken setup.
+//
+// Per #228, this resolves the workspace via workspace.FindRoot
+// (read-only) and probes hub liveness with workspace.HubIsHealthy
+// rather than going through workspace.Join. Join lazy-starts the hub
+// (writes .bones/pids/, hub-fossil-url, hub-nats-url) on every doctor
+// invocation, which violates the read-only contract of doctor and
+// contradicts the lazy-hub promise printed by `bones up`. When no
+// healthy hub is available, this short-circuits with a single INFO
+// line instead of dialing NATS.
 func (c *DoctorCmd) runSwarmReport() error {
 	fmt.Println()
 	fmt.Println("=== bones swarm sessions ===")
@@ -520,13 +530,28 @@ func (c *DoctorCmd) runSwarmReport() error {
 		fmt.Printf("  WARN  cwd: %v\n", err)
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	info, err := workspace.Join(ctx, cwd)
+	root, err := workspace.FindRoot(cwd)
 	if err != nil {
 		fmt.Printf("  INFO  not in a bones workspace (%v)\n", err)
 		return nil
 	}
+	if !workspace.HubIsHealthy(root) {
+		fmt.Println("  INFO  hub not running — no sessions to inspect")
+		return nil
+	}
+	natsURL := hub.NATSURL(root)
+	fossilURL := hub.FossilURL(root)
+	if natsURL == "" || fossilURL == "" {
+		fmt.Println("  INFO  hub URLs not recorded — no sessions to inspect")
+		return nil
+	}
+	info := workspace.Info{
+		WorkspaceDir: root,
+		NATSURL:      natsURL,
+		LeafHTTPURL:  fossilURL,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	sess, closer, err := openSwarmSessions(ctx, info)
 	if err != nil {
 		fmt.Printf("  WARN  open swarm sessions: %v\n", err)

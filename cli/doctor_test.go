@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -177,4 +178,52 @@ func TestDoctorCmdAllPathInvokesRender(t *testing.T) {
 	})
 	// Error is expected (hub at :1 is down → issues found), not a crash.
 	_ = c.runAll(nil)
+}
+
+// TestRunSwarmReport_DoesNotAutoStartHub pins #228: when no hub is
+// running, runSwarmReport must NOT route through workspace.Join (which
+// lazy-starts the hub) — that violates doctor's read-only contract and
+// silently writes .bones/pids/ + URL files on every doctor invocation.
+//
+// Mirrors TestResolveStatusRoot_DoesNotAutoStartHub from #207. After
+// the fix, runSwarmReport resolves the workspace via workspace.FindRoot
+// + workspace.HubIsHealthy and short-circuits to "hub not running" when
+// no healthy hub exists.
+func TestRunSwarmReport_DoesNotAutoStartHub(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".bones"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".bones", "agent.id"),
+		[]byte("test-agent-id\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+
+	stdout, finish := captureStdout(t)
+	c := &DoctorCmd{}
+	if err := c.runSwarmReport(); err != nil {
+		t.Fatalf("runSwarmReport: %v", err)
+	}
+	finish()
+
+	out := stdout.String()
+	if !strings.Contains(out, "hub not running") {
+		t.Errorf("expected 'hub not running' INFO line, got:\n%s", out)
+	}
+	if strings.Contains(out, "starting hub for workspace") {
+		t.Errorf("doctor auto-started hub (#228); output:\n%s", out)
+	}
+	// Hub state files must NOT have been created. workspace.Join would
+	// have written hub-fossil-url and hub-nats-url and started a leaf;
+	// FindRoot writes nothing.
+	for _, name := range []string{"hub-fossil-url", "hub-nats-url"} {
+		path := filepath.Join(root, ".bones", name)
+		if _, err := os.Stat(path); err == nil {
+			t.Errorf("runSwarmReport created %s; #228 says it must not write hub state", path)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, ".bones", "pids")); err == nil {
+		t.Errorf("runSwarmReport created .bones/pids/; #228 says it must not write hub state")
+	}
 }
