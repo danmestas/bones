@@ -205,7 +205,7 @@ func joinLogic(ctx context.Context, cwd string) (Info, error) {
 	// hubStartFunc's nil return is contracted to mean both ports are
 	// already bound; if a future refactor changes that, this code must
 	// re-probe healthz.
-	if !hubIsHealthy(workspaceDir) {
+	if !HubIsHealthy(workspaceDir) {
 		fmt.Fprintf(os.Stderr,
 			"bones: starting hub for workspace %s\n", workspaceDir)
 		if err := hubStartFunc(ctx, workspaceDir, hub.WithDetach(true)); err != nil {
@@ -230,10 +230,15 @@ func joinLogic(ctx context.Context, cwd string) (Info, error) {
 	}, nil
 }
 
-// hubIsHealthy returns true when both the fossil and nats pid files
+// HubIsHealthy returns true when both the fossil and nats pid files
 // resolve to live processes and a /healthz GET succeeds within 500ms.
-// False on any failure — caller responds by calling hubStartFunc.
-func hubIsHealthy(workspaceDir string) bool {
+// False on any failure — caller responds by calling hubStartFunc, or
+// (for read-only verbs) by rendering degraded-mode output.
+//
+// Exported so read-only verbs (e.g. `bones status`, #207) can probe
+// hub liveness without going through Join, whose auto-start branch
+// would contradict the lazy-hub promise printed by `bones up`.
+func HubIsHealthy(workspaceDir string) bool {
 	pidsDir := filepath.Join(workspaceDir, markerDirName, "pids")
 	if !pidFileLive(filepath.Join(pidsDir, "fossil.pid")) {
 		return false
