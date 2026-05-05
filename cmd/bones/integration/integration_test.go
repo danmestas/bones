@@ -91,11 +91,40 @@ func killPidFile(t *testing.T, path string) {
 // Pins HOME to a temp dir so any subprocess whose path reaches
 // hub.Start (via workspace.Join) does NOT write to the operator's real
 // ~/.bones/workspaces/. See issue #180.
+//
+// Initializes the tmpdir as a git repo with one tracked seed file using a
+// deterministic, non-operator committer identity. Hub auto-start (triggered
+// by any command that connects to a leaf-managed task store) refuses to
+// seed against an empty `git ls-files` — see issue #204.
 func newWorkspace(t *testing.T) string {
 	t.Helper()
 	requireBinaries(t)
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
+	// Init a fresh git repo and stage one file. Hub's seedHubRepo
+	// walks `git ls-files` and refuses to seed an empty workspace.
+	gitInit := exec.Command("git", "init", "-q", "-b", "main")
+	gitInit.Dir = dir
+	if out, err := gitInit.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "seed.txt"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatalf("write seed.txt: %v", err)
+	}
+	// Configure committer for this fixture so `git commit` doesn't
+	// pull in the operator's config.
+	for _, args := range [][]string{
+		{"config", "user.email", "newworkspace-test@example.invalid"},
+		{"config", "user.name", "Newworkspace Test"},
+		{"add", "seed.txt"},
+		{"commit", "-q", "-m", "seed"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
 	t.Cleanup(func() { killPidFile(t, filepath.Join(dir, ".bones", "leaf.pid")) })
 	if _, stderr, code := runCmd(t, bonesBin, dir, "init"); code != 0 {
 		t.Fatalf("init failed: %s", stderr)
