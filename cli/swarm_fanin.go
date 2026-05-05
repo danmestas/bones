@@ -86,11 +86,6 @@ func (c *SwarmFanInCmd) resolvePrereqs() (string, string, error) {
 				"`brew install fossil` (or apt) and re-run",
 		)
 	}
-	// Vanilla fossil rejects hub.fossil when its WAL is un-checkpointed
-	// (bones #211 / #212). Run a passive checkpoint best-effort before
-	// any of fan-in's downstream `fossil open / merge / commit` calls
-	// shell out against this repo.
-	passiveCheckpointHubFossil(hubRepo)
 	return hubRepo, fossilBin, nil
 }
 
