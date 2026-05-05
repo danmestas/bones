@@ -1286,6 +1286,54 @@ func TestStripManagedBlock_PreservesContentAfterBlock(t *testing.T) {
 	}
 }
 
+// TestStripManagedBlock_ByteForByteRoundTrip pins issue #236: an
+// upsert+strip cycle must restore the user's original AGENTS.md
+// byte-for-byte. The earlier strip implementation collapsed every
+// trailing newline before the BEGIN marker and then re-added a single
+// '\n', which silently dropped one byte whenever the user's file
+// already ended in a blank line ("\n\n"). The contract documented in
+// cli/templates/orchestrator/AGENTS.md is that user content is "left
+// byte-for-byte unchanged" — this test pins that invariant for every
+// trailing-whitespace shape that round-trips cleanly.
+func TestStripManagedBlock_ByteForByteRoundTrip(t *testing.T) {
+	cases := []struct {
+		name string
+		user string
+	}{
+		{"single-trailing-newline", "# My agents file\n"},
+		{"blank-line-trailing", "# Hello\n\n"},
+		{"mid-content-blank-and-trailing", "# Title\n\nBody.\n"},
+		{"two-blank-lines-trailing", "# Title\n\n\n"},
+		{"single-line-trailing", "Line1\nLine2\n"},
+		{"only-newline", "\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "AGENTS.md")
+			if err := os.WriteFile(path, []byte(tc.user), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := upsertManagedBlock(path, "bones body"); err != nil {
+				t.Fatalf("upsert: %v", err)
+			}
+			if err := stripManagedBlock(path); err != nil {
+				t.Fatalf("strip: %v", err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read post-strip: %v", err)
+			}
+			if string(got) != tc.user {
+				t.Errorf("byte-for-byte round-trip violated:\n"+
+					"want (%d bytes): %q\n"+
+					"got  (%d bytes): %q",
+					len(tc.user), tc.user, len(got), got)
+			}
+		})
+	}
+}
+
 // TestHasManagedBlock_RejectsBareSubstring pins that hasManagedBlock
 // returns true only for files that contain a real outer block — a
 // file that mentions the marker strings in user prose (no actual
