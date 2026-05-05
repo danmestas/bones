@@ -68,6 +68,19 @@ func (c *TasksCreateCmd) Run(g *repocli.Globals) error {
 		if err := mgr.Create(ctx, t); err != nil {
 			return err
 		}
+		// Hot-slot advisory (issue #214 fix C). Re-list and count after
+		// the successful Create so the warning reflects the just-stored
+		// state, not a stale pre-mutation snapshot. The advisory is
+		// non-fatal: it goes to stderr, leaves stdout (the task ID or
+		// JSON) untouched, and does not change the exit code. Listing
+		// errors are swallowed deliberately — the create has already
+		// succeeded, and a transient List failure must not be allowed
+		// to convert that into a non-zero exit.
+		if c.Slot != "" {
+			if all, listErr := mgr.List(ctx); listErr == nil {
+				maybeWarnHotSlot(os.Stderr, c.Slot, countOpenInSlot(all, c.Slot))
+			}
+		}
 		if c.JSON {
 			return emitJSON(os.Stdout, t)
 		}
