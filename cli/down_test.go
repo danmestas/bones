@@ -745,9 +745,12 @@ func TestPlanReapOrphans_QueuesCrossWorkspaceOrphans(t *testing.T) {
 		t.Fatalf("seed alive: %v", err)
 	}
 
-	// One orphan: registry entry, child pid alive, but workspace dir
-	// missing (the IsOrphan signal). Must be queued for reap.
-	orphanWS := filepath.Join(t.TempDir(), "deleted-out-from-under")
+	// One orphan: registry entry, child pid alive, workspace dir
+	// exists but its .bones/agent.id marker has been scrubbed (the
+	// surviving IsOrphan signal post-#229). Must be queued for reap.
+	// Pre-#229 this test used a wholly-missing cwd; the registry's
+	// read-time self-prune now removes those silently.
+	orphanWS := t.TempDir()
 	if err := registry.Write(registry.Entry{
 		Cwd: orphanWS, Name: "orphan", HubPID: childPID,
 		StartedAt: time.Now().UTC(),
@@ -774,10 +777,13 @@ func TestPlanReapOrphans_QueuesCrossWorkspaceOrphans(t *testing.T) {
 // under os.Getpid() routinely, and the guard is cheap insurance.
 func TestPlanReapOrphans_SkipsSelfPID(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	// Plant a self-pid orphan: workspace dir doesn't exist (orphan
-	// signal #1), pid is alive (we're alive), would normally reap.
+	// Plant a self-pid orphan: workspace dir exists but its
+	// .bones/agent.id marker is missing (the surviving orphan signal
+	// post-#229), pid is alive (we're alive), would normally reap.
+	// Pre-#229 this test used a vanished-cwd path; that signal is now
+	// silently pruned by the registry's read-time scan.
 	if err := registry.Write(registry.Entry{
-		Cwd:       filepath.Join(t.TempDir(), "vanished-ws"),
+		Cwd:       t.TempDir(),
 		Name:      "self-pid-orphan",
 		HubPID:    os.Getpid(),
 		StartedAt: time.Now().UTC(),

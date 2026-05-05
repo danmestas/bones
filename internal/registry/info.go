@@ -45,27 +45,24 @@ type Info struct {
 // hub-status probe runs IsAlive on each entry; callers that want to skip
 // the probe (e.g. for fast paths) should use List + their own enrichment.
 //
+// Self-prunes stale entries on read (#229) — same predicate as List(): a
+// dead HubPID or a missing Cwd both qualify the entry as crud and the
+// file is removed before this function returns.
+//
 // Results are sorted by Name, then Cwd, for stable output across calls.
 func ListInfo() ([]Info, error) {
-	matches, err := filepath.Glob(filepath.Join(RegistryDir(), "*.json"))
+	paths, entries, err := pruneStale()
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Info, 0, len(matches))
-	for _, path := range matches {
-		// Skip atomic-write tmp files (".tmp.*"); only top-level *.json
-		// files are real entries.
-		if strings.Contains(filepath.Base(path), ".tmp.") {
-			continue
-		}
+	out := make([]Info, 0, len(entries))
+	for i, e := range entries {
+		path := paths[i]
 		fi, err := os.Stat(path)
 		if err != nil {
-			continue
-		}
-		// Read the entry payload via the canonical Read seam so any
-		// future migrations land here too.
-		e, err := readEntryAtPath(path)
-		if err != nil {
+			// File vanished between prune and stat — skip rather
+			// than fail the listing. Behavior matches the pre-#229
+			// best-effort skip-on-stat-error path.
 			continue
 		}
 		info := Info{

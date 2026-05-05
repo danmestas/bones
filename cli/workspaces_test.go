@@ -22,7 +22,10 @@ func mkBonesDir(t *testing.T, root string) {
 }
 
 // seedTwoWorkspaces writes two registry entries (each with its own
-// .bones/agent.id) and returns the resolved cwds.
+// .bones/agent.id) and returns the resolved cwds. Uses os.Getpid() as
+// HubPID so the registry's read-time self-prune (#229) keeps the
+// entries; the URL probe still resolves to HubStopped because
+// 127.0.0.1:1/:2 are not bound.
 func seedTwoWorkspaces(t *testing.T) (string, string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
@@ -34,11 +37,12 @@ func seedTwoWorkspaces(t *testing.T) (string, string) {
 	writeAgentIDForTest(t, wsB)
 
 	now := time.Now().UTC().Truncate(time.Second)
+	pid := os.Getpid()
 	if err := registry.Write(registry.Entry{
 		Cwd: wsA, Name: "alpha",
 		HubURL:    "http://127.0.0.1:1",
 		NATSURL:   "nats://127.0.0.1:1",
-		HubPID:    -1,
+		HubPID:    pid,
 		StartedAt: now,
 	}); err != nil {
 		t.Fatal(err)
@@ -47,7 +51,7 @@ func seedTwoWorkspaces(t *testing.T) (string, string) {
 		Cwd: wsB, Name: "beta",
 		HubURL:    "http://127.0.0.1:2",
 		NATSURL:   "nats://127.0.0.1:2",
-		HubPID:    -2,
+		HubPID:    pid,
 		StartedAt: now,
 	}); err != nil {
 		t.Fatal(err)
@@ -192,9 +196,11 @@ func TestWorkspacesShowAmbiguous(t *testing.T) {
 	writeAgentIDForTest(t, wsB)
 	now := time.Now().UTC().Truncate(time.Second)
 	for _, cwd := range []string{wsA, wsB} {
+		// os.Getpid() since #229 — the read-time self-prune drops
+		// entries with HubPID<=0 before this assertion runs.
 		if err := registry.Write(registry.Entry{
 			Cwd: cwd, Name: "twin",
-			HubURL: "http://127.0.0.1:0", HubPID: -1,
+			HubURL: "http://127.0.0.1:0", HubPID: os.Getpid(),
 			StartedAt: now,
 		}); err != nil {
 			t.Fatal(err)
@@ -300,9 +306,14 @@ func TestRunPrune_YesRemovesStopped(t *testing.T) {
 	wsC := t.TempDir()
 	mkBonesDir(t, wsC)
 	writeAgentIDForTest(t, wsC)
+	// Empty HubURL → probeStatus returns HubUnknown. Pre-#229 we used
+	// HubPID=0 here, but the registry's read-time self-prune now drops
+	// HubPID<=0 entries as crud before ListInfo sees them. A live pid
+	// + empty URL exercises the same "unknown" code path without
+	// tripping the prune.
 	if err := registry.Write(registry.Entry{
 		Cwd: wsC, Name: "unknown",
-		HubURL: "", NATSURL: "", HubPID: 0,
+		HubURL: "", NATSURL: "", HubPID: os.Getpid(),
 		StartedAt: time.Now().UTC().Truncate(time.Second),
 	}); err != nil {
 		t.Fatal(err)
@@ -337,10 +348,10 @@ func TestRunPrune_YesRemovesStopped(t *testing.T) {
 	if len(after) != 1 || after[0].Cwd != wsC {
 		t.Errorf("after prune: want only wsC=%s, got %+v", wsC, after)
 	}
-	for i, cwd := range []string{wsA, wsB} {
-		// HubPID values seeded by seedTwoWorkspaces are -1 (wsA) and -2 (wsB).
-		pid := -(i + 1)
-		if _, err := os.Stat(registry.EntryPath(cwd, pid)); !os.IsNotExist(err) {
+	for _, cwd := range []string{wsA, wsB} {
+		// seedTwoWorkspaces uses os.Getpid() since #229 (read-time
+		// self-prune required live pids to keep entries on disk).
+		if _, err := os.Stat(registry.EntryPath(cwd, os.Getpid())); !os.IsNotExist(err) {
 			t.Errorf("entry file for %s should be removed; err=%v", cwd, err)
 		}
 	}
@@ -375,9 +386,8 @@ func TestRunPrune_NoConfirmKeepsEntries(t *testing.T) {
 		t.Errorf("output should not contain any pruned: lines:\n%s", out)
 	}
 
-	for i, cwd := range []string{wsA, wsB} {
-		pid := -(i + 1)
-		if _, err := os.Stat(registry.EntryPath(cwd, pid)); err != nil {
+	for _, cwd := range []string{wsA, wsB} {
+		if _, err := os.Stat(registry.EntryPath(cwd, os.Getpid())); err != nil {
 			t.Errorf("entry for %s should still exist after abort; err=%v", cwd, err)
 		}
 	}

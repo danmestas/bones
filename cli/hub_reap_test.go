@@ -25,8 +25,14 @@ func TestRunHubReap_NoOrphans(t *testing.T) {
 }
 
 // TestRunHubReap_ReapsOrphan: spawn a real subprocess, register it
-// pointing at a vanished cwd, run reap with --yes, confirm both the
-// process is gone and the registry entry is removed.
+// pointing at a workspace whose .bones/agent.id marker is absent, run
+// reap with --yes, confirm both the process is gone and the registry
+// entry is removed.
+//
+// Pre-#229 this test used a non-existent cwd as the orphan signal;
+// the read-time self-prune now removes such entries silently before
+// Orphans() sees them. Marker-missing remains an actionable orphan
+// (live PID, dir on disk, no .bones/agent.id) so reap still surfaces it.
 func TestRunHubReap_ReapsOrphan(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -41,9 +47,9 @@ func TestRunHubReap_ReapsOrphan(t *testing.T) {
 		}
 	})
 
-	// Register pointing at a path that doesn't exist — qualifies as orphan.
+	orphanCwd := t.TempDir() // exists, but no .bones/agent.id marker
 	e := registry.Entry{
-		Cwd:       "/definitely/does/not/exist/orphan-test",
+		Cwd:       orphanCwd,
 		Name:      "orphan-test",
 		HubURL:    "http://127.0.0.1:1",
 		NATSURL:   "nats://127.0.0.1:1",
@@ -73,10 +79,13 @@ func TestRunHubReap_ReapsOrphan(t *testing.T) {
 func TestRunHubReap_DryRun(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	// Register a fake orphan whose PID is alive (use os.Getpid()) and
-	// whose cwd doesn't exist. We'll only do a dry-run, so no reaping.
+	// Marker-missing orphan: cwd exists but no .bones/agent.id. Live
+	// PID via os.Getpid(). Pre-#229 used a non-existent cwd; that path
+	// is now silently pruned by the read-time scan rather than
+	// surfaced as an actionable orphan.
+	orphanCwd := t.TempDir()
 	e := registry.Entry{
-		Cwd:       "/definitely/does/not/exist/dryrun-test",
+		Cwd:       orphanCwd,
 		Name:      "dryrun-test",
 		HubURL:    "http://127.0.0.1:1",
 		HubPID:    os.Getpid(), // self — alive

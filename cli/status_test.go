@@ -217,9 +217,14 @@ func TestStatusAllRendersTable(t *testing.T) {
 
 	now := time.Now().UTC()
 	pid := os.Getpid()
+	// Real cwds so the registry's read-time self-prune (#229) keeps
+	// the entries; pre-#229 placeholder paths like /Users/dan/foo
+	// passed because List() didn't check existence.
+	cwdFoo := t.TempDir()
+	cwdBar := t.TempDir()
 	for _, e := range []registry.Entry{
-		{Cwd: "/Users/dan/foo", Name: "foo", HubURL: srv.URL, HubPID: pid, StartedAt: now},
-		{Cwd: "/Users/dan/bar", Name: "bar", HubURL: srv.URL, HubPID: pid, StartedAt: now},
+		{Cwd: cwdFoo, Name: "foo", HubURL: srv.URL, HubPID: pid, StartedAt: now},
+		{Cwd: cwdBar, Name: "bar", HubURL: srv.URL, HubPID: pid, StartedAt: now},
 	} {
 		if err := registry.Write(e); err != nil {
 			t.Fatalf("seed: %v", err)
@@ -393,8 +398,9 @@ func TestStatusAllJSON(t *testing.T) {
 		w.WriteHeader(200)
 	}))
 	defer srv.Close()
+	cwd := t.TempDir() // real path so #229 self-prune keeps the entry
 	if err := registry.Write(registry.Entry{
-		Cwd: "/x", Name: "x", HubURL: srv.URL, HubPID: os.Getpid(), StartedAt: time.Now().UTC(),
+		Cwd: cwd, Name: "x", HubURL: srv.URL, HubPID: os.Getpid(), StartedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
