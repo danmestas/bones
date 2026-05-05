@@ -3,8 +3,10 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -190,12 +192,7 @@ func runBypassReportTo(w io.Writer, cwd string) (warns int, err error) {
 		_, _ = fmt.Fprintf(w, "  OK    scaffold version v%s matches binary\n", stamp)
 	}
 
-	if checkAgentsMD(w, cwd) {
-		warns++
-	}
-	if checkBonesScaffoldedHooks(w, cwd) {
-		warns++
-	}
+	warns += checkScaffoldGates(w, cwd)
 	warns += checkOrphanHubs(w)
 	warns += checkStaleSlotDirs(w, cwd)
 
@@ -300,6 +297,58 @@ func checkBonesScaffoldedHooks(w io.Writer, cwd string) bool {
 		return true
 	}
 	_, _ = fmt.Fprintln(w, "  OK    .claude/settings.json has bones-owned hook entries")
+	return false
+}
+
+// checkScaffoldGates runs the AGENTS.md, hooks-presence, and
+// SessionStart-sentinel checks together. Extracted from
+// runBypassReportTo so that function stays under the funlen cap.
+// Returns the count of WARN-class findings emitted.
+func checkScaffoldGates(w io.Writer, cwd string) int {
+	var warns int
+	if checkAgentsMD(w, cwd) {
+		warns++
+	}
+	if checkBonesScaffoldedHooks(w, cwd) {
+		warns++
+	}
+	if checkSessionStartSentinel(w, cwd) {
+		warns++
+	}
+	return warns
+}
+
+// checkSessionStartSentinel surfaces whether bones SessionStart hooks
+// have actually fired in this workspace recently. The sentinel
+// (.bones/last-session-prime) is rewritten on every `bones tasks
+// prime` invocation — itself wired as both SessionStart and
+// PreCompact hooks by `bones up`. When .claude/settings.json has
+// the hook entries but the sentinel never appears (or hasn't been
+// touched since hub start), the operator's hooks aren't actually
+// firing — the failure mode behind #165 / #172 where inner Claude
+// sessions stayed bones-blind despite hook config being present.
+// Returns true if a WARN was emitted.
+func checkSessionStartSentinel(w io.Writer, cwd string) bool {
+	if info, err := os.Stat(filepath.Join(cwd, ".claude")); err != nil || !info.IsDir() {
+		return false
+	}
+	sentinel := filepath.Join(cwd, SessionStartSentinelFile)
+	st, err := os.Stat(sentinel)
+	if errors.Is(err, fs.ErrNotExist) {
+		_, _ = fmt.Fprintln(w,
+			"  WARN  SessionStart hooks configured but never fired "+
+				"(no .bones/last-session-prime) — "+
+				"likely the bones-powers plugin isn't installed or "+
+				"the workspace was never opened in Claude Code (#172)")
+		return true
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "  WARN  read SessionStart sentinel: %v\n", err)
+		return true
+	}
+	age := time.Since(st.ModTime()).Round(time.Second)
+	_, _ = fmt.Fprintf(w,
+		"  OK    SessionStart hooks fired %s ago (last bones tasks prime)\n", age)
 	return false
 }
 

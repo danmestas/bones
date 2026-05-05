@@ -14,25 +14,30 @@ func TestScaffoldOrchestrator_FreshWorkspace(t *testing.T) {
 	if _, err := scaffoldOrchestrator(dir); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
-	// Per ADR 0042: AGENTS.md (universal channel) + CLAUDE.md symlink
-	// + Claude-format hooks. Skill markdown trees are NOT scaffolded.
+	// AGENTS.md (universal channel) + CLAUDE.md symlink + Claude-format
+	// hooks + the skills bundle (one SKILL.md per bones-owned skill).
 	for _, want := range []string{
 		"AGENTS.md",
 		"CLAUDE.md",
 		".claude/settings.json",
+		".claude/skills/orchestrator/SKILL.md",
+		".claude/skills/using-bones-powers/SKILL.md",
+		".claude/skills/using-bones-swarm/SKILL.md",
+		".claude/skills/finishing-a-bones-leaf/SKILL.md",
+		".claude/skills/systematic-debugging/SKILL.md",
+		".claude/skills/test-driven-development/SKILL.md",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, want)); err != nil {
 			t.Errorf("missing %s: %v", want, err)
 		}
 	}
 	for _, gone := range []string{
-		".claude/skills/orchestrator",
 		".claude/skills/subagent",
 		".claude/skills/uninstall-bones",
 		".orchestrator", // pre-ADR-0041
 	} {
 		if _, err := os.Stat(filepath.Join(dir, gone)); err == nil {
-			t.Errorf("%s should not be scaffolded post-ADR-0042", gone)
+			t.Errorf("%s should not be scaffolded (legacy)", gone)
 		}
 	}
 	// CLAUDE.md must be a symlink pointing at AGENTS.md.
@@ -150,6 +155,89 @@ func TestScaffoldOrchestrator_AppendsBlockToUserAuthoredAGENTS(t *testing.T) {
 	if !strings.Contains(string(got), bonesBlockBegin) ||
 		!strings.Contains(string(got), bonesBlockEnd) {
 		t.Errorf("managed block missing from AGENTS.md:\n%s", got)
+	}
+}
+
+// TestScaffold_BundledSkillsContent verifies the embedded SKILL.md
+// for the load-bearing skills lands on disk byte-for-byte. This is
+// the regression surface for #166: if the embed FS diverges from the
+// committed templates, fresh workspaces stop matching.
+func TestScaffold_BundledSkillsContent(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"orchestrator", "using-bones-powers", "using-bones-swarm",
+		"finishing-a-bones-leaf", "systematic-debugging", "test-driven-development",
+	} {
+		want, err := skillsFS.ReadFile(skillsRoot + "/" + name + "/SKILL.md")
+		if err != nil {
+			t.Fatalf("embed %s: %v", name, err)
+		}
+		got, err := os.ReadFile(filepath.Join(dir, ".claude", "skills", name, "SKILL.md"))
+		if err != nil {
+			t.Errorf("read scaffolded %s: %v", name, err)
+			continue
+		}
+		if string(got) != string(want) {
+			t.Errorf("%s SKILL.md content drift", name)
+		}
+	}
+}
+
+// TestScaffold_Skills_PreservesUserModifiedFiles pins that a
+// user-modified SKILL.md is left alone (no overwrite) and surfaced
+// in fp.SkillsModified so `bones up` can warn about it.
+func TestScaffold_Skills_PreservesUserModifiedFiles(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, ".claude", "skills", "orchestrator", "SKILL.md")
+	if err := os.WriteFile(target, []byte("user override\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fp, err := scaffoldOrchestrator(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(target)
+	if string(got) != "user override\n" {
+		t.Errorf("user-modified SKILL.md was overwritten")
+	}
+	if !slices.Contains(fp.SkillsModified, ".claude/skills/orchestrator/SKILL.md") {
+		t.Errorf("fp.SkillsModified missing user-modified path: got %v", fp.SkillsModified)
+	}
+}
+
+// TestScaffold_ClaudeMD_InlineBlock pins the #169 fix: the bones-managed
+// block in the CLAUDE.md fallback (when CLAUDE.md exists as a non-symlink
+// user-authored file) carries the mandatory directive that names the
+// using-bones-powers skill — not just the old AGENTS.md pointer.
+func TestScaffold_ClaudeMD_InlineBlock(t *testing.T) {
+	dir := t.TempDir()
+	claudePath := filepath.Join(dir, "CLAUDE.md")
+	body := []byte("# My Project\n\nProject notes.\n")
+	if err := os.WriteFile(claudePath, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scaffoldOrchestrator(dir); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(claudePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(got)
+	for _, want := range []string{
+		"MANDATORY",
+		"using-bones-powers",
+		"orchestrator",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("CLAUDE.md managed block missing %q:\n%s", want, out)
+		}
 	}
 }
 

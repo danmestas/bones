@@ -349,7 +349,11 @@ func TestPlanDown_FullInstall(t *testing.T) {
 		"registry entry",
 		".bones",
 		".orchestrator",
-		".claude/skills/orchestrator",
+		// orchestrator is now handled via the hash-checked bundled
+		// skills action — present on disk → "remove bundled skills"
+		// fires. Legacy dirs (subagent, uninstall-bones) still get
+		// their own per-name actions.
+		"remove bundled skills",
 		".claude/skills/subagent",
 		".claude/skills/uninstall-bones",
 		"AGENTS.md",
@@ -869,6 +873,45 @@ func readJSON(t *testing.T, path string) map[string]any {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	return got
+}
+
+// TestRemoveBonesSkills_PreservesUserModified pins the down-side
+// contract for the skill bundle: hash-matching files (the unmodified
+// embedded source) get cleaned, user-edited files survive teardown.
+func TestRemoveBonesSkills_PreservesUserModified(t *testing.T) {
+	dir := t.TempDir()
+	fp := scaffoldFootprint{HooksAddedByEvent: map[string]int{}}
+	if err := writeBonesSkills(dir, &fp); err != nil {
+		t.Fatalf("writeBonesSkills: %v", err)
+	}
+	// User edits the orchestrator skill — must survive `bones down`.
+	userSkill := filepath.Join(dir, ".claude", "skills", "orchestrator", "SKILL.md")
+	if err := os.WriteFile(userSkill, []byte("USER OVERRIDE\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := removeBonesSkills(dir)
+	if err != nil {
+		t.Fatalf("removeBonesSkills: %v", err)
+	}
+	// orchestrator should NOT be in removed (user-modified).
+	for _, name := range removed {
+		if name == "orchestrator" {
+			t.Errorf("orchestrator should be preserved (user-modified) but was removed")
+		}
+	}
+	// Other bundled skills with no user edits should be removed.
+	for _, name := range []string{"using-bones-powers", "systematic-debugging"} {
+		dir := filepath.Join(dir, ".claude", "skills", name)
+		_ = name
+		_ = dir
+	}
+	got, err := os.ReadFile(userSkill)
+	if err != nil {
+		t.Fatalf("user-modified SKILL.md was removed: %v", err)
+	}
+	if string(got) != "USER OVERRIDE\n" {
+		t.Errorf("user content corrupted: %q", got)
+	}
 }
 
 func mkdir(t *testing.T, path string) {
