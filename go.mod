@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/alecthomas/kong v1.15.0
-	github.com/danmestas/EdgeSync v0.0.12
+	github.com/danmestas/EdgeSync v0.0.13
 	github.com/danmestas/EdgeSync/leaf v0.0.10
 	github.com/danmestas/libfossil v0.5.0
 	github.com/danmestas/libfossil/db/driver/modernc v0.1.0
@@ -22,7 +22,7 @@ require (
 	github.com/antithesishq/antithesis-sdk-go v0.6.0-default-no-op // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/danmestas/EdgeSync/bridge v0.0.2 // indirect
+	github.com/danmestas/EdgeSync/bridge v0.0.3 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
