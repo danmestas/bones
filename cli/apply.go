@@ -18,19 +18,32 @@ import (
 	"github.com/danmestas/bones/internal/workspace"
 )
 
-// ApplyCmd materializes the hub fossil's trunk tip into the
-// project-root git working tree and stages the changes for the user
-// to review and commit. See
-// docs/superpowers/specs/2026-04-30-bones-apply-design.md.
+// ApplyCmd materializes fossil-resident work into a target directory.
+// Two modes share the same verb (issue #234, ADR 0037):
 //
-// bones apply never runs `git commit`. It writes files and stages with
+//  1. Default (trunk fan-in): with no flags, reads the hub fossil's
+//     trunk tip and stages the changes into the project-root git
+//     working tree for the user to review and commit. See
+//     docs/superpowers/specs/2026-04-30-bones-apply-design.md.
+//  2. Slot mode (--slot=<name> --to=<dir>): copies the slot's most
+//     recent committed-artifacts tree from `.bones/recovery/<slot>-*`
+//     into <dir>. The timestamped path scheme is hidden — the
+//     operator passes only the slot name. (#234)
+//
+// bones apply never runs `git commit`. In trunk mode it stages with
 // `git add -A` within fossil's tracked-paths set; the user owns the
-// commit message and the commit author identity.
+// commit message and the commit author identity. In slot mode it
+// writes files and stops — the operator decides what to do next.
 type ApplyCmd struct {
-	DryRun bool `name:"dry-run" help:"show planned changes without writing or staging"`
+	DryRun bool   `name:"dry-run" help:"show planned changes without writing or staging"`
+	Slot   string `name:"slot" help:"materialize this slot's committed artifacts; requires --to"`
+	To     string `name:"to" help:"target directory for --slot mode; created if missing"`
 }
 
 func (c *ApplyCmd) Run(g *repocli.Globals) (err error) {
+	if c.Slot != "" || c.To != "" {
+		return c.runSlotMode()
+	}
 	outcome := &applyOutcome{DryRun: c.DryRun}
 	_, end := telemetry.RecordCommand(context.Background(), "apply",
 		telemetry.Bool("dry_run", c.DryRun),
@@ -51,6 +64,142 @@ func (c *ApplyCmd) Run(g *repocli.Globals) (err error) {
 	}
 	defer cleanup()
 	return c.applyFromCheckout(pre, tempDir, outcome)
+}
+
+// runSlotMode handles `bones apply --slot=<name> --to=<dir>`. It
+// resolves the slot's most-recent recovery dir under
+// `.bones/recovery/<slot>-*`, copies its contents structure-preserving
+// into <dir>, and creates <dir> if missing. The timestamped path
+// scheme is intentionally hidden — operators pass only the slot name.
+//
+// Per #234, this verb exists so orchestrators don't have to grep
+// `.bones/recovery/` to retrieve committed slot work after
+// `bones swarm close`.
+func (c *ApplyCmd) runSlotMode() (err error) {
+	_, end := telemetry.RecordCommand(context.Background(), "apply",
+		telemetry.String("mode", "slot"),
+		telemetry.String("slot", c.Slot),
+	)
+	defer func() { end(err) }()
+
+	if c.Slot == "" {
+		return errors.New(
+			"bones apply: --to=<dir> requires --slot=<name>")
+	}
+	if c.To == "" {
+		return errors.New(
+			"bones apply: --slot requires --to=<dir> to materialize")
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("cwd: %w", err)
+	}
+	root, err := workspace.FindRoot(cwd)
+	if err != nil {
+		return fmt.Errorf(
+			"bones apply: workspace not found — run `bones init` or `bones up` first (%w)",
+			err)
+	}
+	srcDir, err := latestSlotRecoveryDir(root, c.Slot)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(c.To, 0o755); err != nil {
+		return fmt.Errorf("mkdir target: %w", err)
+	}
+	if err := copyRecoveryTree(srcDir, c.To); err != nil {
+		return fmt.Errorf("copy recovery tree: %w", err)
+	}
+	fmt.Fprintf(os.Stderr,
+		"bones apply: materialized slot %q → %s\n", c.Slot, c.To)
+	return nil
+}
+
+// latestSlotRecoveryDir scans `.bones/recovery/` for entries matching
+// `<slot>-<unix-ts>` and returns the absolute path of the
+// most-recent-by-mtime. Returns the documented "no committed
+// artifacts" error when none exist.
+//
+// The mtime tiebreaker (rather than parsing the unix-ts suffix) is
+// deliberate: it survives clock skew between the writer and reader,
+// and matches what `ls -t` would do for a human inspecting by hand.
+func latestSlotRecoveryDir(workspaceDir, slot string) (string, error) {
+	recoveryRoot := filepath.Join(workspaceDir, ".bones", "recovery")
+	entries, err := os.ReadDir(recoveryRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf(
+				"slot %s has no committed artifacts (recovery dir missing)",
+				slot)
+		}
+		return "", fmt.Errorf("read recovery: %w", err)
+	}
+	prefix := slot + "-"
+	var best string
+	var bestMtime time.Time
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if !strings.HasPrefix(e.Name(), prefix) {
+			continue
+		}
+		full := filepath.Join(recoveryRoot, e.Name())
+		info, err := os.Stat(full)
+		if err != nil {
+			continue
+		}
+		if best == "" || info.ModTime().After(bestMtime) {
+			best = full
+			bestMtime = info.ModTime()
+		}
+	}
+	if best == "" {
+		return "", fmt.Errorf(
+			"slot %s has no committed artifacts (recovery dir missing)",
+			slot)
+	}
+	return best, nil
+}
+
+// copyRecoveryTree mirrors src into dst, creating subdirectories and
+// copying regular files. Existing files in dst are overwritten — the
+// spec says "operator's responsibility." Symlinks and other
+// non-regular entries are skipped, matching the (intentionally
+// conservative) recovery-write policy in
+// internal/swarm/lease.go::copyTree.
+func copyRecoveryTree(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		return os.WriteFile(target, data, info.Mode().Perm())
+	})
 }
 
 // applyOutcome carries the post-hoc attributes the telemetry span needs,
