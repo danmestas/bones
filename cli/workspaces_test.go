@@ -351,7 +351,7 @@ func TestRunPrune_YesRemovesStopped(t *testing.T) {
 	for _, cwd := range []string{wsA, wsB} {
 		// seedTwoWorkspaces uses os.Getpid() since #229 (read-time
 		// self-prune required live pids to keep entries on disk).
-		if _, err := os.Stat(registry.EntryPath(cwd, os.Getpid())); !os.IsNotExist(err) {
+		if _, err := os.Stat(registry.EntryPath(cwd)); !os.IsNotExist(err) {
 			t.Errorf("entry file for %s should be removed; err=%v", cwd, err)
 		}
 	}
@@ -387,7 +387,7 @@ func TestRunPrune_NoConfirmKeepsEntries(t *testing.T) {
 	}
 
 	for _, cwd := range []string{wsA, wsB} {
-		if _, err := os.Stat(registry.EntryPath(cwd, os.Getpid())); err != nil {
+		if _, err := os.Stat(registry.EntryPath(cwd)); err != nil {
 			t.Errorf("entry for %s should still exist after abort; err=%v", cwd, err)
 		}
 	}

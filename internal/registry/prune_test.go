@@ -36,7 +36,7 @@ func TestPruneStale_DeletesDeadPidEntry(t *testing.T) {
 	if err := Write(stale); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	staleFile := EntryPath(cwd, dead)
+	staleFile := EntryPath(cwd)
 	if _, err := os.Stat(staleFile); err != nil {
 		t.Fatalf("setup: file not written: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestPruneStale_DeletesMissingCwdEntry(t *testing.T) {
 	if err := Write(stale); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	staleFile := EntryPath(gone, os.Getpid())
+	staleFile := EntryPath(gone)
 	if _, err := os.Stat(staleFile); err != nil {
 		t.Fatalf("setup: file not written: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestPruneStale_KeepsLiveEntry(t *testing.T) {
 	if err := Write(live); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	livePath := EntryPath(cwd, os.Getpid())
+	livePath := EntryPath(cwd)
 
 	got, err := List()
 	if err != nil {
@@ -159,11 +159,11 @@ func TestPruneStale_MixedEntries(t *testing.T) {
 		t.Errorf("survivor = %q, want %q", got[0].Name, "live")
 	}
 	// Dead-pid file gone.
-	if _, err := os.Stat(EntryPath(deadPidCwd, dead)); !os.IsNotExist(err) {
+	if _, err := os.Stat(EntryPath(deadPidCwd)); !os.IsNotExist(err) {
 		t.Errorf("dead-pid file should be removed; stat err = %v", err)
 	}
 	// Missing-cwd file gone.
-	if _, err := os.Stat(EntryPath(missingCwd, os.Getpid())); !os.IsNotExist(err) {
+	if _, err := os.Stat(EntryPath(missingCwd)); !os.IsNotExist(err) {
 		t.Errorf("missing-cwd file should be removed; stat err = %v", err)
 	}
 }
@@ -204,7 +204,7 @@ func TestPruneStale_OrphansSurfacesActionable(t *testing.T) {
 		t.Errorf("Orphans()[0].Name = %q, want %q", got[0].Name, "orphan")
 	}
 	// Stale file should have been pruned by the read-path scan.
-	if _, err := os.Stat(EntryPath(stale, dead)); !os.IsNotExist(err) {
+	if _, err := os.Stat(EntryPath(stale)); !os.IsNotExist(err) {
 		t.Errorf("stale file should be removed; stat err = %v", err)
 	}
 }

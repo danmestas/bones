@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -83,24 +82,18 @@ func ListInfo() ([]Info, error) {
 	return out, nil
 }
 
-// idFromFilename strips the ".json" suffix and the trailing
-// "-<pid>" so the surfaced ID equals WorkspaceID(Cwd) regardless of
-// whether the file is in the new <id>-<pid>.json scheme or the legacy
-// <id>.json scheme. WorkspaceID is 16 hex chars with no hyphens, so
-// the first hyphen in the basename is unambiguously the id/pid
-// separator.
-//
-// Two files (one per pid) for the same cwd produce the same Info.ID —
-// callers that need pid-level identity read the embedded Entry.HubPID.
+// idFromFilename strips the ".json" suffix from the registry path
+// and returns the workspace ID. Canonical filenames after #250 are
+// <id>.json so the basename is the id directly. A leftover legacy
+// per-pid file (`<id>-<pid>.json`) is migrated by Read on first
+// access; if one is observed before migration, strip the trailing
+// "-<pid>" so the surfaced ID still equals WorkspaceID(Cwd).
+// WorkspaceID is 16 hex chars with no hyphens so the first hyphen
+// is unambiguously the id/pid separator.
 func idFromFilename(path string) string {
 	base := strings.TrimSuffix(filepath.Base(path), ".json")
 	if idx := strings.Index(base, "-"); idx >= 0 {
-		// Only strip when the suffix parses as an integer pid (positive
-		// or negative); legacy <id>.json never contained a hyphen so
-		// this is a no-op there.
-		if _, err := strconv.Atoi(base[idx+1:]); err == nil {
-			return base[:idx]
-		}
+		return base[:idx]
 	}
 	return base
 }
