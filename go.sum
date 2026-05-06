@@ -10,12 +10,12 @@ github.com/cenkalti/backoff/v5 v5.0.3 h1:ZN+IMa753KfX5hd8vVaMixjnqRZ3y8CuJKRKj1x
 github.com/cenkalti/backoff/v5 v5.0.3/go.mod h1:rkhZdG3JZukswDf7f0cwqPNk4K0sa+F97BxZthm/crw=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
-github.com/danmestas/EdgeSync v0.0.15 h1:mZGrYRvGkI3pt0qUTeQo3mKYRj2NM+85YBHqFomQuBA=
-github.com/danmestas/EdgeSync v0.0.15/go.mod h1:ROwe+oqIDldUr+TTF7yCXHly9S+qSfGjISMlvpy26dU=
+github.com/danmestas/EdgeSync v0.0.16 h1:Ys+o94voL+ElHgGX1Swl/xwF0z6t50YQKtTq+PYDZI0=
+github.com/danmestas/EdgeSync v0.0.16/go.mod h1:caXPOa4g+TBG4skyJFriZxD2T6gE6dGDxHGll05gpwA=
 github.com/danmestas/EdgeSync/bridge v0.0.3 h1:ebLmh2sXVGWAMGthVNYb0JVpabrK3mr8A39XSgfZv6Y=
 github.com/danmestas/EdgeSync/bridge v0.0.3/go.mod h1:MQvPfVF+9qo5e+Zwb2LzL+bTScLgaUr4EmOdK/rqBDc=
-github.com/danmestas/EdgeSync/leaf v0.0.10 h1:NEA1pV6K3VAPfltG4ZlYuYDuNLBCOa5y5RzjwM1EEts=
-github.com/danmestas/EdgeSync/leaf v0.0.10/go.mod h1:UcLJAjyTvJsKzGNhnVw0sWMiZQcXykiBuXTDQe2JFtI=
+github.com/danmestas/EdgeSync/leaf v0.0.11 h1:kbEUUOwnsb+e2okP3fqrcZzBqaRIoQm+42G9xAhesHI=
+github.com/danmestas/EdgeSync/leaf v0.0.11/go.mod h1:UcLJAjyTvJsKzGNhnVw0sWMiZQcXykiBuXTDQe2JFtI=
 github.com/danmestas/go-sqlite3-opfs v0.2.0 h1:bO6iQYobgWCqTCQZ4NQ147x3yU2v+J+nn0Sq3y1b7sk=
 github.com/danmestas/go-sqlite3-opfs v0.2.0/go.mod h1:eAYxwG9hykpkB6oNMnsM8sSGB9HhHZv/NIN6yO9ZVQE=
 github.com/danmestas/libfossil v0.6.0 h1:f7U6MskBzFoU60lRYHQU8SQOVvfV3YC9A5y9olowQXE=
