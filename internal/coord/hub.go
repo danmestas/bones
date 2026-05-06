@@ -58,7 +58,7 @@ func OpenHub(ctx context.Context, workdir, httpAddr string) (*Hub, error) {
 		RepoPath:       filepath.Join(workdir, "hub.fossil"),
 		BootstrapUser:  "hub",
 		NobodyCaps:     "gio",
-		NATSStoreDir:   filepath.Join(workdir, ".nats-store"),
+		NATSStoreDir:   filepath.Join(workdir, "coord"),
 		FossilHTTPPort: port,
 	})
 	if err != nil {

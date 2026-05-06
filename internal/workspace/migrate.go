@@ -1,8 +1,10 @@
 // Workspace migration helpers.
 //
-// Two unrelated legacy formats are handled here:
+// Three unrelated legacy formats are handled here:
 //  1. .agent-infra/ → .bones/ (pre-rename marker; migrateLegacyMarker)
 //  2. .orchestrator/ → .bones/ (pre-ADR-0041 hub; migrateLegacyLayout)
+//  3. .bones/nats-store/ → .bones/coord/ (pre-#246 substrate-vocabulary
+//     leak; migrateNATSStoreToCoord)
 
 package workspace
 
@@ -133,7 +135,7 @@ func migrateLegacyLayout(workspaceDir string) error {
 		{filepath.Join(orch, "hub.fossil"), filepath.Join(bones, "hub.fossil")},
 		{filepath.Join(orch, "hub-fossil-url"), filepath.Join(bones, "hub-fossil-url")},
 		{filepath.Join(orch, "hub-nats-url"), filepath.Join(bones, "hub-nats-url")},
-		{filepath.Join(orch, "nats-store"), filepath.Join(bones, "nats-store")},
+		{filepath.Join(orch, "nats-store"), filepath.Join(bones, "coord")},
 		{filepath.Join(orch, "fossil.log"), filepath.Join(bones, "fossil.log")},
 		{filepath.Join(orch, "nats.log"), filepath.Join(bones, "nats.log")},
 		{filepath.Join(orch, "hub.log"), filepath.Join(bones, "hub.log")},
@@ -175,6 +177,44 @@ func migrateLegacyLayout(workspaceDir string) error {
 	}
 
 	fmt.Fprintln(os.Stderr, "migrated workspace to .bones/ layout (ADR 0041)")
+	return nil
+}
+
+// migrateNATSStoreToCoord renames .bones/nats-store/ to .bones/coord/ on
+// workspaces created before the substrate-vocabulary cleanup (#246). The
+// directory holds JetStream's on-disk state; renaming the parent is
+// safe because nats-server discovers streams via its own internal
+// catalog under <store_dir>/jetstream/$G/streams/, which is unaffected
+// by the parent rename.
+//
+// Idempotent and best-effort: returns nil if .bones/nats-store/ is
+// missing or .bones/coord/ already exists. On rename failure (e.g.
+// permissions, target half-populated) logs to stderr and returns nil
+// so a workspace with a rare layout edge-case still starts — the hub
+// will simply create a fresh .bones/coord/ alongside, and the next
+// `bones down` cycle will leave the operator a chance to inspect.
+func migrateNATSStoreToCoord(workspaceDir string) error {
+	bones := filepath.Join(workspaceDir, markerDirName)
+	src := filepath.Join(bones, "nats-store")
+	dst := filepath.Join(bones, "coord")
+	if _, err := os.Stat(src); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat .bones/nats-store: %w", err)
+	}
+	if _, err := os.Stat(dst); err == nil {
+		// .bones/coord/ already exists — assume migration already ran or
+		// the hub created a fresh coord/ alongside a stale nats-store/.
+		// Skip rather than clobber.
+		return nil
+	}
+	if err := os.Rename(src, dst); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"workspace: best-effort migrate .bones/nats-store/ → .bones/coord/ failed: %v\n",
+			err)
+		return nil
+	}
 	return nil
 }
 

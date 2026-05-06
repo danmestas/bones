@@ -137,6 +137,11 @@ func initLogic(ctx context.Context, cwd string) (Info, error) {
 		return Info{}, fmt.Errorf("mkdir .bones: %w", err)
 	}
 
+	// Best-effort: rename pre-#246 .bones/nats-store/ to .bones/coord/.
+	if err := migrateNATSStoreToCoord(cwd); err != nil {
+		return Info{}, err
+	}
+
 	// Idempotent: if agent.id already exists, reuse it; otherwise mint.
 	agentID, err := readAgentID(cwd)
 	if err != nil {
@@ -193,6 +198,11 @@ func joinLogic(ctx context.Context, cwd string) (Info, error) {
 		if err := migrateLegacyLayout(workspaceDir); err != nil {
 			return Info{}, err
 		}
+	}
+
+	// Best-effort: rename pre-#246 .bones/nats-store/ to .bones/coord/.
+	if err := migrateNATSStoreToCoord(workspaceDir); err != nil {
+		return Info{}, err
 	}
 
 	agentID, err := readAgentID(workspaceDir)
