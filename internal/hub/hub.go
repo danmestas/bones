@@ -105,23 +105,17 @@ func Start(ctx context.Context, root string, options ...Option) (err error) {
 		o.detach = false
 	}
 
+	if mErr := gateStaleWorktrees(root, isDetachChild); mErr != nil {
+		return mErr
+	}
 	p, err := newPaths(root)
 	if err != nil {
 		return err
 	}
 
-	// Telemetry: record only the parent's Start. The detached child
-	// re-enters Start with BONES_HUB_FOREGROUND=1 and would otherwise
-	// emit a daemon-lifetime span the parent already covered.
-	if !isDetachChild {
-		urlRecorded := readURLFile(p.fossilURL) != ""
-		var end telemetry.EndFunc
-		ctx, end = telemetry.RecordCommand(ctx, "hub.start",
-			telemetry.Bool("detach", o.detach),
-			telemetry.Bool("url_recorded", urlRecorded),
-		)
-		defer func() { end(err) }()
-	}
+	var endTelemetry telemetry.EndFunc
+	ctx, endTelemetry = startStartTelemetry(ctx, isDetachChild, p.fossilURL, o.detach)
+	defer func() { endTelemetry(err) }()
 
 	if err := os.MkdirAll(p.logDir, 0o755); err != nil {
 		return fmt.Errorf("hub: logs dir: %w", err)
