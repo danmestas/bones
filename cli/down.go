@@ -28,6 +28,11 @@ import (
 // bones-installed SessionStart/Stop hooks from .claude/settings.json.
 // Other hooks in settings.json are left untouched.
 //
+// Per issue #252, AGENTS.md and CLAUDE.md at the workspace root are no
+// longer scaffolded by `bones up`, so `bones down` does not touch them.
+// Workspaces installed by older bones may still carry bones-managed
+// content there; the operator removes it manually if needed.
+//
 // Destructive — requires --yes or an interactive y/N confirmation.
 // Idempotent: re-running on a clean tree is a no-op.
 type DownCmd struct {
@@ -174,7 +179,6 @@ func planDown(root string, c *DownCmd) []downAction {
 	plan = append(plan, planRemoveBonesDir(root)...)
 	plan = append(plan, planRemoveOrchestrator(root, c)...)
 	plan = append(plan, planRemoveSkills(root, c)...)
-	plan = append(plan, planRemoveAgentsMD(root)...)
 	plan = append(plan, planRemoveHooks(root, c)...)
 	plan = append(plan, planRemoveFossilMarkers(root)...)
 	plan = append(plan, planRemoveEmptyClaudeDir(root, c)...)
@@ -442,60 +446,6 @@ func planRemoveSkills(root string, c *DownCmd) []downAction {
 				return nil
 			},
 		})
-	}
-	return plan
-}
-
-// planRemoveAgentsMD removes (or strips bones content from) the
-// CLAUDE.md and AGENTS.md files at the workspace root. Per ADR 0042
-// these are the harness-agnostic guidance channel; they pair with the
-// hook entries removed by planRemoveHooks.
-//
-// Three cases per file:
-//   - Bones-owned outright (AGENTS.md template, or a CLAUDE.md symlink
-//     to AGENTS.md, or the regular-file fallback carrying the bones
-//     marker) — file is removed entirely.
-//   - User-authored with a bones managed block (per the issue #145
-//     model) — block is stripped in place, user content preserved.
-//   - User-authored with no bones content — left alone.
-func planRemoveAgentsMD(root string) []downAction {
-	var plan []downAction
-
-	agentsPath := filepath.Join(root, "AGENTS.md")
-	if data, err := os.ReadFile(agentsPath); err == nil {
-		switch {
-		case bonesOwnedAgentsMD(data):
-			plan = append(plan, downAction{
-				description: "remove " + agentsPath,
-				do:          func() error { return os.Remove(agentsPath) },
-			})
-		case hasManagedBlock(data):
-			plan = append(plan, downAction{
-				description: "strip bones block from " + agentsPath,
-				do:          func() error { return stripManagedBlock(agentsPath) },
-			})
-		}
-	}
-
-	claudePath := filepath.Join(root, "CLAUDE.md")
-	if target, err := os.Readlink(claudePath); err == nil && target == "AGENTS.md" {
-		plan = append(plan, downAction{
-			description: "remove " + claudePath,
-			do:          func() error { return os.Remove(claudePath) },
-		})
-	} else if data, err := os.ReadFile(claudePath); err == nil {
-		switch {
-		case bonesOwnedAgentsMD(data):
-			plan = append(plan, downAction{
-				description: "remove " + claudePath,
-				do:          func() error { return os.Remove(claudePath) },
-			})
-		case hasManagedBlock(data):
-			plan = append(plan, downAction{
-				description: "strip bones block from " + claudePath,
-				do:          func() error { return stripManagedBlock(claudePath) },
-			})
-		}
 	}
 	return plan
 }

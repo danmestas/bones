@@ -323,6 +323,9 @@ func TestPlanDown_EmptyTree_KeepHub(t *testing.T) {
 // actions for every removable artifact. Post-ADR-0041 the hub stop is
 // described as "stop hub (...)" rather than the deleted shutdown
 // script path; legacy .orchestrator/ is still cleaned up if present.
+//
+// Per #252, AGENTS.md and CLAUDE.md at the workspace root are no longer
+// scaffolded by `bones up` and are no longer touched by `bones down`.
 func TestPlanDown_FullInstall(t *testing.T) {
 	dir := t.TempDir()
 	mkdir(t, filepath.Join(dir, ".bones"))
@@ -332,12 +335,6 @@ func TestPlanDown_FullInstall(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(dir, ".claude", "settings.json"),
 		`{"hooks":{}}`)
-	// AGENTS.md (bones-managed) + CLAUDE.md symlink — added in ADR 0042.
-	writeFile(t, filepath.Join(dir, "AGENTS.md"),
-		"# Agent Guidance for this Workspace\n\n## Agent Setup (REQUIRED)\n")
-	if err := os.Symlink("AGENTS.md", filepath.Join(dir, "CLAUDE.md")); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
 
 	plan := planDown(dir, &DownCmd{})
 	descs := make([]string, len(plan))
@@ -357,102 +354,12 @@ func TestPlanDown_FullInstall(t *testing.T) {
 		"remove bundled skills",
 		".claude/skills/subagent",
 		".claude/skills/uninstall-bones",
-		"AGENTS.md",
-		"CLAUDE.md",
 		".claude/settings.json",
 	}
 	for _, w := range wants {
 		if !strings.Contains(joined, w) {
 			t.Errorf("plan missing action for %q:\n%s", w, joined)
 		}
-	}
-}
-
-// TestPlanRemoveAgentsMD_PreservesUserAuthored pins that an
-// AGENTS.md without the bones marker AND without a managed block is
-// left out of the removal plan entirely — bones down does not touch
-// untouched user files.
-func TestPlanRemoveAgentsMD_PreservesUserAuthored(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "AGENTS.md"),
-		"# My Project\n\nNot bones-managed.\n")
-	plan := planRemoveAgentsMD(dir)
-	for _, a := range plan {
-		if strings.Contains(a.description, "AGENTS.md") {
-			t.Errorf("user-authored AGENTS.md should not be in removal plan: %q", a.description)
-		}
-	}
-}
-
-// TestPlanRemoveAgentsMD_StripsBlockFromUserAuthored pins the
-// managed-section teardown contract for AGENTS.md (issue #145):
-// when the user-authored file contains a bones block, down strips the
-// block in place and leaves the user content otherwise intact.
-func TestPlanRemoveAgentsMD_StripsBlockFromUserAuthoredAGENTS(t *testing.T) {
-	dir := t.TempDir()
-	agentsPath := filepath.Join(dir, "AGENTS.md")
-	user := "# My Project\n\nUser content.\n"
-	writeFile(t, agentsPath, user)
-	if err := upsertManagedBlock(agentsPath, "bones contract body"); err != nil {
-		t.Fatalf("seed managed block: %v", err)
-	}
-
-	plan := planRemoveAgentsMD(dir)
-	stripFound := false
-	for _, a := range plan {
-		if strings.Contains(a.description, "AGENTS.md") &&
-			strings.Contains(a.description, "strip") {
-			stripFound = true
-			if err := a.do(); err != nil {
-				t.Fatalf("strip action returned error: %v", err)
-			}
-		}
-		if strings.Contains(a.description, "AGENTS.md") &&
-			strings.Contains(a.description, "remove") {
-			t.Errorf("user-authored AGENTS.md should be stripped, not removed: %q", a.description)
-		}
-	}
-	if !stripFound {
-		t.Fatalf("expected strip action for user-authored AGENTS.md; plan=%v", plan)
-	}
-	got, _ := os.ReadFile(agentsPath)
-	if string(got) != user {
-		t.Errorf("user AGENTS.md not restored after strip:\nwant %q\ngot  %q", user, got)
-	}
-}
-
-// TestPlanRemoveAgentsMD_StripsBlockFromUserAuthoredCLAUDE pins the
-// same contract for CLAUDE.md.
-func TestPlanRemoveAgentsMD_StripsBlockFromUserAuthoredCLAUDE(t *testing.T) {
-	dir := t.TempDir()
-	claudePath := filepath.Join(dir, "CLAUDE.md")
-	user := "# My rules\n\nKeep me.\n"
-	writeFile(t, claudePath, user)
-	if err := upsertManagedBlock(claudePath, "bones pointer body"); err != nil {
-		t.Fatalf("seed managed block: %v", err)
-	}
-
-	plan := planRemoveAgentsMD(dir)
-	stripFound := false
-	for _, a := range plan {
-		if strings.Contains(a.description, "CLAUDE.md") &&
-			strings.Contains(a.description, "strip") {
-			stripFound = true
-			if err := a.do(); err != nil {
-				t.Fatalf("strip action returned error: %v", err)
-			}
-		}
-		if strings.Contains(a.description, "CLAUDE.md") &&
-			strings.Contains(a.description, "remove") {
-			t.Errorf("user-authored CLAUDE.md should be stripped, not removed: %q", a.description)
-		}
-	}
-	if !stripFound {
-		t.Fatalf("expected strip action for user-authored CLAUDE.md; plan=%v", plan)
-	}
-	got, _ := os.ReadFile(claudePath)
-	if string(got) != user {
-		t.Errorf("user CLAUDE.md not restored after strip:\nwant %q\ngot  %q", user, got)
 	}
 }
 

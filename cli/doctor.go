@@ -230,54 +230,6 @@ func runBypassReportTo(w io.Writer, cwd string) (warns int, err error) {
 	return warns, nil
 }
 
-// checkAgentsMD reports on AGENTS.md state per ADR 0042 + ADR 0045
-// (four-shape contract). Three states are recognized for an existing
-// file:
-//
-//  1. Whole file is bones-owned (first-line marker, e.g. CLAUDE.md
-//     symlink target) — verify the required Agent Setup section.
-//  2. User-authored file with a `<!-- BONES:BEGIN --> … <!-- BONES:END -->`
-//     marker block — bones IS managing the block; report OK (#230).
-//  3. User-authored file with no bones content — informational, out
-//     of bones' scope.
-//
-// Returns true if a WARN was emitted.
-func checkAgentsMD(w io.Writer, cwd string) bool {
-	path := filepath.Join(cwd, "AGENTS.md")
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		stamp, _ := scaffoldver.Read(cwd)
-		if stamp == "" {
-			_, _ = fmt.Fprintln(w, "  INFO  no AGENTS.md (workspace not yet scaffolded)")
-			return false
-		}
-		_, _ = fmt.Fprintln(w,
-			"  WARN  AGENTS.md missing — run `bones up` to install (ADR 0042)")
-		return true
-	}
-	if err != nil {
-		_, _ = fmt.Fprintf(w, "  WARN  AGENTS.md read: %v\n", err)
-		return true
-	}
-	if bonesOwnedAgentsMD(data) {
-		if !strings.Contains(string(data), "## Agent Setup (REQUIRED)") {
-			_, _ = fmt.Fprintln(w,
-				"  WARN  AGENTS.md missing required `## Agent Setup (REQUIRED)` section — "+
-					"run `bones up` to refresh")
-			return true
-		}
-		_, _ = fmt.Fprintln(w, "  OK    AGENTS.md scaffolded with bones-required sections")
-		return false
-	}
-	if hasManagedBlock(data) {
-		_, _ = fmt.Fprintln(w, "  OK    AGENTS.md has bones-managed marker block")
-		return false
-	}
-	_, _ = fmt.Fprintln(w,
-		"  INFO  AGENTS.md present but not bones-managed — bones content out of scope")
-	return false
-}
-
 // checkBonesScaffoldedHooks verifies the Claude-format hooks bones up
 // installs (`bones hub start`, `bones tasks prime --json` x2). When
 // .claude/ exists at all, all three entries must be present in
@@ -326,15 +278,15 @@ func checkBonesScaffoldedHooks(w io.Writer, cwd string) bool {
 	return false
 }
 
-// checkScaffoldGates runs the AGENTS.md, hooks-presence, and
-// SessionStart-sentinel checks together. Extracted from
-// runBypassReportTo so that function stays under the funlen cap.
-// Returns the count of WARN-class findings emitted.
+// checkScaffoldGates runs the hooks-presence and SessionStart-sentinel
+// checks together. Extracted from runBypassReportTo so that function
+// stays under the funlen cap. Returns the count of WARN-class findings
+// emitted.
+//
+// Per issue #252, AGENTS.md is no longer scaffolded by `bones up` and
+// is therefore not checked here.
 func checkScaffoldGates(w io.Writer, cwd string) int {
 	var warns int
-	if checkAgentsMD(w, cwd) {
-		warns++
-	}
 	if checkBonesScaffoldedHooks(w, cwd) {
 		warns++
 	}
