@@ -472,31 +472,89 @@ func truncateTitle(s string, n int) string {
 	return s[:n-1] + "…"
 }
 
-// renderStatusAll iterates the workspace registry, prunes stale entries
-// in place (live-only semantics), and prints a table summarizing every
-// running workspace on this user/host.
+// renderStatusAll iterates the workspace registry and prints up to
+// three sections (#264):
+//
+//  1. Active workspaces with running hubs — the existing live-table.
+//  2. Orphan hubs — `bones hub start` processes alive on this host but
+//     either with no registry entry, a registry entry pointing at a
+//     different PID, or whose cwd no longer exists. Surfaces hubs that
+//     would otherwise be invisible to operators (a leaked detached
+//     process holding ports + fossil inodes).
+//  3. Paused workspaces — registry entries that survived the read-time
+//     self-prune (#229) but whose hub HTTP probe failed (PID alive,
+//     port not bound). Useful for "bookmarked workspace where the hub
+//     stopped" without quietly deleting the registry entry on view.
+//
+// Sections 2 and 3 are skipped entirely (header + body) when empty.
+//
+// Headers use double-equal markers (`== Active workspaces ==`) so a
+// terminal-savvy operator can split sections visually without column
+// alignment getting in the way.
 func renderStatusAll(w io.Writer) error {
 	entries, err := registry.List()
 	if err != nil {
 		return err
 	}
-	live := entries[:0]
+	var active, paused []registry.Entry
 	for _, e := range entries {
 		if registry.IsAlive(e) {
-			live = append(live, e)
+			active = append(active, e)
 		} else {
-			_ = registry.Remove(e.Cwd)
+			paused = append(paused, e)
 		}
 	}
-	if len(live) == 0 {
+
+	// Orphans: walk the host process table for `bones hub start` and
+	// keep the ones that don't appear in the registry under their own
+	// PID. ps/lsof failures degrade the orphan section to empty rather
+	// than failing the whole command (#264 edge case).
+	orphans, _ := liveOrphanHubs(active)
+
+	if len(active) == 0 && len(orphans) == 0 && len(paused) == 0 {
 		_, err := io.WriteString(w, "No workspaces running. Use 'bones up' in a project.\n")
+		return err
+	}
+
+	if err := renderActiveWorkspacesSection(w, active); err != nil {
+		return err
+	}
+	if len(orphans) > 0 {
+		if _, err := io.WriteString(w, "\n"); err != nil {
+			return err
+		}
+		if err := renderOrphanHubsSection(w, orphans); err != nil {
+			return err
+		}
+	}
+	if len(paused) > 0 {
+		if _, err := io.WriteString(w, "\n"); err != nil {
+			return err
+		}
+		if err := renderPausedWorkspacesSection(w, paused); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// renderActiveWorkspacesSection emits Section 1 of status --all. When
+// the active set is empty but other sections exist, we still print the
+// header + a "(none)" body so the operator can see "no live hubs but
+// here are orphans/paused" without ambiguity.
+func renderActiveWorkspacesSection(w io.Writer, active []registry.Entry) error {
+	if _, err := io.WriteString(w, "== Active workspaces ==\n"); err != nil {
+		return err
+	}
+	if len(active) == 0 {
+		_, err := io.WriteString(w, "  (none)\n")
 		return err
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	if _, err := fmt.Fprintln(tw, "WORKSPACE\tPATH\tHUB\tSESSIONS\tUPTIME"); err != nil {
 		return err
 	}
-	for _, e := range live {
+	for _, e := range active {
 		_, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n",
 			e.Name,
 			shortenHome(e.Cwd),
@@ -505,6 +563,133 @@ func renderStatusAll(w io.Writer) error {
 			humanDuration(time.Since(e.StartedAt)),
 		)
 		if err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
+}
+
+// orphanHub is a renderer-facing record describing a live `bones hub
+// start` process not accounted for by the registry. Reason carries a
+// short human-readable string explaining why the process is orphaned.
+type orphanHub struct {
+	PID    int
+	ETime  string
+	Cwd    string // "" when undiscoverable
+	Reason string
+}
+
+// liveOrphanHubs returns the subset of registry.LiveHubProcesses that
+// are not represented in active. Errors from ps/lsof are not fatal —
+// returns (nil, err) so the caller can render only Section 1. The
+// status verb is read-only and should never error out on a degraded
+// process-introspection path.
+func liveOrphanHubs(active []registry.Entry) ([]orphanHub, error) {
+	procs, err := registry.LiveHubProcesses()
+	if err != nil {
+		return nil, err
+	}
+	return reconcileOrphanHubs(procs, active), nil
+}
+
+// reconcileOrphanHubs is the pure-function core of liveOrphanHubs:
+// given a list of live `bones hub start` processes and the registry's
+// active entries, return the orphans. Three orphan signals match the
+// brief (#264):
+//
+//   - cwd missing from registry (no entry at all)
+//   - registry entry exists but its PID doesn't match the live PID
+//   - cwd no longer exists (process is alive in a deleted directory)
+//
+// Pulled out from liveOrphanHubs so unit tests can feed canned
+// HubProcess + Entry inputs without depending on the host process
+// table or filesystem layout.
+func reconcileOrphanHubs(procs []registry.HubProcess, active []registry.Entry) []orphanHub {
+	byCwd := make(map[string]registry.Entry, len(active))
+	for _, e := range active {
+		byCwd[filepath.Clean(e.Cwd)] = e
+	}
+	var out []orphanHub
+	for _, p := range procs {
+		o := orphanHub{PID: p.PID, ETime: p.ETime, Cwd: p.Cwd}
+		if p.Cwd == "" {
+			o.Reason = "cwd unknown (process introspection failed)"
+			out = append(out, o)
+			continue
+		}
+		if _, err := os.Stat(p.Cwd); os.IsNotExist(err) {
+			o.Reason = "cwd no longer exists"
+			out = append(out, o)
+			continue
+		}
+		entry, ok := byCwd[filepath.Clean(p.Cwd)]
+		if !ok {
+			o.Reason = "cwd missing from registry"
+			out = append(out, o)
+			continue
+		}
+		if entry.HubPID != p.PID {
+			o.Reason = fmt.Sprintf("registry pid=%d but live pid=%d", entry.HubPID, p.PID)
+			out = append(out, o)
+			continue
+		}
+	}
+	return out
+}
+
+// renderOrphanHubsSection emits Section 2 of status --all: the live
+// `bones hub start` processes not accounted for by the registry. A
+// trailing hint points at `bones hub reap --pid=N` (issue #263) for
+// per-process cleanup; status itself doesn't reap, matching the
+// read-only-doctor doctrine of ADR 0043.
+func renderOrphanHubsSection(w io.Writer, orphans []orphanHub) error {
+	if _, err := io.WriteString(w, "== Orphan hubs ==\n"); err != nil {
+		return err
+	}
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "PID\tETIME\tCWD\tREASON"); err != nil {
+		return err
+	}
+	for _, o := range orphans {
+		cwd := o.Cwd
+		if cwd == "" {
+			cwd = "unknown"
+		} else {
+			cwd = shortenHome(cwd)
+		}
+		if _, err := fmt.Fprintf(tw, "%d\t%s\t%s\t%s\n",
+			o.PID, o.ETime, cwd, o.Reason); err != nil {
+			return err
+		}
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	_, err := io.WriteString(w,
+		"  (run `bones hub reap --pid=N` per process)\n")
+	return err
+}
+
+// renderPausedWorkspacesSection emits Section 3 of status --all:
+// registry entries whose PID is alive but whose HTTP probe failed.
+// These survived the read-time self-prune (dead-PID + missing-cwd are
+// already gone) but have no functional hub serving HTTP. The renderer
+// presents them as paused rather than deleting them silently — the
+// pre-#264 code Remove'd these on view, hiding the bookmark.
+func renderPausedWorkspacesSection(w io.Writer, paused []registry.Entry) error {
+	if _, err := io.WriteString(w, "== Paused workspaces ==\n"); err != nil {
+		return err
+	}
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "WORKSPACE\tPATH\tLAST ACTIVITY"); err != nil {
+		return err
+	}
+	for _, e := range paused {
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\n",
+			e.Name,
+			shortenHome(e.Cwd),
+			humanAge(time.Since(e.StartedAt)),
+		); err != nil {
 			return err
 		}
 	}
