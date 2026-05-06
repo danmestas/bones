@@ -63,6 +63,7 @@ func TestMigrateLegacyLayout_MovesFiles(t *testing.T) {
 	pidsDir := filepath.Join(orchDir, "pids")
 	for _, d := range []string{
 		pidsDir,
+		// legacy nats-store dirs preserved during move
 		filepath.Join(orchDir, "nats-store", "jetstream"),
 		filepath.Join(orchDir, "scripts"),
 		bonesDir, // pre-existing legacy workspace-leaf state
@@ -101,7 +102,7 @@ func TestMigrateLegacyLayout_MovesFiles(t *testing.T) {
 	for _, p := range []string{
 		"hub.fossil", "hub-fossil-url", "hub-nats-url",
 		"fossil.log", "nats.log", "hub.log",
-		filepath.Join("nats-store", "jetstream"),
+		filepath.Join("coord", "jetstream"),
 	} {
 		if _, err := os.Stat(filepath.Join(bonesDir, p)); err != nil {
 			t.Errorf(".bones/%s missing after migrate: %v", p, err)
@@ -140,6 +141,68 @@ func TestMigrateLegacyLayout_Idempotent(t *testing.T) {
 	// Second run: should be a no-op (legacyAbsent).
 	if err := migrateLegacyLayout(dir); err != nil {
 		t.Fatalf("second migrate: %v", err)
+	}
+}
+
+func TestMigrateNATSStoreToCoord_RenamesDir(t *testing.T) {
+	dir := t.TempDir()
+	bones := filepath.Join(dir, ".bones")
+	old := filepath.Join(bones, "nats-store", "jetstream", "$G", "streams")
+	if err := os.MkdirAll(old, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	canary := filepath.Join(bones, "nats-store", "marker")
+	if err := os.WriteFile(canary, []byte("hello"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if err := migrateNATSStoreToCoord(dir); err != nil {
+		t.Fatalf("migrateNATSStoreToCoord: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(bones, "nats-store")); !os.IsNotExist(err) {
+		t.Errorf(".bones/nats-store/ still exists: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(bones, "coord", "jetstream", "$G", "streams")); err != nil {
+		t.Errorf(".bones/coord/jetstream/$G/streams missing: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(bones, "coord", "marker"))
+	if err != nil {
+		t.Fatalf("read marker: %v", err)
+	}
+	if string(got) != "hello" {
+		t.Errorf("marker = %q, want %q", got, "hello")
+	}
+}
+
+func TestMigrateNATSStoreToCoord_NoOpWhenAbsent(t *testing.T) {
+	dir := t.TempDir()
+	if err := migrateNATSStoreToCoord(dir); err != nil {
+		t.Fatalf("migrateNATSStoreToCoord on empty workspace: %v", err)
+	}
+}
+
+func TestMigrateNATSStoreToCoord_NoOpWhenCoordExists(t *testing.T) {
+	// Both .bones/nats-store/ and .bones/coord/ present — skip rather
+	// than clobber. The hub's MkdirAll will simply pick coord/ on the
+	// next start.
+	dir := t.TempDir()
+	bones := filepath.Join(dir, ".bones")
+	if err := os.MkdirAll(filepath.Join(bones, "nats-store"), 0o755); err != nil {
+		t.Fatalf("mkdir nats-store: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(bones, "coord"), 0o755); err != nil {
+		t.Fatalf("mkdir coord: %v", err)
+	}
+	if err := migrateNATSStoreToCoord(dir); err != nil {
+		t.Fatalf("migrateNATSStoreToCoord: %v", err)
+	}
+	// Both should still exist (no-op).
+	if _, err := os.Stat(filepath.Join(bones, "nats-store")); err != nil {
+		t.Errorf(".bones/nats-store/ removed unexpectedly: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(bones, "coord")); err != nil {
+		t.Errorf(".bones/coord/ removed unexpectedly: %v", err)
 	}
 }
 

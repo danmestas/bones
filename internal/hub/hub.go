@@ -211,8 +211,8 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 	if !pidIsLive(p.hubPid) {
 		removeRepoAndSidecars(p)
 	}
-	if err := os.MkdirAll(p.natsStore, 0o755); err != nil {
-		return fmt.Errorf("hub: nats store dir: %w", err)
+	if err := os.MkdirAll(p.coordStore, 0o755); err != nil {
+		return fmt.Errorf("hub: coord store dir: %w", err)
 	}
 	// Write hub.pid BEFORE NewHub binds the HTTP listener. edgehub.NewHub
 	// calls net.Listen at construction (the HTTP socket is up before
@@ -274,7 +274,7 @@ func openAndSeedHub(
 	h, err := edgehub.NewHub(ctx, edgehub.Config{
 		RepoPath:       p.hubRepo,
 		BootstrapUser:  "orchestrator",
-		NATSStoreDir:   p.natsStore,
+		NATSStoreDir:   p.coordStore,
 		FossilHTTPPort: o.repoPort,
 		NATSClientPort: o.coordPort,
 	})
@@ -606,7 +606,7 @@ type paths struct {
 	natsURL     string
 	fossilLog   string
 	natsLog     string
-	natsStore   string
+	coordStore  string
 	fslckout    string
 	fslSettings string
 }
@@ -660,7 +660,7 @@ func newPaths(root string) (paths, error) {
 		natsURL:     filepath.Join(orch, "hub-nats-url"),
 		fossilLog:   filepath.Join(orch, "fossil.log"),
 		natsLog:     filepath.Join(orch, "nats.log"),
-		natsStore:   filepath.Join(orch, "nats-store"),
+		coordStore:  filepath.Join(orch, "coord"),
 		fslckout:    filepath.Join(abs, ".fslckout"),
 		fslSettings: filepath.Join(abs, ".fossil-settings"),
 	}, nil
