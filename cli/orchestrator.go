@@ -86,6 +86,14 @@ func scaffoldOrchestrator(root string) (scaffoldFootprint, error) {
 	if err := scaffoldver.Write(root, version.Get()); err != nil {
 		return fp, fmt.Errorf("scaffold version stamp: %w", err)
 	}
+	// Manifest writes last (issue #262): every other scaffold step has
+	// finished, so the manifest captures the final hashes of
+	// .bones/scaffold_version, .bones/agent.id, and the bones-owned
+	// hook subset of .claude/settings.json. doctor uses these to
+	// detect tamper / partial-scaffold drift in `bones doctor`.
+	if err := writeManifest(root); err != nil {
+		return fp, fmt.Errorf("manifest: %w", err)
+	}
 	return fp, nil
 }
 
