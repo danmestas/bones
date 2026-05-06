@@ -9,9 +9,11 @@ import (
 	"time"
 
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
+	"github.com/nats-io/nats.go"
 
 	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/scaffoldver"
+	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/version"
 )
 
@@ -71,7 +73,63 @@ func (c *HubStartCmd) Run(g *repocli.Globals) error {
 		hub.WithCoordPort(c.CoordPort),
 		hub.WithDetach(c.Detach),
 		hub.WithDrainTimeout(c.DrainTimeout),
+		hub.WithLeaseWatcher(startLeaseWatcher),
 	)
+}
+
+// startLeaseWatcher is the CLI-side lease-TTL watcher constructor
+// the hub invokes once both servers are reachable (ADR 0050,
+// #265). Lives here (not in internal/hub) because it imports
+// swarm; putting it inside the hub package would create a
+// hub→swarm→workspace→hub import cycle.
+//
+// Best-effort construction: NATS dial / sessions open failures are
+// surfaced as errors to the hub, which logs them as warnings and
+// continues serving. The JetStream KV bucket TTL still evicts
+// stale records at the substrate level even without this watcher.
+func startLeaseWatcher(
+	parentCtx context.Context, info hub.LeaseWatcherInfo,
+) (func(), error) {
+	nc, err := nats.Connect(info.NATSURL)
+	if err != nil {
+		return nil, fmt.Errorf("nats connect: %w", err)
+	}
+	sess, err := swarm.Open(parentCtx, swarm.Config{NATSConn: nc})
+	if err != nil {
+		nc.Close()
+		return nil, fmt.Errorf("open sessions: %w", err)
+	}
+	w, err := swarm.NewTTLWatcher(swarm.WatcherConfig{
+		WorkspaceDir:  info.WorkspaceDir,
+		Sessions:      sess,
+		Logger:        leaseWatcherLogger{info.Logger},
+		LocalHostOnly: true,
+	})
+	if err != nil {
+		_ = sess.Close()
+		nc.Close()
+		return nil, fmt.Errorf("new watcher: %w", err)
+	}
+	stopRun := w.Start(parentCtx)
+	return func() {
+		stopRun()
+		_ = sess.Close()
+		nc.Close()
+	}, nil
+}
+
+// leaseWatcherLogger adapts the hub's LeaseWatcherLogger to
+// swarm.WatcherLogger. The two types share a method set; the
+// adapter is a one-line shape conversion so neither package needs
+// to import the other's logger interface directly.
+type leaseWatcherLogger struct{ inner hub.LeaseWatcherLogger }
+
+func (a leaseWatcherLogger) Infof(format string, args ...any) {
+	a.inner.Infof(format, args...)
+}
+
+func (a leaseWatcherLogger) Warnf(format string, args ...any) {
+	a.inner.Warnf(format, args...)
 }
 
 // warnScaffoldDrift prints a single-line stderr notice when the

@@ -16,18 +16,64 @@
 //	  pid files. Idempotent: missing or stale pid files are not an error.
 package hub
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // Option configures Start.
 type Option func(*opts)
 
+// LeaseWatcherInfo is the dependency packet handed to a lease-TTL
+// watcher start function on hub bring-up. The hub package itself
+// does not import swarm (cycle would arise via
+// swarm→workspace→hub); the CLI layer wires the swarm-aware watcher
+// implementation in via WithLeaseWatcher.
+type LeaseWatcherInfo struct {
+	// WorkspaceDir is the bones workspace root (absolute path).
+	// The watcher uses this to remove `.bones/swarm/<slot>/wt/`
+	// when a lease expires.
+	WorkspaceDir string
+
+	// NATSURL is the URL of the in-process NATS server the hub
+	// just started. The watcher dials this to read the swarm-
+	// sessions bucket.
+	NATSURL string
+
+	// Logger is the hub.log writer the watcher emits to. Infof
+	// fires on each reap; Warnf surfaces transient substrate
+	// errors. The watcher MUST be silent when nothing is stale
+	// (no log spam on the happy path).
+	Logger LeaseWatcherLogger
+}
+
+// LeaseWatcherLogger is the contract the hub exposes to the
+// lease-watcher hook. Mirrors the swarm package's WatcherLogger
+// shape so the hookup is one struct conversion away in the CLI
+// wiring.
+type LeaseWatcherLogger interface {
+	Infof(format string, args ...any)
+	Warnf(format string, args ...any)
+}
+
+// LeaseWatcherStartFunc constructs and runs a lease-TTL watcher
+// against info, returning a stop function the hub invokes at
+// shutdown. The watcher MUST run in a goroutine; the hub does not
+// block on it. Errors at startup time are surfaced via the
+// returned error and degrade gracefully — the hub continues to
+// serve.
+type LeaseWatcherStartFunc func(
+	ctx context.Context, info LeaseWatcherInfo,
+) (stop func(), err error)
+
 // opts holds tunable behavior for Start. The exported Option constructors
 // are the only way to mutate this struct from outside the package.
 type opts struct {
-	repoPort     int
-	coordPort    int
-	detach       bool
-	drainTimeout time.Duration
+	repoPort          int
+	coordPort         int
+	detach            bool
+	drainTimeout      time.Duration
+	startLeaseWatcher LeaseWatcherStartFunc
 }
 
 // defaults returns the production defaults: ports left zero so
@@ -67,4 +113,20 @@ func WithDetach(d bool) Option { return func(o *opts) { o.detach = d } }
 // value falls back to defaultDrainTimeout.
 func WithDrainTimeout(d time.Duration) Option {
 	return func(o *opts) { o.drainTimeout = d }
+}
+
+// WithLeaseWatcher installs the lease-TTL watcher hook. The hub
+// invokes start(ctx, info) once it is ready (after NATS + Fossil
+// are accepting connections, before the ctx-cancellation wait). The
+// returned stop function runs at hub shutdown, before drain. The
+// hook is optional — the hub package's invariants don't depend on
+// it (the JetStream KV bucket TTL evicts stale records at the
+// substrate level regardless), so a hub started without the option
+// (e.g. the detached parent's spawnDetachedChild path) still works.
+//
+// The CLI layer wires this in via cli/hub.go so the swarm import
+// stays out of internal/hub and the hub→swarm→workspace→hub cycle
+// never forms.
+func WithLeaseWatcher(start LeaseWatcherStartFunc) Option {
+	return func(o *opts) { o.startLeaseWatcher = start }
 }
