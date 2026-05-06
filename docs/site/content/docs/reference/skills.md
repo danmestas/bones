@@ -14,7 +14,7 @@ Skills are auto-discovered by the harness when it scans the workspace's `.claude
 Triggered when the user invokes a slot-annotated plan or asks to "run plan in parallel" / "orchestrate this plan" / "dispatch agents from plan". The skill drives a four-step flow:
 
 1. **Validate** — `bones validate-plan <plan-path>`. Stops on non-zero exit and surfaces the violations.
-2. **Verify hub** — checks `.bones/pids/{fossil,nats}.pid` and the hub's `/xfer` endpoint; runs `bones hub start` if anything's missing (the verb is idempotent).
+2. **Verify hub** — checks `.bones/hub.pid` and the hub's `/xfer` endpoint; runs `bones hub start` if anything's missing (the verb is idempotent).
 3. **Extract slots** — `bones validate-plan --list-slots <plan-path>` emits a JSON slot→tasks mapping; the orchestrator uses it to build dispatch prompts without re-parsing the plan.
 4. **Dispatch** — invokes the Task tool once per slot, passing the slot's task list and environment values (`AGENT_ID`, `SLOT_ID`, `HUB_URL`, `NATS_URL`, `WORKDIR`) inline.
 

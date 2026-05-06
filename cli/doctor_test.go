@@ -183,7 +183,7 @@ func TestDoctorCmdAllPathInvokesRender(t *testing.T) {
 // TestRunSwarmReport_DoesNotAutoStartHub pins #228: when no hub is
 // running, runSwarmReport must NOT route through workspace.Join (which
 // lazy-starts the hub) — that violates doctor's read-only contract and
-// silently writes .bones/pids/ + URL files on every doctor invocation.
+// silently writes .bones/hub.pid + URL files on every doctor invocation.
 //
 // Mirrors TestResolveStatusRoot_DoesNotAutoStartHub from #207. After
 // the fix, runSwarmReport resolves the workspace via workspace.FindRoot
@@ -223,8 +223,8 @@ func TestRunSwarmReport_DoesNotAutoStartHub(t *testing.T) {
 			t.Errorf("runSwarmReport created %s; #228 says it must not write hub state", path)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(root, ".bones", "pids")); err == nil {
-		t.Errorf("runSwarmReport created .bones/pids/; #228 says it must not write hub state")
+	if _, err := os.Stat(filepath.Join(root, ".bones", "hub.pid")); err == nil {
+		t.Errorf("runSwarmReport created .bones/hub.pid; #228 says it must not write hub state")
 	}
 }
 

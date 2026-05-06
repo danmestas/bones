@@ -73,8 +73,7 @@ Non-zero exit → print violations and stop. The validator's slot-dir derivation
 The `SessionStart` hook should have started it. Sanity-check:
 
 ```
-test -f .bones/pids/fossil.pid && \
-  test -f .bones/pids/nats.pid && \
+test -f .bones/hub.pid && \
   curl -fsS -X POST "$(cat .bones/hub-fossil-url)/xfer" >/dev/null
 ```
 

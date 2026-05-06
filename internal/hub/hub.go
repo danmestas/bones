@@ -80,18 +80,18 @@ var errDrainTimeout = errors.New("hub: drain timeout exceeded")
 // .bones/hub.fossil seeded from git-tracked files, a Fossil HTTP
 // server on the chosen port, and an embedded NATS JetStream server.
 //
-// Idempotent: if both pid files exist and the recorded processes are
-// alive, Start returns nil immediately.
+// Idempotent: if hub.pid exists and the recorded process is alive,
+// Start returns nil immediately.
 //
 // With WithDetach(true) the calling process fork-execs itself in
 // "foreground" mode, waits for both servers to become reachable, and
-// returns. The child outlives the caller and owns the servers; pid
-// files reference the child. This is what `bones hub start --detach`
+// returns. The child outlives the caller and owns the servers;
+// hub.pid references the child. This is what `bones hub start --detach`
 // uses so a shell can fire-and-forget the hub.
 //
 // Without detach, Start blocks on ctx.Done(): the calling process is
-// the hub. Pid files reference the calling process. On cancellation,
-// both servers shut down cleanly and pid files are removed.
+// the hub. hub.pid references the calling process. On cancellation,
+// both servers shut down cleanly and hub.pid is removed.
 func Start(ctx context.Context, root string, options ...Option) (err error) {
 	o := defaults()
 	for _, fn := range options {
@@ -123,15 +123,19 @@ func Start(ctx context.Context, root string, options ...Option) (err error) {
 		defer func() { end(err) }()
 	}
 
-	if err := os.MkdirAll(p.pidDir, 0o755); err != nil {
-		return fmt.Errorf("hub: pids dir: %w", err)
-	}
 	if err := os.MkdirAll(p.logDir, 0o755); err != nil {
 		return fmt.Errorf("hub: logs dir: %w", err)
 	}
 
-	// Idempotency: if both pid files point at live processes, we're done.
-	if pidIsLive(p.fossilPid) && pidIsLive(p.natsPid) {
+	// One-time migration (#254): the legacy .bones/pids/ subdir held
+	// fossil.pid and nats.pid for the same supervisor process. Remove
+	// it on first Start after upgrade so stale pid files don't confuse
+	// any external tooling that still scans the legacy path. Best-
+	// effort: a permission failure here must not block hub start.
+	_ = os.RemoveAll(filepath.Join(p.orchDir, "pids"))
+
+	// Idempotency: if hub.pid points at a live process, we're done.
+	if pidIsLive(p.hubPid) {
 		return nil
 	}
 
@@ -199,34 +203,30 @@ func Start(ctx context.Context, root string, options ...Option) (err error) {
 // shells can detect liveness, and Stop in this same process is
 // equivalent to canceling ctx.
 func runForeground(ctx context.Context, p paths, o opts) error {
-	// Fresh-start detection (ADR 0023): if no fossil PID is alive,
+	// Fresh-start detection (ADR 0023): if hub.pid is not alive,
 	// wipe stale checkout state so each session starts from a clean
 	// substrate. Working-tree files are untouched. SQLite -shm and -wal
 	// sidecars are part of stale state — without removing them, the
 	// next bootstrap hits SQLITE_IOERR_SHORT_READ (522). See #138.
-	if !pidIsLive(p.fossilPid) {
+	if !pidIsLive(p.hubPid) {
 		removeRepoAndSidecars(p)
 	}
 	if err := os.MkdirAll(p.natsStore, 0o755); err != nil {
 		return fmt.Errorf("hub: nats store dir: %w", err)
 	}
-	// Write pid files BEFORE NewHub binds the HTTP listener. edgehub.NewHub
+	// Write hub.pid BEFORE NewHub binds the HTTP listener. edgehub.NewHub
 	// calls net.Listen at construction (the HTTP socket is up before
 	// ServeHTTP runs), and the kernel SYN-ACKs connections to a bound-but-
 	// unaccepted socket — so the detach parent's waitForTCP probe succeeds
-	// the moment NewHub returns. If we wrote pids after NewHub, the
+	// the moment NewHub returns. If we wrote hub.pid after NewHub, the
 	// parent's port-collision check (readPid against cmd.Process.Pid)
 	// would race ahead of the pid write and fire a false-positive
-	// "fossil port responded but pids/fossil.pid does not name our child
-	// (recorded 0)" error on every detach start. Pid files name the
+	// "fossil port responded but hub.pid does not name our child
+	// (recorded 0)" error on every detach start. The pid file names the
 	// foreground process either way (os.Getpid() is stable across the
-	// NewHub call), so writing them first is correct.
-	if err := writePid(p.fossilPid, os.Getpid()); err != nil {
-		return fmt.Errorf("hub: write fossil.pid: %w", err)
-	}
-	if err := writePid(p.natsPid, os.Getpid()); err != nil {
-		_ = os.Remove(p.fossilPid)
-		return fmt.Errorf("hub: write nats.pid: %w", err)
+	// NewHub call), so writing it first is correct.
+	if err := writePid(p.hubPid, os.Getpid()); err != nil {
+		return fmt.Errorf("hub: write hub.pid: %w", err)
 	}
 	freshSeed := false
 	if _, err := os.Stat(p.hubRepo); errors.Is(err, os.ErrNotExist) {
@@ -234,8 +234,7 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 	}
 	h, err := openAndSeedHub(ctx, p, o, freshSeed)
 	if err != nil {
-		_ = os.Remove(p.fossilPid)
-		_ = os.Remove(p.natsPid)
+		_ = os.Remove(p.hubPid)
 		return err
 	}
 	httpDone := make(chan struct{})
@@ -258,8 +257,7 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 	<-ctx.Done()
 	httpCancel()
 	drainErr := drainHub(h, httpDone, o.drainTimeout)
-	_ = os.Remove(p.fossilPid)
-	_ = os.Remove(p.natsPid)
+	_ = os.Remove(p.hubPid)
 	// Drop our own per-pid registry entry (#208 layout) so a clean
 	// hub exit does not leave a stale record for `bones doctor` or
 	// `bones status --all` to filter out via pidAlive. Dead-pid
@@ -419,17 +417,16 @@ func spawnDetachedChild(p paths, o opts) error {
 	// up, then every verb downstream fails mysteriously against the
 	// foreign service.
 	//
-	// Verify the recorded fossil pid matches our child. The child
-	// writes p.fossilPid as part of startFossil, so by the time the
-	// fossil port responds, the file should exist with the child's
-	// pid. Mismatch (or missing) means port collision or a crashed
-	// child that never wrote the file.
-	if recorded, ok := readPid(p.fossilPid); !ok || recorded != cmd.Process.Pid {
+	// Verify the recorded hub pid matches our child. The child writes
+	// p.hubPid before NewHub, so by the time the fossil port responds,
+	// the file should exist with the child's pid. Mismatch (or missing)
+	// means port collision or a crashed child that never wrote the file.
+	if recorded, ok := readPid(p.hubPid); !ok || recorded != cmd.Process.Pid {
 		_ = cmd.Process.Kill()
 		return fmt.Errorf("hub: fossil port %s responded but %s does not "+
 			"name our child (pid %d, recorded %d) — likely port "+
 			"collision; another service is bound to the port%s",
-			fossilAddr, p.fossilPid, cmd.Process.Pid, recorded,
+			fossilAddr, p.hubPid, cmd.Process.Pid, recorded,
 			hubLogTail(p))
 	}
 
@@ -473,14 +470,14 @@ func WithForce(force bool) StopOption {
 // tearing the hub down (#157). Use WithForce to override.
 var ErrActiveSlots = errors.New("hub: active swarm slots present")
 
-// Stop terminates the processes recorded in the pid files written by
-// Start and removes those pid files. SIGTERM first; if the process is
-// still alive after stopGrace, SIGKILL. Pid files are only removed
-// once the process is confirmed dead so a follow-up Start cannot
-// mistake an orphan-still-alive for "nothing to clean up" (#138).
+// Stop terminates the process recorded in hub.pid (written by Start)
+// and removes the pid file. SIGTERM first; if the process is still
+// alive after stopGrace, SIGKILL. The pid file is only removed once
+// the process is confirmed dead so a follow-up Start cannot mistake
+// an orphan-still-alive for "nothing to clean up" (#138).
 //
-// Missing pid files or stale pids are not an error: Stop is idempotent
-// so callers can shut down without first checking whether Start ran.
+// A missing or stale hub.pid is not an error: Stop is idempotent so
+// callers can shut down without first checking whether Start ran.
 //
 // As a safety, Stop will not signal the calling process. If the
 // recorded pid matches os.Getpid(), Stop only removes the pid file.
@@ -526,20 +523,10 @@ func Stop(root string, options ...StopOption) (err error) {
 	}
 
 	self := os.Getpid()
-	// Both servers share a single child process in the detached model,
-	// so the two pid files typically reference the same pid. Dedup so
-	// we only signal once.
-	handled := make(map[int]struct{})
-	for _, pidFile := range []string{p.fossilPid, p.natsPid} {
-		pid, ok := readPid(pidFile)
-		if ok && pid != self {
-			if _, done := handled[pid]; !done {
-				terminateProcess(pid)
-				handled[pid] = struct{}{}
-			}
-		}
-		_ = os.Remove(pidFile)
+	if pid, ok := readPid(p.hubPid); ok && pid != self {
+		terminateProcess(pid)
 	}
+	_ = os.Remove(p.hubPid)
 	return nil
 }
 
@@ -612,11 +599,9 @@ func terminateProcess(pid int) {
 type paths struct {
 	root        string
 	orchDir     string
-	pidDir      string
 	logDir      string
 	hubRepo     string
-	fossilPid   string
-	natsPid     string
+	hubPid      string
 	fossilURL   string
 	natsURL     string
 	fossilLog   string
@@ -634,8 +619,8 @@ func HubFossilPath(root string) string {
 }
 
 // IsRunning reports whether a hub for the workspace at root is
-// currently running. Returns (pid, true) when both fossil.pid and
-// nats.pid exist and name live processes; (0, false) otherwise.
+// currently running. Returns (pid, true) when hub.pid exists and
+// names a live process; (0, false) otherwise.
 //
 // Read-only. Used by cli/up to print accurate post-scaffold status
 // without spawning anything (per ADR 0041 the hub is started lazily
@@ -645,11 +630,8 @@ func IsRunning(root string) (int, bool) {
 	if err != nil {
 		return 0, false
 	}
-	pid, ok := readPid(p.fossilPid)
+	pid, ok := readPid(p.hubPid)
 	if !ok || !pidIntIsLive(pid) {
-		return 0, false
-	}
-	if !pidIsLive(p.natsPid) {
 		return 0, false
 	}
 	return pid, true
@@ -671,11 +653,9 @@ func newPaths(root string) (paths, error) {
 	return paths{
 		root:        abs,
 		orchDir:     orch,
-		pidDir:      filepath.Join(orch, "pids"),
 		logDir:      orch,
 		hubRepo:     filepath.Join(orch, "hub.fossil"),
-		fossilPid:   filepath.Join(orch, "pids", "fossil.pid"),
-		natsPid:     filepath.Join(orch, "pids", "nats.pid"),
+		hubPid:      filepath.Join(orch, "hub.pid"),
 		fossilURL:   filepath.Join(orch, "hub-fossil-url"),
 		natsURL:     filepath.Join(orch, "hub-nats-url"),
 		fossilLog:   filepath.Join(orch, "fossil.log"),
