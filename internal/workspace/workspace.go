@@ -165,9 +165,11 @@ func initLogic(ctx context.Context, cwd string) (Info, error) {
 // .orchestrator/ layout is migrated transparently when no legacy hub
 // is running, or surfaced as ErrLegacyLayout when one is.
 //
-// On the first call after computer restart, Join prints one stderr
-// line ("bones: starting hub for workspace ...") and continues once
-// the hub is up.
+// Auto-start is silent on stderr (#249): Claude Code's SessionStart
+// hook treats any stderr output as a "Failed with non-blocking status
+// code" UI error, so an informational "starting hub" line surfaces as
+// a phantom failure on every fresh session. Hub start details are
+// captured in .bones/hub.log instead.
 func Join(ctx context.Context, cwd string) (Info, error) {
 	return instrumented(ctx, "join", cwd, func(ctx context.Context) (Info, error) {
 		return joinLogic(ctx, cwd)
@@ -200,14 +202,14 @@ func joinLogic(ctx context.Context, cwd string) (Info, error) {
 
 	// Auto-start the hub if it isn't already healthy. hub.Start is
 	// idempotent: a no-op when both pids are alive and URLs respond.
-	// On the first verb after computer restart, this prints one stderr
-	// line so the user knows why the verb is briefly slower.
 	// hubStartFunc's nil return is contracted to mean both ports are
 	// already bound; if a future refactor changes that, this code must
 	// re-probe healthz.
+	//
+	// Silent on stderr (#249): SessionStart-hook context renders any
+	// stderr output as "Failed with non-blocking status code" in the
+	// Claude Code UI. Audit trail goes to .bones/hub.log via hub.Start.
 	if !HubIsHealthy(workspaceDir) {
-		fmt.Fprintf(os.Stderr,
-			"bones: starting hub for workspace %s\n", workspaceDir)
 		if err := hubStartFunc(ctx, workspaceDir, hub.WithDetach(true)); err != nil {
 			return Info{}, fmt.Errorf("auto-start hub: %w", err)
 		}
