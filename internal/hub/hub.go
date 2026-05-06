@@ -267,6 +267,10 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 		fmt.Fprintf(os.Stderr, "hub: registry write failed (non-fatal): %v\n", err)
 	}
 	hl.Infof("hub: ready")
+
+	stopWatcher := startLeaseWatcherHook(ctx, o, p, h.NATSURL(), hl)
+	defer stopWatcher()
+
 	<-ctx.Done()
 	hl.Infof("hub: stopping")
 	httpCancel()
@@ -283,6 +287,51 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 		hl.Infof("hub: stopped")
 	}
 	return drainErr
+}
+
+// startLeaseWatcherHook runs the optional lease-TTL watcher (ADR
+// 0050 / #265) if the caller provided a start function via
+// WithLeaseWatcher. Pulled out of runForeground so that function
+// stays under the funlen lint cap; the option indirection keeps
+// the hub package free of the swarm import (avoids the
+// hub→swarm→workspace→hub cycle).
+//
+// Returns a stop function the caller defers; a no-op when no
+// watcher hook was supplied or when the start callback returned
+// an error (which is logged as a warning to hub.log).
+func startLeaseWatcherHook(
+	ctx context.Context, o opts, p paths, natsURL string, hl *hubLogger,
+) func() {
+	if o.startLeaseWatcher == nil {
+		return func() {}
+	}
+	stop, err := o.startLeaseWatcher(ctx, LeaseWatcherInfo{
+		WorkspaceDir: p.root,
+		NATSURL:      natsURL,
+		Logger:       hubLogAdapter{l: hl},
+	})
+	if err != nil {
+		hl.Warnf("hub: lease watcher: %v (watcher disabled)", err)
+		return func() {}
+	}
+	return stop
+}
+
+// hubLogAdapter exposes a small subset of hubLogger as a public
+// shape consumable by the lease-watcher hook. Defined as a struct
+// (rather than an exported interface) so the watcher's function
+// signature stays a value-type contract — no behavior in this
+// package is overrideable from outside.
+type hubLogAdapter struct{ l *hubLogger }
+
+// Infof routes one INFO-level lifecycle event into hub.log.
+func (a hubLogAdapter) Infof(format string, args ...any) {
+	a.l.Infof(format, args...)
+}
+
+// Warnf routes one WARN-level lifecycle event into hub.log.
+func (a hubLogAdapter) Warnf(format string, args ...any) {
+	a.l.Warnf(format, args...)
 }
 
 // openAndSeedHub brings up the EdgeSync hub and seeds the repo if

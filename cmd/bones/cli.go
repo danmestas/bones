@@ -23,6 +23,13 @@ type CLI struct {
 	Env    bonescli.EnvCmd    `cmd:"" group:"daily" help:"Emit shell exports for current workspace"`
 	Rename bonescli.RenameCmd `cmd:"" group:"daily" help:"Set workspace display name"`
 
+	// Cleanup is broken out because gofmt aligns all daily-block
+	// field names to the longest in the block; "Cleanup" is one
+	// character longer than "Workspaces" and the alignment would
+	// otherwise push the daily block past lll's 100-column cap.
+	// Same separation pattern Workspaces uses directly below.
+	Cleanup bonescli.CleanupCmd `cmd:"" group:"daily" help:"Reap slot or legacy worktrees"`
+
 	// Workspaces (#174) — top-level "is bones up for project X?" view.
 	// Separated from the daily block above so gofmt does not realign
 	// the longer field name and overflow lll's 100-column limit.
