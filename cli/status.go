@@ -53,7 +53,6 @@ type statusReport struct {
 	// than failing the whole command.
 	HubAvailable bool
 	HubRepoPath  string
-	OpenLeaves   []string
 	TrunkHead    string // short hash, blank when no commits yet
 
 	Sessions []swarm.Session
@@ -222,7 +221,6 @@ func gatherStatus(ctx context.Context, info workspace.Info) (statusReport, error
 		rep.HubAvailable = true
 		rep.HubRepoPath = hubRepo
 		leaves, _ := openLeavesOnTrunk(fossilBin, hubRepo)
-		rep.OpenLeaves = leaves
 		if len(leaves) > 0 {
 			rep.TrunkHead = shortHash(leaves[0])
 		}
@@ -318,10 +316,13 @@ func splitTimeAndRest(line string) (time.Time, string, bool) {
 }
 
 func renderStatus(rep statusReport, w io.Writer) error {
-	header := fmt.Sprintf("bones · workspace: %s · trunk: %s · %d leaves open · as of %s\n\n",
+	// Per #259: don't surface "leaves open" — it's a NATS-substrate
+	// concept (a "leaf" here is a hub instance), and operators only
+	// need to see swarm-session counts (rendered in the body table
+	// via renderSlotTable). Header stays in operator vocabulary.
+	header := fmt.Sprintf("bones · workspace: %s · trunk: %s · as of %s\n\n",
 		filepath.Base(rep.WorkspaceDir),
 		hubField(rep.TrunkHead, rep.HubAvailable),
-		len(rep.OpenLeaves),
 		rep.GeneratedAt.Format("15:04:05"),
 	)
 	if _, err := io.WriteString(w, header); err != nil {

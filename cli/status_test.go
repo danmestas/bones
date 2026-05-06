@@ -81,7 +81,6 @@ func TestRenderStatus_WithSessionsAndTasks(t *testing.T) {
 		GeneratedAt:  now,
 		HubAvailable: true,
 		TrunkHead:    "002e31b7",
-		OpenLeaves:   []string{"002e31b7aa", "55a80c53ec"},
 		Sessions: []swarm.Session{
 			{
 				Slot:        "ui",
@@ -125,7 +124,7 @@ func TestRenderStatus_WithSessionsAndTasks(t *testing.T) {
 	out := buf.String()
 
 	for _, want := range []string{
-		"trunk: 002e31b7", "2 leaves open",
+		"trunk: 002e31b7",
 		"SLOT", "TASK", "STATE", "LAST",
 		"ui", "3a4b1c2d", "claimed", "2m ago",
 		"backend", "—", "19m ago",
