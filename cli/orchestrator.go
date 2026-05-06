@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -78,10 +77,6 @@ type scaffoldFootprint struct {
 	// CLAUDE.md when user-authored).
 	MarkerBlockTargets []string
 
-	// GitignoreEntriesAdded lists the entries newly appended to
-	// .gitignore. Empty when all entries already existed.
-	GitignoreEntriesAdded []string
-
 	// HooksAddedByEvent counts new hook entries added to settings.json,
 	// keyed by event name (e.g. "SessionStart": 2, "PreCompact": 1).
 	// Existing duplicates are not counted.
@@ -138,9 +133,6 @@ func scaffoldOrchestrator(root string) (scaffoldFootprint, error) {
 	}
 	if err := mergeSettings(filepath.Join(root, ".claude", "settings.json"), &fp); err != nil {
 		return fp, fmt.Errorf("settings: %w", err)
-	}
-	if err := ensureGitignoreEntries(root, &fp); err != nil {
-		return fp, fmt.Errorf("root gitignore: %w", err)
 	}
 	if err := scaffoldver.Write(root, version.Get()); err != nil {
 		return fp, fmt.Errorf("scaffold version stamp: %w", err)
@@ -713,61 +705,4 @@ func recordHook(fp *scaffoldFootprint, event string) {
 		fp.HooksAddedByEvent = map[string]int{}
 	}
 	fp.HooksAddedByEvent[event]++
-}
-
-// ensureGitignoreEntries appends Fossil + bones runtime entries to the
-// project's root .gitignore if they're not already present. Per ADR
-// 0023 the workspace opens a Fossil checkout at the project root, so
-// .fslckout and .fossil-settings/ must be gitignored. Per ADR 0041
-// runtime state lives under .bones/ — the legacy .orchestrator/ tree
-// is no longer scaffolded and is not in the entry list.
-//
-// Idempotent: skips entries already present (whole-line match).
-// Creates .gitignore if missing.
-func ensureGitignoreEntries(dir string, fp *scaffoldFootprint) error {
-	path := filepath.Join(dir, ".gitignore")
-	wantEntries := []string{
-		".fslckout",
-		".fossil-settings/",
-		".bones/",
-	}
-
-	existing := map[string]bool{}
-	if f, err := os.Open(path); err == nil {
-		sc := bufio.NewScanner(f)
-		for sc.Scan() {
-			existing[strings.TrimSpace(sc.Text())] = true
-		}
-		_ = f.Close()
-	}
-
-	var missing []string
-	for _, e := range wantEntries {
-		if !existing[e] {
-			missing = append(missing, e)
-		}
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open .gitignore: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	header := "\n# Bones runtime + Fossil checkout-at-root (ADRs 0023, 0041)\n"
-	if _, err := f.WriteString(header); err != nil {
-		return fmt.Errorf("write .gitignore: %w", err)
-	}
-	for _, e := range missing {
-		if _, err := f.WriteString(e + "\n"); err != nil {
-			return fmt.Errorf("write .gitignore: %w", err)
-		}
-	}
-	if fp != nil {
-		fp.GitignoreEntriesAdded = append(fp.GitignoreEntriesAdded, missing...)
-	}
-	return nil
 }
