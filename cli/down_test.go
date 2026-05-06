@@ -124,8 +124,9 @@ func TestRemoveBonesHooks_NoHooksKey(t *testing.T) {
 
 // TestRemoveBonesHooks_OnlyBonesHooks: when settings.json has only
 // the bones-installed hooks and no others, the entire hooks key is
-// removed AND the file itself is deleted (#235). A settings.json that
-// would be left as `{}` post-strip is bones-owned end to end.
+// removed and the file is preserved as `{}` (#256 — operator owns
+// file existence; bones only owns specific keys). Supersedes #235's
+// prior delete-on-empty behavior.
 func TestRemoveBonesHooks_OnlyBonesHooks(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
@@ -159,16 +160,17 @@ func TestRemoveBonesHooks_OnlyBonesHooks(t *testing.T) {
 	if err := removeBonesHooks(path); err != nil {
 		t.Fatalf("removeBonesHooks: %v", err)
 	}
-	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("settings.json with only bones hooks should be deleted; "+
-			"stat err=%v", err)
+	got := readJSON(t, path)
+	if len(got) != 0 {
+		t.Errorf("settings.json should be preserved as `{}` after stripping "+
+			"bones-only hooks (#256); got %+v", got)
 	}
 }
 
 // TestRemoveBonesHooks_LegacyStopHook: bones down on a workspace
 // installed before the SessionEnd migration must still clean up the
-// shim that lives under the old "Stop" event. Per #235 the resulting
-// empty settings.json is also removed.
+// shim that lives under the old "Stop" event. Per #256 the resulting
+// empty settings.json is preserved as `{}` rather than removed.
 func TestRemoveBonesHooks_LegacyStopHook(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
@@ -191,9 +193,10 @@ func TestRemoveBonesHooks_LegacyStopHook(t *testing.T) {
 	if err := removeBonesHooks(path); err != nil {
 		t.Fatalf("removeBonesHooks: %v", err)
 	}
-	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("legacy-Stop-only settings.json should be deleted; "+
-			"stat err=%v", err)
+	got := readJSON(t, path)
+	if len(got) != 0 {
+		t.Errorf("legacy-Stop-only settings.json should be preserved as `{}` "+
+			"after stripping (#256); got %+v", got)
 	}
 }
 
@@ -202,7 +205,7 @@ func TestRemoveBonesHooks_LegacyStopHook(t *testing.T) {
 // `bones hub start`, `bones tasks prime --json` under SessionStart,
 // and `bones tasks prime --json` under PreCompact. User-authored
 // hooks at the same events are preserved (covered by a sibling test).
-// Per #235 the resulting empty settings.json is also removed.
+// Per #256 the resulting empty settings.json is preserved as `{}`.
 func TestRemoveBonesHooks_StripsAllBonesOwned(t *testing.T) {
 	dir := t.TempDir()
 	settings := filepath.Join(dir, "settings.json")
@@ -233,8 +236,10 @@ func TestRemoveBonesHooks_StripsAllBonesOwned(t *testing.T) {
 	if err := removeBonesHooks(settings); err != nil {
 		t.Fatalf("removeBonesHooks: %v", err)
 	}
-	if _, err := os.Stat(settings); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("bones-only settings.json should be deleted; stat err=%v", err)
+	got := readJSON(t, settings)
+	if len(got) != 0 {
+		t.Errorf("bones-only settings.json should be preserved as `{}` "+
+			"after stripping (#256); got %+v", got)
 	}
 }
 
@@ -1014,13 +1019,12 @@ func TestRemoveBonesSkills_BundleVersionSkew(t *testing.T) {
 	}
 }
 
-// TestRemoveBonesHooks_DeletesEmptyFile pins issue #235: when stripping
-// bones-owned hooks leaves settings.json with no remaining top-level
-// keys, the file is deleted entirely. Bones up only writes a "hooks"
-// object on a fresh tree, so an empty post-strip object means the file
-// is bones-owned end to end — leaving `{}` behind leaks a settings.json
-// the user never authored.
-func TestRemoveBonesHooks_DeletesEmptyFile(t *testing.T) {
+// TestRemoveBonesHooks_PreservesEmptyAfterStrip pins issue #256:
+// when stripping bones-owned hooks leaves settings.json with no
+// remaining top-level keys, the file is rewritten as `{}\n` rather
+// than removed. Operator owns file existence; bones only owns
+// specific keys. Supersedes #235's prior delete-on-empty behavior.
+func TestRemoveBonesHooks_PreservesEmptyAfterStrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
 	writeJSON(t, path, map[string]any{
@@ -1042,9 +1046,10 @@ func TestRemoveBonesHooks_DeletesEmptyFile(t *testing.T) {
 	if err := removeBonesHooks(path); err != nil {
 		t.Fatalf("removeBonesHooks: %v", err)
 	}
-	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("settings.json should be deleted when only bones hooks "+
-			"remained; stat err=%v", err)
+	got := readJSON(t, path)
+	if len(got) != 0 {
+		t.Errorf("settings.json should be preserved as `{}` after stripping "+
+			"all bones-owned hooks (#256); got %+v", got)
 	}
 }
 
@@ -1094,10 +1099,11 @@ func TestRemoveBonesHooks_PreservesUserKeys(t *testing.T) {
 	}
 }
 
-// TestRemoveBonesHooks_DeletesLiteralEmptyJSON pins the #235 edge case:
-// a settings.json that is already `{}` (no keys) is bones-owned by
-// definition and gets removed.
-func TestRemoveBonesHooks_DeletesLiteralEmptyJSON(t *testing.T) {
+// TestRemoveBonesHooks_PreservesLiteralEmptyJSON pins the #256 edge
+// case: a settings.json that is already `{}` (no keys) is preserved
+// untouched. Bones doesn't own file existence, only specific keys
+// inside it. Supersedes #235's prior remove-empty-{} behavior.
+func TestRemoveBonesHooks_PreservesLiteralEmptyJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
 	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
@@ -1106,17 +1112,21 @@ func TestRemoveBonesHooks_DeletesLiteralEmptyJSON(t *testing.T) {
 	if err := removeBonesHooks(path); err != nil {
 		t.Fatalf("removeBonesHooks: %v", err)
 	}
-	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("empty {} settings.json should be deleted; stat err=%v", err)
+	got := readJSON(t, path)
+	if len(got) != 0 {
+		t.Errorf("literal `{}` settings.json should be preserved (#256); "+
+			"got %+v", got)
 	}
 }
 
-// TestRunDown_RemovesEmptyClaudeDir pins issue #235's symmetry
-// invariant end-to-end: on a workspace where bones up created
-// .claude/ (no pre-existing user content), bones down removes it
-// completely. settings.json gets stripped → file empty → deleted →
-// .claude/ now empty → directory removed.
-func TestRunDown_RemovesEmptyClaudeDir(t *testing.T) {
+// TestRunDown_PreservesClaudeWithStubSettings pins issue #256
+// end-to-end: on a workspace where bones up wrote settings.json
+// with only its own hooks, bones down strips the hooks but preserves
+// settings.json as `{}` rather than removing it. Because settings.json
+// stays, .claude/ stays too (it's no longer empty). Operator owns
+// file/dir existence; bones only owns specific keys. Supersedes
+// #235's prior delete-empty-claude-dir cascade.
+func TestRunDown_PreservesClaudeWithStubSettings(t *testing.T) {
 	dir := t.TempDir()
 	mkdir(t, filepath.Join(dir, ".bones"))
 	mkdir(t, filepath.Join(dir, ".claude"))
@@ -1140,12 +1150,16 @@ func TestRunDown_RemovesEmptyClaudeDir(t *testing.T) {
 	}
 
 	settingsPath := filepath.Join(dir, ".claude", "settings.json")
-	if _, err := os.Stat(settingsPath); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("settings.json should be removed: %v", err)
+	if _, err := os.Stat(settingsPath); err != nil {
+		t.Errorf("settings.json should be preserved as `{}` (#256): %v", err)
+	}
+	got := readJSON(t, settingsPath)
+	if len(got) != 0 {
+		t.Errorf("settings.json should be empty object after strip; got %+v", got)
 	}
 	claudeDir := filepath.Join(dir, ".claude")
-	if _, err := os.Stat(claudeDir); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf(".claude/ should be removed (was empty): %v", err)
+	if _, err := os.Stat(claudeDir); err != nil {
+		t.Errorf(".claude/ should be preserved (still contains settings.json): %v", err)
 	}
 }
 

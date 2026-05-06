@@ -545,14 +545,14 @@ func planRemoveFossilMarkers(root string) []downAction {
 // Other hooks are preserved verbatim. Empty hook groups and the
 // "hooks" top-level key are pruned when removal leaves them empty.
 //
-// Symmetric with `bones up` (#235): when stripping the bones-owned
-// hooks leaves the file with no remaining top-level keys, the file
-// is deleted entirely. Bones up only writes a "hooks" object, so an
-// empty post-strip object means the file is bones-owned end to end —
-// keeping a stub `{}` behind would leak a `.claude/settings.json` the
-// user never authored. User-authored keys (theme, env, permissions,
-// etc.) at the top level keep the file intact with those keys
-// preserved byte-for-byte.
+// Per #256: bones owns specific hook entries inside settings.json,
+// not the file itself. When stripping leaves the JSON object as `{}`,
+// the file is rewritten as `{}\n` rather than unlinked — operator
+// owns file existence, bones only owns the keys it installed. This
+// supersedes the prior #235 symmetry-with-up behavior, which deleted
+// the file when it became bones-only-empty. User-authored keys (theme,
+// env, permissions, etc.) at the top level are preserved byte-for-byte
+// alongside the bones-owned hook stripping.
 func removeBonesHooks(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -562,11 +562,10 @@ func removeBonesHooks(path string) error {
 		return err
 	}
 	if len(data) == 0 {
-		// An empty file was not bones-authored (bones up always writes
-		// at least `{"hooks": {...}}`). Remove it for symmetry: an empty
-		// settings.json carries no information and survives only as
-		// noise. Issue #235.
-		return os.Remove(path)
+		// Empty file isn't bones-authored (bones up always writes at
+		// least `{"hooks": {...}}`). Leave it alone — operator owns
+		// file existence (#256, supersedes #235's empty-file removal).
+		return nil
 	}
 	var rootObj map[string]any
 	if err := json.Unmarshal(data, &rootObj); err != nil {
@@ -589,14 +588,12 @@ func removeBonesHooks(path string) error {
 			rootObj["hooks"] = hooks
 		}
 	}
-	// Issue #235: if no top-level keys remain, the file held only
-	// bones-owned hooks. Delete it so post-down state matches pre-up.
-	// Any user-authored top-level key (theme, model, env, permissions,
-	// includeCoAuthoredBy, …) keeps the file alive and the keys are
-	// preserved verbatim.
-	if len(rootObj) == 0 {
-		return os.Remove(path)
-	}
+	// Per #256: bones owns specific keys, not the file. If no top-level
+	// keys remain after stripping, write `{}\n` back rather than
+	// unlinking — operator owns file existence. Supersedes #235's
+	// empty-object deletion. User-authored top-level keys (theme,
+	// model, env, permissions, includeCoAuthoredBy, …) are preserved
+	// verbatim either way.
 	out, err := json.MarshalIndent(rootObj, "", "  ")
 	if err != nil {
 		return err
