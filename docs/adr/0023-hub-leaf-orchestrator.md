@@ -94,6 +94,10 @@ caller-driven.
 3. One `*Coord` per `*Leaf`, matching the per-slot `coord.Open` topology.
 4. Hub mesh is THE NATS bus — no separate external broker.
 5. Slot disjointness — plan validator enforces it; coord trusts it.
+   Amended by ADR 0050: applies to plan-anchored slots only. Synthetic
+   agent slots (issue #266) target overlapping files by design and rely
+   on fossil auto-fork (ADR 0010 §4) plus chat-on-conflict (§5) as the
+   recovery path.
 
 ## Tradeoffs
 
