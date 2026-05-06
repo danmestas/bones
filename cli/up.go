@@ -129,12 +129,6 @@ func emitFootprintSummary(logger *upLogger, fp scaffoldFootprint) {
 		emitted = true
 		logger.Infof("up:   appended bones marker block to %s", path)
 	}
-	if len(fp.GitignoreEntriesAdded) > 0 {
-		emitted = true
-		logger.Infof("up:   added %d entries to .gitignore (%s)",
-			len(fp.GitignoreEntriesAdded),
-			strings.Join(fp.GitignoreEntriesAdded, ", "))
-	}
 	if total := fp.hooksAdded(); total > 0 {
 		emitted = true
 		logger.Infof("up:   merged %d hooks into .claude/settings.json (%s)",
