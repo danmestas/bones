@@ -339,7 +339,7 @@ func planStopHub(root string, c *DownCmd) []downAction {
 	// (no-op when hub isn't running), so unconditional inclusion is
 	// both correct and self-documenting in the dry-run output.
 	return []downAction{{
-		description: "stop hub (.bones/pids/{fossil,nats}.pid)",
+		description: "stop hub (.bones/hub.pid)",
 		do: func() error {
 			// Best-effort: an already-stopped hub must not fail down.
 			// WithForce so the active-slot guard (#157) doesn't block

@@ -56,7 +56,7 @@ func TestStart_FailsFastOnEmptyGitRepo(t *testing.T) {
 			"the spawn-and-wait path (#138 item 9)")
 	}
 
-	// Side-effect assertion: no hub.fossil and no .bones/pids/* should
+	// Side-effect assertion: no hub.fossil and no .bones/hub.pid should
 	// have been created. The precondition fires before any of those
 	// would be touched.
 	if _, err := exec.LookPath("git"); err == nil {

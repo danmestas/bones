@@ -23,7 +23,7 @@ func TestStop_EscalatesToSIGKILLOnTermResistant(t *testing.T) {
 		t.Skip("posix-only: Windows lacks SIGTERM/SIGKILL semantics")
 	}
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".bones", "pids"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, ".bones"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	p, err := newPaths(root)
@@ -93,7 +93,7 @@ func TestStop_EscalatesToSIGKILLOnTermResistant(t *testing.T) {
 		close(done)
 	}()
 
-	if err := writePid(p.fossilPid, pid); err != nil {
+	if err := writePid(p.hubPid, pid); err != nil {
 		t.Fatalf("writePid: %v", err)
 	}
 

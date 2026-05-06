@@ -232,20 +232,16 @@ func joinLogic(ctx context.Context, cwd string) (Info, error) {
 	}, nil
 }
 
-// HubIsHealthy returns true when both the fossil and nats pid files
-// resolve to live processes and a /healthz GET succeeds within 500ms.
-// False on any failure — caller responds by calling hubStartFunc, or
-// (for read-only verbs) by rendering degraded-mode output.
+// HubIsHealthy returns true when hub.pid resolves to a live process
+// and a /healthz GET succeeds within 500ms. False on any failure —
+// caller responds by calling hubStartFunc, or (for read-only verbs)
+// by rendering degraded-mode output.
 //
 // Exported so read-only verbs (e.g. `bones status`, #207) can probe
 // hub liveness without going through Join, whose auto-start branch
 // would contradict the lazy-hub promise printed by `bones up`.
 func HubIsHealthy(workspaceDir string) bool {
-	pidsDir := filepath.Join(workspaceDir, markerDirName, "pids")
-	if !pidFileLive(filepath.Join(pidsDir, "fossil.pid")) {
-		return false
-	}
-	if !pidFileLive(filepath.Join(pidsDir, "nats.pid")) {
+	if !pidFileLive(filepath.Join(workspaceDir, markerDirName, "hub.pid")) {
 		return false
 	}
 	url := hub.FossilURL(workspaceDir)

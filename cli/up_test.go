@@ -37,7 +37,7 @@ func TestPrintHubStatus_FreshScaffold(t *testing.T) {
 func TestPrintHubStatus_HubRunning(t *testing.T) {
 	root := t.TempDir()
 	bones := filepath.Join(root, ".bones")
-	if err := os.MkdirAll(filepath.Join(bones, "pids"), 0o755); err != nil {
+	if err := os.MkdirAll(bones, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(bones, "hub-fossil-url"),
@@ -49,11 +49,9 @@ func TestPrintHubStatus_HubRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 	live := strconv.Itoa(os.Getpid())
-	for _, name := range []string{"fossil.pid", "nats.pid"} {
-		if err := os.WriteFile(filepath.Join(bones, "pids", name),
-			[]byte(live+"\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(filepath.Join(bones, "hub.pid"),
+		[]byte(live+"\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	var buf bytes.Buffer
@@ -81,7 +79,7 @@ func TestPrintHubStatus_HubRunning(t *testing.T) {
 func TestPrintHubStatus_StaleURLs(t *testing.T) {
 	root := t.TempDir()
 	bones := filepath.Join(root, ".bones")
-	if err := os.MkdirAll(filepath.Join(bones, "pids"), 0o755); err != nil {
+	if err := os.MkdirAll(bones, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(bones, "hub-fossil-url"),
@@ -93,11 +91,9 @@ func TestPrintHubStatus_StaleURLs(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 999999 is a high pid that will not be in use on a normal host.
-	for _, name := range []string{"fossil.pid", "nats.pid"} {
-		if err := os.WriteFile(filepath.Join(bones, "pids", name),
-			[]byte("999999\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(filepath.Join(bones, "hub.pid"),
+		[]byte("999999\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	var buf bytes.Buffer

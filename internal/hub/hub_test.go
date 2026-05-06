@@ -70,15 +70,15 @@ func TestStartStopRoundTrip(t *testing.T) {
 		t.Fatalf("nats never bound: %v", err)
 	}
 
-	// Pid files exist and reference live processes. There is a brief
+	// hub.pid exists and references a live process. There is a brief
 	// window between port-bind and pid-file write inside the
 	// foreground Start, so poll up to readyTimeout before failing.
-	for _, name := range []string{"fossil.pid", "nats.pid"} {
-		pidFile := filepath.Join(root, markerDirName, "pids", name)
+	{
+		pidFile := filepath.Join(root, markerDirName, "hub.pid")
 		if !waitForPidLive(pidFile, 5*time.Second) {
 			cancel()
 			wg.Wait()
-			t.Fatalf("%s: pid not live within timeout", name)
+			t.Fatalf("hub.pid: pid not live within timeout")
 		}
 	}
 
@@ -100,12 +100,12 @@ func TestStartStopRoundTrip(t *testing.T) {
 		wg.Wait()
 		t.Fatalf("Stop: %v", err)
 	}
-	for _, name := range []string{"fossil.pid", "nats.pid"} {
-		pidFile := filepath.Join(root, markerDirName, "pids", name)
+	{
+		pidFile := filepath.Join(root, markerDirName, "hub.pid")
 		if _, err := os.Stat(pidFile); !os.IsNotExist(err) {
 			cancel()
 			wg.Wait()
-			t.Fatalf("%s: pid file still present after Stop", name)
+			t.Fatalf("hub.pid: pid file still present after Stop")
 		}
 	}
 

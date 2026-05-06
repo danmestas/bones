@@ -296,10 +296,10 @@ func TestResolveStatusRoot_DoesNotAutoStartHub(t *testing.T) {
 			t.Errorf("stat %s: unexpected error: %v", path, err)
 		}
 	}
-	// pids dir is hub.Start's first side effect; presence indicates
+	// hub.pid is hub.Start's first side effect; presence indicates
 	// the auto-start branch ran.
-	if _, err := os.Stat(filepath.Join(root, ".bones", "pids")); err == nil {
-		t.Errorf("resolveStatusRoot created .bones/pids/; hub auto-start ran (#207)")
+	if _, err := os.Stat(filepath.Join(root, ".bones", "hub.pid")); err == nil {
+		t.Errorf("resolveStatusRoot created .bones/hub.pid; hub auto-start ran (#207)")
 	}
 }
 
@@ -358,8 +358,8 @@ func TestStatusRun_NoHub_DoesNotStartOne(t *testing.T) {
 			t.Errorf("status created %s; #207 says it must not write hub state", path)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(root, ".bones", "pids")); err == nil {
-		t.Errorf("status created .bones/pids/; #207 says it must not write hub state")
+	if _, err := os.Stat(filepath.Join(root, ".bones", "hub.pid")); err == nil {
+		t.Errorf("status created .bones/hub.pid; #207 says it must not write hub state")
 	}
 }
 

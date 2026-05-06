@@ -547,7 +547,7 @@ func short(h string) string {
 // Per #228, this resolves the workspace via workspace.FindRoot
 // (read-only) and probes hub liveness with workspace.HubIsHealthy
 // rather than going through workspace.Join. Join lazy-starts the hub
-// (writes .bones/pids/, hub-fossil-url, hub-nats-url) on every doctor
+// (writes .bones/hub.pid, hub-fossil-url, hub-nats-url) on every doctor
 // invocation, which violates the read-only contract of doctor and
 // contradicts the lazy-hub promise printed by `bones up`. When no
 // healthy hub is available, this short-circuits with a single INFO

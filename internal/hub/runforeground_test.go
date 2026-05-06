@@ -69,15 +69,14 @@ func TestWaitOrTimeout_ZeroFallsBackToDefault(t *testing.T) {
 // detach pid-race regression introduced by the libfossil-exit migration.
 // edgehub.NewHub binds the HTTP listener at construction (the kernel
 // SYN-ACKs on the bound socket immediately), so the detach parent's
-// waitForTCP would race ahead of the child's writePid if pid writes
-// happened post-NewHub. Verifies fossil.pid + nats.pid both name the
-// foreground process by the time openAndSeedHub is invoked. Runs a
-// synthetic seed-failure to keep the test fast: we only need to assert
-// pid files are present on entry into the seed step, not that the full
-// hub bring-up succeeds.
+// waitForTCP would race ahead of the child's writePid if the pid write
+// happened post-NewHub. Verifies hub.pid names the foreground process
+// by the time openAndSeedHub is invoked. Runs a synthetic seed-failure
+// to keep the test fast: we only need to assert hub.pid is present on
+// entry into the seed step, not that the full hub bring-up succeeds.
 func TestRunForeground_PidsWrittenBeforeHubOpen(t *testing.T) {
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".bones", "pids"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, ".bones"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	p, err := newPaths(root)
@@ -87,25 +86,20 @@ func TestRunForeground_PidsWrittenBeforeHubOpen(t *testing.T) {
 
 	orig := seedHubRepoFunc
 	defer func() { seedHubRepoFunc = orig }()
-	var fossilPidAtSeed, natsPidAtSeed int
+	var hubPidAtSeed int
 	seedHubRepoFunc = func(_ context.Context, _ *edgehub.Hub, p paths) error {
-		// Read pid files at the moment seedHubRepo runs — well after
-		// runForeground's writePid calls completed but before any of
-		// the post-NewHub return paths could clean them up.
-		fossilPidAtSeed, _ = readPid(p.fossilPid)
-		natsPidAtSeed, _ = readPid(p.natsPid)
+		// Read hub.pid at the moment seedHubRepo runs — well after
+		// runForeground's writePid call completed but before any of
+		// the post-NewHub return paths could clean it up.
+		hubPidAtSeed, _ = readPid(p.hubPid)
 		return errors.New("synthetic seed failure to short-circuit")
 	}
 
 	_ = runForeground(context.Background(), p, opts{})
 
-	if fossilPidAtSeed != os.Getpid() {
-		t.Errorf("fossil.pid at seed time: got %d, want %d (foreground process)",
-			fossilPidAtSeed, os.Getpid())
-	}
-	if natsPidAtSeed != os.Getpid() {
-		t.Errorf("nats.pid at seed time: got %d, want %d (foreground process)",
-			natsPidAtSeed, os.Getpid())
+	if hubPidAtSeed != os.Getpid() {
+		t.Errorf("hub.pid at seed time: got %d, want %d (foreground process)",
+			hubPidAtSeed, os.Getpid())
 	}
 }
 
@@ -118,7 +112,7 @@ func TestRunForeground_PidsWrittenBeforeHubOpen(t *testing.T) {
 // or freshly-recreated parent file. See issue #138.
 func TestRunForeground_SeedFailureCleansSidecars(t *testing.T) {
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".bones", "pids"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, ".bones"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	p, err := newPaths(root)
@@ -159,13 +153,13 @@ func TestRunForeground_SeedFailureCleansSidecars(t *testing.T) {
 // TestRunForeground_FreshStartCleansStaleSidecars asserts that stale
 // SQLite sidecars from a prior crashed run don't poison the next
 // startup with SQLITE_IOERR_SHORT_READ (522). runForeground's
-// pre-NewHub cleanup (removeRepoAndSidecars when fossil.pid is dead)
+// pre-NewHub cleanup (removeRepoAndSidecars when hub.pid is dead)
 // removes them before edgehub.NewHub opens the repo, so NewHub
 // succeeds and the synthetic seed-failure path runs cleanly.
 // See issue #138.
 func TestRunForeground_FreshStartCleansStaleSidecars(t *testing.T) {
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".bones", "pids"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, ".bones"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	p, err := newPaths(root)
@@ -173,7 +167,7 @@ func TestRunForeground_FreshStartCleansStaleSidecars(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Plant stale sidecars from a prior failed run. No fossil.pid → the
+	// Plant stale sidecars from a prior failed run. No hub.pid → the
 	// fresh-start branch should fire and wipe them before NewHub runs.
 	for _, suffix := range []string{"-shm", "-wal"} {
 		if err := os.WriteFile(p.hubRepo+suffix, []byte("stale"), 0o644); err != nil {

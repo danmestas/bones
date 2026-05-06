@@ -31,10 +31,10 @@ func (c *TasksStatusCmd) Run(g *repocli.Globals) error {
 	}
 	defer stop()
 
-	// Hub liveness: read the fossil-server PID. workspace.Join already
+	// Hub liveness: read the hub PID. workspace.Join already
 	// guarantees the hub is up by this point (auto-start fired if not),
 	// so a read failure here is unexpected and worth surfacing.
-	pidPath := filepath.Join(info.WorkspaceDir, ".bones", "pids", "fossil.pid")
+	pidPath := filepath.Join(info.WorkspaceDir, ".bones", "hub.pid")
 	pidStr, err := os.ReadFile(pidPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr,

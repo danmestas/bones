@@ -243,15 +243,13 @@ func TestJoin_NoOpWhenHubHealthy(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 	bones := filepath.Join(dir, markerDirName)
-	if err := os.MkdirAll(filepath.Join(bones, "pids"), 0o755); err != nil {
-		t.Fatalf("mkdir pids: %v", err)
+	if err := os.MkdirAll(bones, 0o755); err != nil {
+		t.Fatalf("mkdir bones: %v", err)
 	}
 	livePID := strconv.Itoa(os.Getpid())
-	for _, name := range []string{"fossil.pid", "nats.pid"} {
-		if err := os.WriteFile(filepath.Join(bones, "pids", name),
-			[]byte(livePID), 0o644); err != nil {
-			t.Fatalf("write %s: %v", name, err)
-		}
+	if err := os.WriteFile(filepath.Join(bones, "hub.pid"),
+		[]byte(livePID), 0o644); err != nil {
+		t.Fatalf("write hub.pid: %v", err)
 	}
 	// Stand up a tiny healthz server so HubIsHealthy's GET succeeds.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -101,7 +101,7 @@ func TestStart_RejectsWhenWorkspaceLockHeld(t *testing.T) {
 			t.Errorf("rejected start wrote %s; lock guard ran too late", path)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(root, ".bones", "pids", "fossil.pid")); err == nil {
-		t.Errorf("rejected start wrote fossil.pid; lock guard ran too late")
+	if _, err := os.Stat(filepath.Join(root, ".bones", "hub.pid")); err == nil {
+		t.Errorf("rejected start wrote hub.pid; lock guard ran too late")
 	}
 }

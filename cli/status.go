@@ -111,7 +111,7 @@ func (c *StatusCmd) Run(g *repocli.Globals) error {
 	// the existing degraded-mode branch (HubAvailable=false) without
 	// touching workspace.Join — Join would lazy-start the hub via
 	// hubStartFunc, contradicting the lazy-hub promise printed by
-	// `bones up` and silently writing .bones/pids/ + URL files on
+	// `bones up` and silently writing .bones/hub.pid + URL files on
 	// every `bones status` invocation.
 	if !workspace.HubIsHealthy(root) {
 		return renderStatus(degradedStatusReport(root), os.Stdout)
