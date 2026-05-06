@@ -42,8 +42,7 @@ Triggered when the user asks to remove bones from a project ("uninstall bones", 
 2. Remove `.bones/` workspace marker (legacy `.orchestrator/` if present from pre-ADR-0041 installs) and the scaffolded `.claude/skills/{orchestrator,subagent,uninstall-bones}/`.
 3. Edit `.claude/settings.json` to remove the `bones hub start` and `bones tasks prime` hooks (legacy installs: `hub-bootstrap.sh` / `hub-shutdown.sh`). Preserves unrelated hooks.
 4. Remove the Fossil checkout at root (`.fslckout`, `.fossil-settings/`) per ADR 0023.
-5. Optionally remove the `.gitignore` entries bones added.
-6. Optionally `brew uninstall danmestas/tap/bones` (or `rm $(command -v bones)`).
+5. Optionally `brew uninstall danmestas/tap/bones` (or `rm $(command -v bones)`).
 
 Working-tree files are untouched throughout — only metadata managed by bones is removed. Task data already published to NATS or Fossil persists wherever those substrates store it.
 

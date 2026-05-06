@@ -20,7 +20,7 @@ import (
 
 // runUp performs workspace bootstrap from a fresh clone:
 //  1. workspace init (idempotent — joins if already initialized)
-//  2. orchestrator scaffold (skills, hooks, gitignore, scaffold version)
+//  2. orchestrator scaffold (skills, hooks, scaffold version)
 //  3. git pre-commit hook install
 //  4. agent guidance write
 //  5. Fossil drift check (warning only)
@@ -78,7 +78,7 @@ func runUp(cwd string, verbose bool) (err error) {
 		return err
 	}
 	if verbose {
-		logger.Infof("up: orchestrator skills, hooks, and gitignore installed")
+		logger.Infof("up: orchestrator skills and hooks installed")
 	}
 
 	if hookErr := installGitHook(wsDir, verbose, logger); hookErr != nil {

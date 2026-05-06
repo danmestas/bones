@@ -44,9 +44,9 @@ func TestCLI_UpHelpADR0041(t *testing.T) {
 }
 
 // TestCLI_UpDefaultSummary pins #173: default-mode `bones up` lists
-// per-action file footprint changes (wrote files, gitignore entries,
-// merged hooks) instead of just "ready at <wsDir>". Operators auditing
-// what bones did to their tree should not need `git status`.
+// per-action file footprint changes (wrote files, merged hooks) instead
+// of just "ready at <wsDir>". Operators auditing what bones did to
+// their tree should not need `git status`.
 func TestCLI_UpDefaultSummary(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skip in -short: integration test")
