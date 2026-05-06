@@ -203,6 +203,14 @@ func Start(ctx context.Context, root string, options ...Option) (err error) {
 // shells can detect liveness, and Stop in this same process is
 // equivalent to canceling ctx.
 func runForeground(ctx context.Context, p paths, o opts) error {
+	// Open the lifecycle log first so `hub: starting` is the first
+	// thing we write — diagnosing a crashed-hub workspace begins with
+	// hub.log, and every event after this point lands here too (#247).
+	hl := openHubLog(p)
+	defer hl.Close()
+	hl.Infof("hub: starting (pid=%d, repo-port=%d, coord-port=%d)",
+		os.Getpid(), o.repoPort, o.coordPort)
+
 	// Fresh-start detection (ADR 0023): if hub.pid is not alive,
 	// wipe stale checkout state so each session starts from a clean
 	// substrate. Working-tree files are untouched. SQLite -shm and -wal
@@ -212,6 +220,7 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 		removeRepoAndSidecars(p)
 	}
 	if err := os.MkdirAll(p.coordStore, 0o755); err != nil {
+		hl.Errorf("hub: failed to create coord store dir: %v", err)
 		return fmt.Errorf("hub: coord store dir: %w", err)
 	}
 	// Write hub.pid BEFORE NewHub binds the HTTP listener. edgehub.NewHub
@@ -226,6 +235,7 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 	// foreground process either way (os.Getpid() is stable across the
 	// NewHub call), so writing it first is correct.
 	if err := writePid(p.hubPid, os.Getpid()); err != nil {
+		hl.Errorf("hub: write hub.pid failed: %v", err)
 		return fmt.Errorf("hub: write hub.pid: %w", err)
 	}
 	freshSeed := false
@@ -235,6 +245,7 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 	h, err := openAndSeedHub(ctx, p, o, freshSeed)
 	if err != nil {
 		_ = os.Remove(p.hubPid)
+		hl.Errorf("hub: bring-up failed: %v", err)
 		return err
 	}
 	httpDone := make(chan struct{})
@@ -252,9 +263,12 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 		HubPID:    os.Getpid(),
 		StartedAt: time.Now().UTC(),
 	}); err != nil {
+		hl.Warnf("hub: registry write failed (non-fatal): %v", err)
 		fmt.Fprintf(os.Stderr, "hub: registry write failed (non-fatal): %v\n", err)
 	}
+	hl.Infof("hub: ready")
 	<-ctx.Done()
+	hl.Infof("hub: stopping")
 	httpCancel()
 	drainErr := drainHub(h, httpDone, o.drainTimeout)
 	_ = os.Remove(p.hubPid)
@@ -263,6 +277,11 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 	// `bones status --all` to filter out via pidAlive. Dead-pid
 	// pruning still handles the unclean-exit case.
 	_ = registry.RemoveByPID(p.root, os.Getpid())
+	if drainErr != nil {
+		hl.Errorf("hub: stopped with drain error: %v", drainErr)
+	} else {
+		hl.Infof("hub: stopped")
+	}
 	return drainErr
 }
 
@@ -397,13 +416,17 @@ func spawnDetachedChild(p paths, o opts) error {
 	// hub.log only.
 	fossilAddr := fmt.Sprintf("127.0.0.1:%d", o.repoPort)
 	natsAddr := fmt.Sprintf("127.0.0.1:%d", o.coordPort)
+	parentLog := openHubLog(p)
+	defer parentLog.Close()
 	if err := waitForTCP(fossilAddr, readyTimeout); err != nil {
 		_ = cmd.Process.Kill()
+		parentLog.Errorf("hub: child exited before repo port ready: %v", err)
 		return fmt.Errorf("hub: fossil child not ready: %w%s",
 			err, hubLogTail(p))
 	}
 	if err := waitForTCP(natsAddr, readyTimeout); err != nil {
 		_ = cmd.Process.Kill()
+		parentLog.Errorf("hub: child exited before coord port ready: %v", err)
 		return fmt.Errorf("hub: nats child not ready: %w%s",
 			err, hubLogTail(p))
 	}
@@ -423,6 +446,8 @@ func spawnDetachedChild(p paths, o opts) error {
 	// means port collision or a crashed child that never wrote the file.
 	if recorded, ok := readPid(p.hubPid); !ok || recorded != cmd.Process.Pid {
 		_ = cmd.Process.Kill()
+		parentLog.Errorf("hub: repo port collision (recorded pid=%d, child pid=%d)",
+			recorded, cmd.Process.Pid)
 		return fmt.Errorf("hub: fossil port %s responded but %s does not "+
 			"name our child (pid %d, recorded %d) — likely port "+
 			"collision; another service is bound to the port%s",
