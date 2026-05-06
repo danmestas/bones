@@ -12,35 +12,53 @@ import (
 	"time"
 
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
+	"github.com/nats-io/nats.go"
 
 	"github.com/danmestas/bones/internal/hub"
+	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/telemetry"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
 // ApplyCmd materializes fossil-resident work into a target directory.
-// Two modes share the same verb (issue #234, ADR 0037):
+// Three modes share the same verb (issue #234, ADR 0037, ADR 0050):
 //
 //  1. Default (trunk fan-in): with no flags, reads the hub fossil's
 //     trunk tip and stages the changes into the project-root git
 //     working tree for the user to review and commit. See
 //     docs/superpowers/specs/2026-04-30-bones-apply-design.md.
-//  2. Slot mode (--slot=<name> --to=<dir>): copies the slot's most
-//     recent committed-artifacts tree from `.bones/recovery/<slot>-*`
-//     into <dir>. The timestamped path scheme is hidden — the
-//     operator passes only the slot name. (#234)
+//  2. Synthetic slot mode (--slot=agent-<id>): per ADR 0050, reads
+//     the agent's fossil branch (`agent/<full-id>`) tip and
+//     materializes its tree into the project-root git working tree.
+//     Same dirty-tree refusal, same telemetry path. Default writes
+//     files unstaged; --staged adds `git add` for each materialized
+//     path so the operator can `git diff --staged` the same way
+//     trunk mode produces.
+//  3. Recovery slot mode (--slot=<name> --to=<dir>): copies the
+//     slot's most recent committed-artifacts tree from
+//     `.bones/recovery/<slot>-*` into <dir>. Predates ADR 0050 and
+//     remains for plan-driven slots that write recovery artifacts.
 //
 // bones apply never runs `git commit`. In trunk mode it stages with
 // `git add -A` within fossil's tracked-paths set; the user owns the
-// commit message and the commit author identity. In slot mode it
-// writes files and stops — the operator decides what to do next.
+// commit message and the commit author identity. In synthetic slot
+// mode the default leaves files unstaged so `git status` shows the
+// branch's worth of work for the operator to review before staging.
 type ApplyCmd struct {
 	DryRun bool   `name:"dry-run" help:"show planned changes without writing or staging"`
-	Slot   string `name:"slot" help:"materialize this slot's committed artifacts; requires --to"`
-	To     string `name:"to" help:"target directory for --slot mode; created if missing"`
+	Slot   string `name:"slot" help:"materialize this slot's branch (synthetic) or recovery dir (with --to)"` //nolint:lll
+	To     string `name:"to" help:"target directory for recovery-mode --slot; created if missing"`
+	Staged bool   `name:"staged" help:"in synthetic slot mode, run git add on materialized files"`
 }
 
 func (c *ApplyCmd) Run(g *repocli.Globals) (err error) {
+	// Synthetic agent slots (ADR 0050) materialize from the fossil
+	// branch `agent/<full-id>` straight into the project's git tree;
+	// no --to is required (or accepted — the brief is explicit that
+	// the synthetic flow targets the operator's working tree).
+	if c.Slot != "" && swarm.IsSyntheticSlot(c.Slot) {
+		return c.runSyntheticSlotMode()
+	}
 	if c.Slot != "" || c.To != "" {
 		return c.runSlotMode()
 	}
@@ -58,7 +76,7 @@ func (c *ApplyCmd) Run(g *repocli.Globals) (err error) {
 	if err != nil {
 		return err
 	}
-	tempDir, cleanup, err := openTempCheckout(pre)
+	tempDir, cleanup, err := openTempCheckout(pre, "trunk")
 	if err != nil {
 		return err
 	}
@@ -113,6 +131,275 @@ func (c *ApplyCmd) runSlotMode() (err error) {
 	fmt.Fprintf(os.Stderr,
 		"bones apply: materialized slot %q → %s\n", c.Slot, c.To)
 	return nil
+}
+
+// runSyntheticSlotMode implements ADR 0050's `bones apply
+// --slot=agent-<id>` flow. It looks up the slot's session record to
+// recover the FULL agent_id, computes the fossil branch name
+// (`agent/<full-id>`), opens a temp checkout at that branch's tip, and
+// reuses the trunk-mode materialize pipeline (dirty-tree refusal,
+// classifyDiff against the previously-applied marker, write +
+// optionally stage). The git working tree is the target — `--to` is
+// reserved for the legacy recovery flow.
+func (c *ApplyCmd) runSyntheticSlotMode() (err error) {
+	outcome := &applyOutcome{DryRun: c.DryRun}
+	_, end := telemetry.RecordCommand(context.Background(), "apply",
+		telemetry.String("mode", "synthetic-slot"),
+		telemetry.String("slot", c.Slot),
+		telemetry.Bool("dry_run", c.DryRun),
+		telemetry.Bool("staged", c.Staged),
+	)
+	defer func() { end(err, outcome.attrs()...) }()
+
+	if c.To != "" {
+		return errors.New(
+			"bones apply: --to is for recovery-dir slots; synthetic agent " +
+				"slots materialize into the git working tree (drop --to)")
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("cwd: %w", err)
+	}
+	pre, err := runApplyPreflight(cwd)
+	if err != nil {
+		return err
+	}
+	branch, err := resolveSyntheticSlotBranch(context.Background(), pre.WorkspaceDir, c.Slot)
+	if err != nil {
+		return err
+	}
+	rev, err := branchRev(pre.HubFossil, pre.FossilBin, branch)
+	if err != nil {
+		return fmt.Errorf(
+			"bones apply: branch %q has no tip (slot=%q): %w",
+			branch, c.Slot, err)
+	}
+	tempDir, cleanup, err := openTempCheckout(pre, rev)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	// Walk the checked-out tree to derive the manifest. fossil's
+	// `ls -R <repo> -r <rev>` is unreliable for branch tips written
+	// via libfossil's xfer pipeline (returns empty even when `fossil
+	// open <repo> <rev>` materializes the files); a directory walk
+	// over the temp checkout is the source of truth that matches what
+	// classifyDiff will diff against.
+	manifest, err := scanCheckoutManifest(tempDir)
+	if err != nil {
+		return fmt.Errorf(
+			"bones apply: scan branch %q checkout: %w", branch, err)
+	}
+	return c.applyBranchToWorkingTree(pre, tempDir, branch, manifest, rev, outcome)
+}
+
+// scanCheckoutManifest walks tempDir and returns the relative paths
+// of every regular file that is NOT under fossil's `.fslckout` /
+// `_FOSSIL_` private state. Used by the synthetic-slot apply path
+// because `fossil ls -R repo -r <rev>` returns empty for tips
+// written through libfossil's xfer protocol on Fossil 2.28; the
+// on-disk checkout is authoritative once `fossil open` has hydrated
+// it.
+func scanCheckoutManifest(tempDir string) ([]string, error) {
+	var paths []string
+	err := filepath.WalkDir(tempDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(tempDir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		// Skip fossil's private state files at the repo root.
+		base := filepath.Base(rel)
+		if base == ".fslckout" || base == "_FOSSIL_" || base == ".fos" {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		paths = append(paths, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return paths, nil
+}
+
+// applyBranchToWorkingTree is the synthetic-slot variant of
+// applyFromCheckout. Same dirty-tree refusal and classifyDiff
+// pipeline, but skips the last-applied marker (each apply of an
+// agent branch is independent — the operator decides each time
+// whether to materialize) and only stages when --staged is set.
+//
+// Pulled into its own helper rather than parameterizing
+// applyFromCheckout because the trunk path has additional concerns
+// (last-applied marker, always-stage) that synthetic slots
+// deliberately don't carry.
+func (c *ApplyCmd) applyBranchToWorkingTree(
+	pre *applyPreflight, tempDir, branch string,
+	manifest []string, rev string, outcome *applyOutcome,
+) error {
+	if err := refuseIfDirty(pre.WorkspaceDir, manifest); err != nil {
+		outcome.DirtyRefused = true
+		return err
+	}
+	plan, err := classifyDiff(tempDir, pre.WorkspaceDir, manifest, nil)
+	if err != nil {
+		return err
+	}
+	outcome.Added = len(plan.Added)
+	outcome.Modified = len(plan.Modified)
+	total := len(plan.Added) + len(plan.Modified)
+	if total == 0 {
+		outcome.AlreadyUpToDate = true
+		fmt.Printf("bones apply: slot=%s already in working tree at %s\n",
+			c.Slot, shortRev(rev))
+		return nil
+	}
+	if c.DryRun {
+		printApplyDryRun(plan, rev)
+		return nil
+	}
+	if err := writeBranchPlanToTree(tempDir, pre.WorkspaceDir, plan, c.Staged); err != nil {
+		return err
+	}
+	stagedNote := "review with `git diff` and stage when ready"
+	if c.Staged {
+		stagedNote = "staged via --staged; review with `git diff --staged`"
+	}
+	fmt.Printf(
+		"applied %d changes from slot=%s @ %s. %s.\n",
+		total, c.Slot, shortRev(rev), stagedNote,
+	)
+	return nil
+}
+
+// writeBranchPlanToTree mirrors applyPlanToTree but defers the
+// `git add` step to a flag. Synthetic slots default to leaving files
+// unstaged (per the brief: "default mode leaves git status showing
+// the materialized files unstaged"); --staged opts into the
+// trunk-mode-style pre-staged flow.
+//
+// Deletes are not part of the synthetic-slot apply: an agent branch
+// is a tree, not a diff against trunk. The operator removes files
+// with their own tools.
+func writeBranchPlanToTree(tempCheckout, projectRoot string, plan *applyPlan, stage bool) error {
+	written := make([]string, 0, len(plan.Added)+len(plan.Modified))
+	written = append(written, plan.Added...)
+	written = append(written, plan.Modified...)
+	for _, p := range written {
+		src := filepath.Join(tempCheckout, p)
+		dst := filepath.Join(projectRoot, p)
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", p, err)
+		}
+		info, err := os.Stat(src)
+		if err != nil {
+			return fmt.Errorf("stat %s: %w", p, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return fmt.Errorf("mkdir for %s: %w", p, err)
+		}
+		if err := os.WriteFile(dst, data, info.Mode().Perm()); err != nil {
+			return fmt.Errorf("write %s: %w", p, err)
+		}
+	}
+	if !stage || len(written) == 0 {
+		return nil
+	}
+	args := append([]string{"add", "--"}, written...)
+	cmd := exec.Command("git", args...)
+	cmd.Dir = projectRoot
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git add: %w\n%s", err, out)
+	}
+	return nil
+}
+
+// resolveSyntheticSlotBranch looks up the slot's session record to
+// recover the full agent_id (the slot name itself is truncated to
+// AgentSlotIDLen chars), then returns `agent/<full-id>`. Returns a
+// user-facing error pointing at `bones swarm status` when the slot
+// is unknown — the most likely cause is a typo or a slot whose
+// session has already been reaped.
+//
+// Reads NATS URL from the workspace's recorded hub URL file rather
+// than going through workspace.Join, which would auto-start the hub
+// (incorrect for a verb that's only reading existing state).
+func resolveSyntheticSlotBranch(ctx context.Context, workspaceDir, slot string) (string, error) {
+	natsURL := hub.NATSURL(workspaceDir)
+	if natsURL == "" {
+		return "", fmt.Errorf(
+			"bones apply: no hub running — `bones up` first " +
+				"to bring the slot's session record online")
+	}
+	nc, err := nats.Connect(natsURL)
+	if err != nil {
+		return "", fmt.Errorf("bones apply: nats connect: %w", err)
+	}
+	defer nc.Close()
+	sess, err := swarm.Open(ctx, swarm.Config{NATSConn: nc})
+	if err != nil {
+		return "", fmt.Errorf("bones apply: open sessions: %w", err)
+	}
+	defer func() { _ = sess.Close() }()
+	rec, _, err := sess.Get(ctx, slot)
+	if err != nil {
+		if errors.Is(err, swarm.ErrNotFound) {
+			return "", fmt.Errorf(
+				"bones apply: unknown slot %q — see `bones swarm status` for live slot names",
+				slot)
+		}
+		return "", fmt.Errorf("bones apply: read session %q: %w", slot, err)
+	}
+	if strings.TrimSpace(rec.AgentID) == "" {
+		return "", fmt.Errorf(
+			"bones apply: slot %q has no recorded agent_id (session record incomplete)",
+			slot)
+	}
+	return swarm.AgentBranchName(rec.AgentID), nil
+}
+
+// branchRev returns the hex UUID at the head of a fossil branch.
+// Parses the first whitespace-separated token from the `hash:` (or
+// legacy `uuid:`) line of `fossil info` so trailing timestamp text
+// — which fossil includes on the same line — doesn't leak into the
+// rev string.
+func branchRev(hubFossil, fossilBin, branch string) (string, error) {
+	out, err := exec.Command(fossilBin, "info", "-R", hubFossil, branch).Output()
+	if err != nil {
+		return "", fmt.Errorf("fossil info %s: %w", branch, err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		for _, prefix := range []string{"uuid:", "hash:"} {
+			if !strings.HasPrefix(line, prefix) {
+				continue
+			}
+			rest := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+			if i := strings.IndexAny(rest, " \t"); i >= 0 {
+				rest = rest[:i]
+			}
+			return rest, nil
+		}
+	}
+	return "", fmt.Errorf("could not parse rev for branch %q from `fossil info`", branch)
 }
 
 // latestSlotRecoveryDir scans `.bones/recovery/` for entries matching
@@ -275,22 +562,27 @@ func (c *ApplyCmd) applyFromCheckout(
 	return nil
 }
 
-// openTempCheckout opens a fresh fossil checkout of the hub repo at trunk
-// tip in <workspace>/.bones/apply-<unix-nano>/. Returns the temp dir and
-// a cleanup function the caller must defer.
-func openTempCheckout(pre *applyPreflight) (string, func(), error) {
+// openTempCheckout opens a fresh fossil checkout of the hub repo at the
+// given version (a branch name like "trunk" or "agent/<id>", a tag, or
+// a hex UUID) in <workspace>/.bones/apply-<unix-nano>/. Returns the temp
+// dir and a cleanup function the caller must defer. Empty version
+// defaults to "trunk" so legacy callers don't have to think about it.
+func openTempCheckout(pre *applyPreflight, version string) (string, func(), error) {
+	if version == "" {
+		version = "trunk"
+	}
 	tempDir := filepath.Join(pre.WorkspaceDir, ".bones",
 		fmt.Sprintf("apply-%d", time.Now().UnixNano()))
 	if err := os.MkdirAll(tempDir, 0o755); err != nil {
 		return "", nil, fmt.Errorf("mkdir temp checkout: %w", err)
 	}
 	checkoutCmd := exec.Command(pre.FossilBin, "open", "--force",
-		pre.HubFossil, "--workdir", tempDir)
+		pre.HubFossil, version, "--workdir", tempDir)
 	checkoutCmd.Stdout = os.Stderr
 	checkoutCmd.Stderr = os.Stderr
 	if err := checkoutCmd.Run(); err != nil {
 		_ = os.RemoveAll(tempDir)
-		return "", nil, fmt.Errorf("fossil open temp checkout: %w", err)
+		return "", nil, fmt.Errorf("fossil open temp checkout @ %s: %w", version, err)
 	}
 	cleanup := func() {
 		closeCmd := exec.Command(pre.FossilBin, "close", "--force")
@@ -596,9 +888,17 @@ func writeLastAppliedMarker(workspaceDir, rev string) error {
 // repo without a live checkout — without `-r`, fossil ls expects to be
 // run inside a fossil working directory.
 func manifestAtRev(hubFossil, fossilBin, rev string) ([]string, error) {
-	out, err := exec.Command(fossilBin, "ls", "-R", hubFossil, "-r", rev).Output()
+	cmd := exec.Command(fossilBin, "ls", "-R", hubFossil, "-r", rev)
+	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("fossil ls @ %s: %w", rev, err)
+		// Surface stderr in the error so branch-name typos / missing
+		// branches give an actionable message rather than the bare
+		// "exit status 1".
+		var stderrSnippet string
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			stderrSnippet = ": " + strings.TrimSpace(string(ee.Stderr))
+		}
+		return nil, fmt.Errorf("fossil ls @ %s: %w%s", rev, err, stderrSnippet)
 	}
 	var paths []string
 	for _, line := range strings.Split(string(out), "\n") {
