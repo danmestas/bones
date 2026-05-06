@@ -16,7 +16,7 @@ Your swarm session has closed (`bones swarm close --result=success`), but the le
 
 ## Requirements
 
-- A bones workspace (`.bones/repo.fossil` exists in cwd; required for all options)
+- A bones workspace (`.bones/` directory exists in cwd; required for all options)
 - For the optional push-to-git tail (Option 1's follow-up):
   - The workspace is also a git repo (`.git/` exists at the same root)
   - `bones apply` subcommand available (bones v0.X+ — calibrate against the bones release that ships it)
@@ -47,7 +47,7 @@ bones swarm fan-in --dry-run -m "merge <leaves> to trunk"
 bones swarm fan-in -m "merge <leaves> to trunk"
 ```
 
-**On conflict** (semantics not yet empirically verified — see spec § 11 — but the defensive flow is canonical given fossil's conflict model):
+**On conflict** (semantics not yet empirically verified — see spec § 11 — but the defensive flow below is canonical):
 
 If `fan-in` reports a non-zero exit code, conflicts likely exist. Enumerate and resolve:
 
@@ -110,7 +110,7 @@ Answering `y`/`Y`/`yes` (case-insensitive) runs the flow below. Anything else fi
 bones apply
 ```
 
-This is the bones-side checkout-equivalent: it copies fossil-trunk's tip state onto the git working tree. After this, `git status` shows the swarmed changes as unstaged.
+This is the bones-side checkout-equivalent: it copies trunk's tip state onto the git working tree. After this, `git status` shows the swarmed changes as unstaged.
 
 `bones apply` is invoked with no arguments — assumes the default behavior is "materialize trunk tip into cwd's git worktree". If the actual `bones apply` CLI requires explicit args when the bones release ships, adjust this skill's invocation.
 

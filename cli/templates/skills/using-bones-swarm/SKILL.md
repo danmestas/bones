@@ -13,7 +13,7 @@ category:
 
 `bones swarm` is the slot-scoped session primitive. One swarm session = one leaf = one worktree + one claimed task + one open hub branch. This skill walks you through the 5-step lifecycle.
 
-**Prerequisite**: a bones workspace (`.bones/repo.fossil` exists in cwd or a parent). If missing, run `bones up` first.
+**Prerequisite**: a bones workspace (`.bones/` directory exists in cwd or a parent). If missing, run `bones up` first.
 
 ## The lifecycle
 
