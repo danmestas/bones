@@ -42,7 +42,7 @@ func TestStartStopRoundTrip(t *testing.T) {
 	// issue #180.
 	t.Setenv("HOME", t.TempDir())
 	root := newGitRepoWithFile(t)
-	fossilPort, natsPort := freePort(t), freePort(t)
+	repoPort, coordPort := freePort(t), freePort(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -53,18 +53,18 @@ func TestStartStopRoundTrip(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		startErr = Start(ctx, root,
-			WithFossilPort(fossilPort),
-			WithNATSPort(natsPort),
+			WithRepoPort(repoPort),
+			WithCoordPort(coordPort),
 		)
 	}()
 
 	// Wait for both servers to become reachable.
-	if err := waitForTCP("127.0.0.1:"+strconv.Itoa(fossilPort), 5*time.Second); err != nil {
+	if err := waitForTCP("127.0.0.1:"+strconv.Itoa(repoPort), 5*time.Second); err != nil {
 		cancel()
 		wg.Wait()
 		t.Fatalf("fossil never bound: %v", err)
 	}
-	if err := waitForTCP("127.0.0.1:"+strconv.Itoa(natsPort), 5*time.Second); err != nil {
+	if err := waitForTCP("127.0.0.1:"+strconv.Itoa(coordPort), 5*time.Second); err != nil {
 		cancel()
 		wg.Wait()
 		t.Fatalf("nats never bound: %v", err)
@@ -85,8 +85,8 @@ func TestStartStopRoundTrip(t *testing.T) {
 	// Idempotency: a second Start with both pids live returns nil
 	// without re-binding.
 	if err := Start(context.Background(), root,
-		WithFossilPort(fossilPort),
-		WithNATSPort(natsPort),
+		WithRepoPort(repoPort),
+		WithCoordPort(coordPort),
 	); err != nil {
 		cancel()
 		wg.Wait()
@@ -134,10 +134,10 @@ func TestStartNoGitTrackedFiles(t *testing.T) {
 		"git", "-c", "user.email=t@t", "-c", "user.name=t",
 		"commit", "--allow-empty", "-q", "-m", "init")
 
-	fossilPort, natsPort := freePort(t), freePort(t)
+	repoPort, coordPort := freePort(t), freePort(t)
 	err := Start(context.Background(), root,
-		WithFossilPort(fossilPort),
-		WithNATSPort(natsPort),
+		WithRepoPort(repoPort),
+		WithCoordPort(coordPort),
 	)
 	if err == nil {
 		t.Fatal("expected error from empty git tree, got nil")
@@ -161,7 +161,7 @@ func TestStartWritesRegistry(t *testing.T) {
 
 	t.Setenv("HOME", t.TempDir())
 	root := newGitRepoWithFile(t)
-	fossilPort, natsPort := freePort(t), freePort(t)
+	repoPort, coordPort := freePort(t), freePort(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -171,18 +171,18 @@ func TestStartWritesRegistry(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		startErr = Start(ctx, root,
-			WithFossilPort(fossilPort),
-			WithNATSPort(natsPort),
+			WithRepoPort(repoPort),
+			WithCoordPort(coordPort),
 		)
 	}()
 
 	// Wait for both servers to be reachable before checking registry.
-	if err := waitForTCP("127.0.0.1:"+strconv.Itoa(fossilPort), 5*time.Second); err != nil {
+	if err := waitForTCP("127.0.0.1:"+strconv.Itoa(repoPort), 5*time.Second); err != nil {
 		cancel()
 		wg.Wait()
 		t.Fatalf("fossil never bound: %v", err)
 	}
-	if err := waitForTCP("127.0.0.1:"+strconv.Itoa(natsPort), 5*time.Second); err != nil {
+	if err := waitForTCP("127.0.0.1:"+strconv.Itoa(coordPort), 5*time.Second); err != nil {
 		cancel()
 		wg.Wait()
 		t.Fatalf("nats never bound: %v", err)

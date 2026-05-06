@@ -24,8 +24,8 @@ type Option func(*opts)
 // opts holds tunable behavior for Start. The exported Option constructors
 // are the only way to mutate this struct from outside the package.
 type opts struct {
-	fossilPort   int
-	natsPort     int
+	repoPort     int
+	coordPort    int
 	detach       bool
 	drainTimeout time.Duration
 }
@@ -33,23 +33,23 @@ type opts struct {
 // defaults returns the production defaults: ports left zero so
 // resolvePorts allocates per-workspace, foreground (Start blocks on
 // ctx.Done()). A zero port means "look up the workspace's recorded URL
-// or pick a free port"; passing WithFossilPort(N) or WithNATSPort(N)
+// or pick a free port"; passing WithRepoPort(N) or WithCoordPort(N)
 // pins to N.
 func defaults() opts {
 	return opts{
-		fossilPort:   0,
-		natsPort:     0,
+		repoPort:     0,
+		coordPort:    0,
 		drainTimeout: defaultDrainTimeout,
 	}
 }
 
-// WithFossilPort pins the Fossil HTTP port. Zero means "let the hub
+// WithRepoPort pins the repo HTTP port. Zero means "let the hub
 // allocate per-workspace" (default behavior).
-func WithFossilPort(p int) Option { return func(o *opts) { o.fossilPort = p } }
+func WithRepoPort(p int) Option { return func(o *opts) { o.repoPort = p } }
 
-// WithNATSPort pins the NATS client port. Zero means "let the hub
+// WithCoordPort pins the coord client port. Zero means "let the hub
 // allocate per-workspace" (default behavior).
-func WithNATSPort(p int) Option { return func(o *opts) { o.natsPort = p } }
+func WithCoordPort(p int) Option { return func(o *opts) { o.coordPort = p } }
 
 // WithDetach controls Start's blocking behavior. When true, Start returns
 // as soon as both readiness probes succeed; the servers continue running

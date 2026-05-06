@@ -275,8 +275,8 @@ func openAndSeedHub(
 		RepoPath:       p.hubRepo,
 		BootstrapUser:  "orchestrator",
 		NATSStoreDir:   p.natsStore,
-		FossilHTTPPort: o.fossilPort,
-		NATSClientPort: o.natsPort,
+		FossilHTTPPort: o.repoPort,
+		NATSClientPort: o.coordPort,
 	})
 	if err != nil {
 		removeRepoAndSidecars(p)
@@ -373,8 +373,8 @@ func spawnDetachedChild(p paths, o opts) error {
 	defer func() { _ = hubLog.Close() }()
 
 	cmd := exec.Command(exe, "hub", "start",
-		"--fossil-port", strconv.Itoa(o.fossilPort),
-		"--nats-port", strconv.Itoa(o.natsPort),
+		"--repo-port", strconv.Itoa(o.repoPort),
+		"--coord-port", strconv.Itoa(o.coordPort),
 		"--drain-timeout", effectiveDrainTimeout(o.drainTimeout).String(),
 	)
 	cmd.Dir = p.root
@@ -395,8 +395,8 @@ func spawnDetachedChild(p paths, o opts) error {
 	// attaches "fossil child not ready: timeout" with no hint at the
 	// real cause (#127), which is typically a seed failure logged in
 	// hub.log only.
-	fossilAddr := fmt.Sprintf("127.0.0.1:%d", o.fossilPort)
-	natsAddr := fmt.Sprintf("127.0.0.1:%d", o.natsPort)
+	fossilAddr := fmt.Sprintf("127.0.0.1:%d", o.repoPort)
+	natsAddr := fmt.Sprintf("127.0.0.1:%d", o.coordPort)
 	if err := waitForTCP(fossilAddr, readyTimeout); err != nil {
 		_ = cmd.Process.Kill()
 		return fmt.Errorf("hub: fossil child not ready: %w%s",
@@ -411,7 +411,7 @@ func spawnDetachedChild(p paths, o opts) error {
 	// False-positive readiness defense (#138 item 1): the TCP probes
 	// above pass when SOMETHING responds on the configured ports, not
 	// when our child is the responder. If another process already
-	// owned fossilPort/natsPort, our child's bind failed, our child
+	// owned repoPort/coordPort, our child's bind failed, our child
 	// exited, but the probes succeeded against the unrelated process.
 	// Without this check, joinLogic would proceed thinking the hub is
 	// up, then every verb downstream fails mysteriously against the
@@ -442,7 +442,7 @@ func spawnDetachedChild(p paths, o opts) error {
 	}
 
 	fmt.Printf("hub: fossil at http://127.0.0.1:%d, nats at nats://127.0.0.1:%d (pid=%d)\n",
-		o.fossilPort, o.natsPort, pid)
+		o.repoPort, o.coordPort, pid)
 	return nil
 }
 

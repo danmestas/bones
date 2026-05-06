@@ -45,15 +45,15 @@ func TestResolvePorts_AllocatesFreeWhenZero(t *testing.T) {
 	if err := os.MkdirAll(p.orchDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	o := opts{fossilPort: 0, natsPort: 0}
+	o := opts{repoPort: 0, coordPort: 0}
 	if err := resolvePorts(p, &o); err != nil {
 		t.Fatal(err)
 	}
-	if o.fossilPort == 0 || o.natsPort == 0 {
+	if o.repoPort == 0 || o.coordPort == 0 {
 		t.Errorf("ports not assigned: %+v", o)
 	}
-	if o.fossilPort == o.natsPort {
-		t.Errorf("collision: both ports = %d", o.fossilPort)
+	if o.repoPort == o.coordPort {
+		t.Errorf("collision: both ports = %d", o.repoPort)
 	}
 	if FossilURL(dir) == "" {
 		t.Errorf("fossil URL file not written")
@@ -81,15 +81,15 @@ func TestResolvePorts_ReadsRecordedURL(t *testing.T) {
 		[]byte("nats://127.0.0.1:9002\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	o := opts{fossilPort: 0, natsPort: 0}
+	o := opts{repoPort: 0, coordPort: 0}
 	if err := resolvePorts(p, &o); err != nil {
 		t.Fatal(err)
 	}
-	if o.fossilPort != 9001 {
-		t.Errorf("fossilPort = %d, want 9001 (recorded)", o.fossilPort)
+	if o.repoPort != 9001 {
+		t.Errorf("repoPort = %d, want 9001 (recorded)", o.repoPort)
 	}
-	if o.natsPort != 9002 {
-		t.Errorf("natsPort = %d, want 9002 (recorded)", o.natsPort)
+	if o.coordPort != 9002 {
+		t.Errorf("coordPort = %d, want 9002 (recorded)", o.coordPort)
 	}
 }
 
@@ -102,11 +102,11 @@ func TestResolvePorts_PreservesExplicitPort(t *testing.T) {
 	if err := os.MkdirAll(p.orchDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	o := opts{fossilPort: 7777, natsPort: 7778}
+	o := opts{repoPort: 7777, coordPort: 7778}
 	if err := resolvePorts(p, &o); err != nil {
 		t.Fatal(err)
 	}
-	if o.fossilPort != 7777 || o.natsPort != 7778 {
+	if o.repoPort != 7777 || o.coordPort != 7778 {
 		t.Errorf("explicit ports clobbered: %+v", o)
 	}
 	// URL files should still reflect the explicit port.
@@ -163,7 +163,7 @@ func TestStartWritesURLFilesStopPreserves(t *testing.T) {
 	if err := os.MkdirAll(p.orchDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	o := opts{fossilPort: 0, natsPort: 0}
+	o := opts{repoPort: 0, coordPort: 0}
 	if err := resolvePorts(p, &o); err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestStartWritesURLFilesStopPreserves(t *testing.T) {
 				filepath.Base(path), err)
 		}
 	}
-	want := fmt.Sprintf("http://127.0.0.1:%d", o.fossilPort)
+	want := fmt.Sprintf("http://127.0.0.1:%d", o.repoPort)
 	if got := FossilURL(root); got != want {
 		t.Errorf("FossilURL = %q, want %q", got, want)
 	}
