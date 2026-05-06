@@ -4,7 +4,7 @@ This file provides instructions and context for AI coding agents working on this
 
 ## Task tracking
 
-This project's active design lives in `docs/adr/` (Architecture Decision Records) and the git log. `reference/CAPABILITIES.md` documents historical capability mapping against beads (the project bones was originally audited against — no longer the installed tracker; see [ADR 0017](./docs/adr/0017-beads-removal.md)). For ephemeral in-session work tracking, use the harness's built-in task tool.
+This project's active design lives in `docs/adr/` (Architecture Decision Records) and the git log. For ephemeral in-session work tracking, use the harness's built-in task tool.
 
 ## Session Completion
 
