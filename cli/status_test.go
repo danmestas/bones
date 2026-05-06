@@ -35,7 +35,7 @@ func TestRenderStatus_Empty(t *testing.T) {
 		"workspace: bones", "trunk: —", "as of 14:05:02",
 		"(no active swarm sessions)", "Recent activity:", "(none)",
 		"Tasks: 0 open · 0 claimed · 0 closed",
-		"Hub fossil unavailable",
+		"Hub not running",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q\n--- output ---\n%s", want, out)
@@ -138,7 +138,7 @@ func TestRenderStatus_WithSessionsAndTasks(t *testing.T) {
 		}
 	}
 	// Hub-available branch must NOT print the bootstrap hint.
-	if strings.Contains(out, "Hub fossil unavailable") {
+	if strings.Contains(out, "Hub not running") {
 		t.Errorf("unexpected unavailable hint in output:\n%s", out)
 	}
 }
@@ -308,7 +308,7 @@ func TestResolveStatusRoot_DoesNotAutoStartHub(t *testing.T) {
 // Against a fresh workspace marker with no hub running, StatusCmd.Run
 // must:
 //   - exit 0 (degraded mode is non-error),
-//   - emit the "Hub fossil unavailable" hint from the existing
+//   - emit the "Hub not running" hint from the existing
 //     HubAvailable=false renderer branch,
 //   - leave the workspace's .bones/ directory in the same shape it
 //     found (no pids/, no hub-*-url files).
@@ -345,7 +345,7 @@ func TestStatusRun_NoHub_DoesNotStartOne(t *testing.T) {
 	}
 
 	out := stdout.String()
-	if !strings.Contains(out, "Hub fossil unavailable") {
+	if !strings.Contains(out, "Hub not running") {
 		t.Errorf("expected degraded-mode hint in output, got:\n%s", out)
 	}
 	if strings.Contains(out, "starting hub for workspace") {

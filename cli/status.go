@@ -373,7 +373,8 @@ func renderStatus(rep statusReport, w io.Writer) error {
 	}
 	if !rep.HubAvailable {
 		if _, err := io.WriteString(w,
-			"\nHub fossil unavailable — run `bones up` to bootstrap.\n"); err != nil {
+			"\nHub not running — open a Claude session (SessionStart hook will start it) "+
+				"or run `bones hub start` manually.\n"); err != nil {
 			return err
 		}
 	}
