@@ -71,14 +71,6 @@ type statusReport struct {
 	// .claude/settings.json hooks are missing and AGENTS.md may be
 	// partial. Surfaced as a WARN by renderStatus (#147).
 	ScaffoldComplete bool
-
-	// DuplicateHubs is the count of live registry entries whose
-	// canonical Cwd matches this workspace (#208). >= 2 means two or
-	// more concurrent `bones hub start` processes are competing for
-	// this workspace's URL files and fossil state — silent corruption
-	// the renderer surfaces as a one-line WARN pointing at `bones
-	// doctor` for full per-PID detail.
-	DuplicateHubs int
 }
 
 // activityEvent is one entry in the recent-activity feed. Time is
@@ -143,11 +135,6 @@ func resolveStatusRoot(cwd string) (string, error) {
 // to what's available from on-disk state (workspace dir, scaffold
 // stamp); NATS-backed views (tasks, sessions, fossil timeline) stay
 // empty so the renderer's degraded branch fires.
-//
-// DuplicateHubs is still populated here: a "no healthy hub" workspace
-// can simultaneously have two competing live processes (one wrote
-// last, one is still around) — exactly the #208 case the operator
-// most needs to see surfaced.
 func degradedStatusReport(root string) statusReport {
 	stamp, _ := scaffoldver.Read(root)
 	return statusReport{
@@ -156,21 +143,7 @@ func degradedStatusReport(root string) statusReport {
 		TasksByStatus:    map[tasks.Status]int{},
 		TasksByID:        map[string]tasks.Task{},
 		ScaffoldComplete: stamp != "",
-		DuplicateHubs:    countDuplicateHubs(root),
 	}
-}
-
-// countDuplicateHubs returns the number of live registry entries
-// whose canonical Cwd matches root. Returns 0 on any error so a
-// transient registry-read failure does not turn into a phantom WARN.
-// The detailed per-PID surface lives in `bones doctor`; status only
-// needs the count to decide whether to emit its one-line WARN.
-func countDuplicateHubs(root string) int {
-	dups, err := registry.Duplicates(root)
-	if err != nil {
-		return 0
-	}
-	return len(dups)
 }
 
 // gatherStatus collects every input the snapshot needs. NATS-side
@@ -185,7 +158,6 @@ func gatherStatus(ctx context.Context, info workspace.Info) (statusReport, error
 		TasksByStatus:    map[tasks.Status]int{},
 		TasksByID:        map[string]tasks.Task{},
 		ScaffoldComplete: stamp != "",
-		DuplicateHubs:    countDuplicateHubs(info.WorkspaceDir),
 	}
 
 	mgr, closeMgr, err := openManager(ctx, info)
@@ -337,20 +309,6 @@ func renderStatus(rep statusReport, w io.Writer) error {
 	if !rep.ScaffoldComplete {
 		if _, err := io.WriteString(w,
 			"WARN  scaffold incomplete — re-run `bones up`\n\n"); err != nil {
-			return err
-		}
-	}
-
-	// Surface duplicate hubs (#208): when two or more concurrent
-	// `bones hub start` processes are serving this workspace, the
-	// recorded URL files are being overwritten by whichever one wrote
-	// last and consumers are observing whichever they happened to
-	// read. Status emits the one-liner; `bones doctor` lists each PID.
-	if rep.DuplicateHubs >= 2 {
-		if _, err := fmt.Fprintf(w,
-			"WARN  %d duplicate hub processes serving this workspace — "+
-				"run `bones doctor` for detail\n\n",
-			rep.DuplicateHubs); err != nil {
 			return err
 		}
 	}

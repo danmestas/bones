@@ -270,11 +270,11 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 	httpCancel()
 	drainErr := drainHub(h, httpDone, o.drainTimeout)
 	_ = os.Remove(p.hubPid)
-	// Drop our own per-pid registry entry (#208 layout) so a clean
-	// hub exit does not leave a stale record for `bones doctor` or
-	// `bones status --all` to filter out via pidAlive. Dead-pid
-	// pruning still handles the unclean-exit case.
-	_ = registry.RemoveByPID(p.root, os.Getpid())
+	// Drop our own registry entry so a clean hub exit does not leave
+	// a stale record for `bones doctor` or `bones status --all` to
+	// filter out via pidAlive. Dead-pid pruning still handles the
+	// unclean-exit case. Single-file layout since #250.
+	_ = registry.Remove(p.root)
 	if drainErr != nil {
 		hl.Errorf("hub: stopped with drain error: %v", drainErr)
 	} else {
