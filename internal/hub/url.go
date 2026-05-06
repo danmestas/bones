@@ -48,26 +48,26 @@ func readURLFile(path string) string {
 // After resolution, the URL files are (re)written so consumers always
 // see the live hub's URLs — even when the caller passed explicit ports.
 func resolvePorts(p paths, o *opts) error {
-	if o.fossilPort == 0 {
+	if o.repoPort == 0 {
 		if recorded := portFromURL(readURLFile(p.fossilURL)); recorded != 0 {
-			o.fossilPort = recorded
+			o.repoPort = recorded
 		} else {
 			port, err := pickFreePort()
 			if err != nil {
 				return fmt.Errorf("hub: pick fossil port: %w", err)
 			}
-			o.fossilPort = port
+			o.repoPort = port
 		}
 	}
-	if o.natsPort == 0 {
+	if o.coordPort == 0 {
 		if recorded := portFromURL(readURLFile(p.natsURL)); recorded != 0 {
-			o.natsPort = recorded
+			o.coordPort = recorded
 		} else {
 			port, err := pickFreePort()
 			if err != nil {
 				return fmt.Errorf("hub: pick nats port: %w", err)
 			}
-			o.natsPort = port
+			o.coordPort = port
 		}
 	}
 	return writeURLFiles(p, *o)
@@ -76,8 +76,8 @@ func resolvePorts(p paths, o *opts) error {
 // writeURLFiles records the hub's fully-resolved URLs so consumers can
 // discover them without knowing the port allocation policy.
 func writeURLFiles(p paths, o opts) error {
-	fossilURL := fmt.Sprintf("http://127.0.0.1:%d", o.fossilPort)
-	natsURL := fmt.Sprintf("nats://127.0.0.1:%d", o.natsPort)
+	fossilURL := fmt.Sprintf("http://127.0.0.1:%d", o.repoPort)
+	natsURL := fmt.Sprintf("nats://127.0.0.1:%d", o.coordPort)
 	if err := os.WriteFile(p.fossilURL, []byte(fossilURL+"\n"), 0o644); err != nil {
 		return fmt.Errorf("hub: write fossil-url: %w", err)
 	}

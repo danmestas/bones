@@ -14,12 +14,12 @@ import (
 // TestSpawnDetachedChild_DetectsPortCollision pins #138 item 1's
 // remaining gap (after commit 0f6ec3c added hubLogTail surfacing for
 // the seed-error case): when an unrelated process is already bound
-// to fossilPort, the child's startFossil fails, the child exits, but
+// to repoPort, the child's startFossil fails, the child exits, but
 // the parent's TCP probe succeeds because the foreign service
 // responds. Pre-fix, hub.Start would return nil — joinLogic then
 // thinks the hub is up and downstream verbs hit the foreign service.
 //
-// This test stands up a local TCP listener on fossilPort BEFORE
+// This test stands up a local TCP listener on repoPort BEFORE
 // calling Start with that port pinned. The child crashes on bind;
 // the parent's TCP probe passes (the listener responds). Without the
 // pid-vs-recorded-pid check, Start returns nil. With the check,
@@ -61,14 +61,14 @@ func TestSpawnDetachedChild_DetectsPortCollision(t *testing.T) {
 		t.Fatalf("listen fossil: %v", err)
 	}
 	t.Cleanup(func() { _ = fossilLis.Close() })
-	fossilPort := fossilLis.Addr().(*net.TCPAddr).Port
+	repoPort := fossilLis.Addr().(*net.TCPAddr).Port
 
 	natsLis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen nats: %v", err)
 	}
 	t.Cleanup(func() { _ = natsLis.Close() })
-	natsPort := natsLis.Addr().(*net.TCPAddr).Port
+	coordPort := natsLis.Addr().(*net.TCPAddr).Port
 
 	// Bound the call so a regression (no pid check → false positive)
 	// returns nil quickly without leaving us waiting on a real
@@ -79,8 +79,8 @@ func TestSpawnDetachedChild_DetectsPortCollision(t *testing.T) {
 	go func() {
 		ch <- result{Start(context.Background(), root,
 			WithDetach(true),
-			WithFossilPort(fossilPort),
-			WithNATSPort(natsPort))}
+			WithRepoPort(repoPort),
+			WithCoordPort(coordPort))}
 	}()
 
 	select {

@@ -47,8 +47,8 @@ type HubStartCmd struct {
 	// the resolved URL at .bones/hub-{fossil,nats}-url so a
 	// second workspace can run concurrently on its own free ports.
 	// Pass an explicit non-zero port to pin.
-	FossilPort int `name:"fossil-port" default:"0" help:"Fossil HTTP port (0 = per-ws)"`
-	NATSPort   int `name:"nats-port" default:"0" help:"NATS client port (0 = per-ws)"`
+	RepoPort  int `name:"repo-port" default:"0" help:"repo HTTP port (0 = per-ws)"`
+	CoordPort int `name:"coord-port" default:"0" help:"coord client port (0 = per-ws)"`
 	// DrainTimeout bounds NATS/Fossil drain on shutdown before
 	// runForeground returns errDrainTimeout (non-zero exit). See #158.
 	DrainTimeout time.Duration `name:"drain-timeout" default:"30s" help:"max drain wait"` //nolint:lll
@@ -67,8 +67,8 @@ func (c *HubStartCmd) Run(g *repocli.Globals) error {
 	defer stop()
 
 	return hub.Start(ctx, cwd,
-		hub.WithFossilPort(c.FossilPort),
-		hub.WithNATSPort(c.NATSPort),
+		hub.WithRepoPort(c.RepoPort),
+		hub.WithCoordPort(c.CoordPort),
 		hub.WithDetach(c.Detach),
 		hub.WithDrainTimeout(c.DrainTimeout),
 	)
