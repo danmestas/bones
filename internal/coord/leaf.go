@@ -499,11 +499,14 @@ func (l *Leaf) Commit(
 	}
 	// Agent.Commit auto-resolves the trunk tip when ParentID is unset,
 	// so the commit chains onto the latest tip from the post-pull state
-	// without bones needing to call Tip() and round-trip the rid.
+	// without bones needing to call Tip() and round-trip the rid. When
+	// co.tags carries the synthetic-slot branch pair (#288), the
+	// checkin lands on `agent/<id>` rather than advancing trunk.
 	rev, err := l.agent.Commit(ctx, agent.CommitOpts{
 		Files:   toCommit,
 		Message: commitComment,
 		Author:  commitUser,
+		Tags:    co.tags,
 	})
 	if err != nil {
 		return "", fmt.Errorf("coord.Leaf.Commit: %w", err)
@@ -592,13 +595,15 @@ func (l *Leaf) Push(
 	return res, nil
 }
 
-// CommitOption tunes Leaf.Commit. Construct with WithMessage / WithUser.
+// CommitOption tunes Leaf.Commit. Construct with WithMessage / WithUser
+// / WithTags.
 type CommitOption func(*commitConfig)
 
 // commitConfig holds the resolved options for a Leaf.Commit call.
 type commitConfig struct {
 	message string
 	user    string
+	tags    []agent.TagSpec
 }
 
 // WithMessage replaces the default "leaf commit for task <id>" comment
@@ -611,6 +616,16 @@ func WithMessage(msg string) CommitOption {
 // treated as "use slot identity."
 func WithUser(user string) CommitOption {
 	return func(c *commitConfig) { c.user = user }
+}
+
+// WithTags attaches libfossil tags to the new checkin (#288). The
+// canonical use is the synthetic-slot branch pair
+// (`branch=agent/<id>` + `sym-agent/<id>=*`) so the commit lands on
+// the agent's branch rather than advancing trunk; see
+// swarm.AgentBranchTags. Nil or empty slice is treated as "no tags";
+// the commit lands on trunk per default behavior.
+func WithTags(tags []agent.TagSpec) CommitOption {
+	return func(c *commitConfig) { c.tags = tags }
 }
 
 // normalizeLeadingSlash strips a single leading slash so absolute paths
@@ -628,9 +643,20 @@ func normalizeLeadingSlash(p string) string {
 func (l *Leaf) Tip(ctx context.Context) (string, error) {
 	assert.NotNil(l, "coord.Leaf.Tip: receiver is nil")
 	assert.NotNil(ctx, "coord.Leaf.Tip: ctx is nil")
-	rev, err := l.agent.Tip(ctx, "trunk")
+	return l.TipOnBranch(ctx, "trunk")
+}
+
+// TipOnBranch returns the manifest UUID at the head of the named
+// fossil branch, or "" on a branch with no checkins. branch="trunk"
+// is equivalent to Tip. Used by #288 verification tests to confirm
+// that synthetic-slot commits land on `agent/<id>` and not trunk.
+func (l *Leaf) TipOnBranch(ctx context.Context, branch string) (string, error) {
+	assert.NotNil(l, "coord.Leaf.TipOnBranch: receiver is nil")
+	assert.NotNil(ctx, "coord.Leaf.TipOnBranch: ctx is nil")
+	assert.NotEmpty(branch, "coord.Leaf.TipOnBranch: branch is empty")
+	rev, err := l.agent.Tip(ctx, branch)
 	if err != nil {
-		return "", fmt.Errorf("coord.Leaf.Tip: %w", err)
+		return "", fmt.Errorf("coord.Leaf.TipOnBranch(%q): %w", branch, err)
 	}
 	return string(rev), nil
 }

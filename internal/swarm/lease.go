@@ -555,7 +555,18 @@ func (l *ResumedLease) Commit(
 	if l.leaf == nil {
 		return CommitResult{}, fmt.Errorf("swarm.ResumedLease.Commit: leaf already stopped")
 	}
-	uuid, err := commitViaLeaf(ctx, l.leaf, l.taskID, message, files)
+	// #288: synthetic agent slots (slot name `agent-<prefix>`) commit on
+	// the per-agent fossil branch `agent/<full-id>` instead of advancing
+	// trunk. Plan-anchored slots leave Tags nil and continue the
+	// trunk-based-development model. The full agent_id lives on the
+	// session record's AgentID field, which Resume copied into
+	// l.fossilUser; for plan slots that field is `slot-<name>` and
+	// IsSyntheticSlot keeps the tag derivation off it.
+	var tags []TagSpec
+	if IsSyntheticSlot(l.slot) {
+		tags = AgentBranchTags(l.fossilUser)
+	}
+	uuid, err := commitViaLeaf(ctx, l.leaf, l.taskID, message, files, tags)
 	if err != nil {
 		return CommitResult{}, err
 	}
@@ -926,8 +937,14 @@ func writeSessionAndPid(
 
 // commitViaLeaf re-claims the lease's task on the freshly-Resumed
 // leaf, announces holds for the file paths, commits, and releases.
+//
+// tags is the optional libfossil tag set passed through to
+// coord.Leaf.Commit. Synthetic agent slots pass the
+// `branch=agent/<id>` + `sym-agent/<id>=*` pair (#288); plan slots
+// pass nil and the commit advances trunk.
 func commitViaLeaf(
-	ctx context.Context, leaf *coord.Leaf, taskID, message string, files []coord.File,
+	ctx context.Context, leaf *coord.Leaf, taskID, message string,
+	files []coord.File, tags []TagSpec,
 ) (string, error) {
 	claim, err := leaf.Claim(ctx, coord.TaskID(taskID))
 	if err != nil {
@@ -943,7 +960,11 @@ func commitViaLeaf(
 		return "", fmt.Errorf("swarm.ResumedLease.Commit: announce holds: %w", err)
 	}
 	defer releaseHolds()
-	uuid, err := leaf.Commit(ctx, claim, files, coord.WithMessage(message))
+	commitOpts := []coord.CommitOption{coord.WithMessage(message)}
+	if len(tags) > 0 {
+		commitOpts = append(commitOpts, coord.WithTags(tags))
+	}
+	uuid, err := leaf.Commit(ctx, claim, files, commitOpts...)
 	if err != nil {
 		return "", fmt.Errorf("swarm.ResumedLease.Commit: leaf commit: %w", err)
 	}

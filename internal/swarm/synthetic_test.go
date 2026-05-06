@@ -91,6 +91,31 @@ func TestAgentBranchName_PreservesFullID(t *testing.T) {
 	}
 }
 
+// TestAgentBranchTags_Pair pins the libfossil branch-tag pair
+// AgentBranchTags emits (#288). Both `branch=<name>` and
+// `sym-<name>=*` are required by libfossil for the checkin to land
+// on the named branch — drop either and the upstream rejects the
+// pair as malformed (see leaf v0.0.11
+// `TestAgent_Commit_BranchTags_LandsOnNamedBranch`).
+func TestAgentBranchTags_Pair(t *testing.T) {
+	full := "a2a2ecd1865-74c8ac-deadbeef"
+	tags := AgentBranchTags(full)
+	if len(tags) != 2 {
+		t.Fatalf("AgentBranchTags(%q) returned %d tags; want exactly 2 (branch + sym pair)",
+			full, len(tags))
+	}
+	wantBranch := AgentBranchPrefix + full
+	if tags[0].Name != "branch" || tags[0].Value != wantBranch {
+		t.Errorf("tags[0] = {Name:%q Value:%q}, want {Name:%q Value:%q}",
+			tags[0].Name, tags[0].Value, "branch", wantBranch)
+	}
+	wantSymName := "sym-" + wantBranch
+	if tags[1].Name != wantSymName || tags[1].Value != "*" {
+		t.Errorf("tags[1] = {Name:%q Value:%q}, want {Name:%q Value:%q}",
+			tags[1].Name, tags[1].Value, wantSymName, "*")
+	}
+}
+
 // TestSwarmJoinAuto_IdempotentReEntry: a second JoinAuto with the
 // same agent.id returns ReEntry=true and the same slot/wt without
 // creating a duplicate session record.

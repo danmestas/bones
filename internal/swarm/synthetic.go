@@ -9,9 +9,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danmestas/EdgeSync/leaf/agent"
+
 	"github.com/danmestas/bones/internal/assert"
 	"github.com/danmestas/bones/internal/workspace"
 )
+
+// TagSpec is a re-export of agent.TagSpec so swarm callers don't need
+// to depend on the leaf module directly to construct branch-tag pairs.
+// Identical wire shape; carries the libfossil tag primitive
+// (`branch=<name>` and `sym-<name>=*`) attached at commit time.
+type TagSpec = agent.TagSpec
 
 // AgentSlotIDLen is the number of agent_id characters baked into the
 // synthetic slot name (`agent-<prefix>`). 12 hex characters is enough
@@ -79,6 +87,29 @@ func SyntheticSlotName(agentID string) string {
 func AgentBranchName(agentID string) string {
 	assert.NotEmpty(agentID, "swarm.AgentBranchName: agentID is empty")
 	return AgentBranchPrefix + strings.TrimSpace(agentID)
+}
+
+// AgentBranchTags returns the libfossil branch-tag pair that lands a
+// synthetic-slot commit on `agent/<full-agent-id>` instead of trunk.
+// ADR 0050 §"Branch model" + #288. The pair is:
+//
+//   - `branch=<name>`     — the libfossil branch propagation tag.
+//   - `sym-<name>=*`      — the symbolic-name tag that lets the branch
+//     resolve via fossil's name-lookup (`fossil whatis`, `bones apply
+//     --slot=<name>`).
+//
+// Both tags are required; the upstream EdgeSync/libfossil
+// implementation rejects the pair as malformed if either is missing
+// (see leaf v0.0.11 `TestAgent_Commit_BranchTags_LandsOnNamedBranch`).
+//
+// Caller is responsible for non-empty agentID; AgentBranchName panics
+// on empty input.
+func AgentBranchTags(agentID string) []TagSpec {
+	name := AgentBranchName(agentID)
+	return []TagSpec{
+		{Name: "branch", Value: name},
+		{Name: "sym-" + name, Value: "*"},
+	}
 }
 
 // IsSyntheticSlot reports whether slot is a synthetic agent slot
