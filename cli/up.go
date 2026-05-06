@@ -14,6 +14,7 @@ import (
 	"github.com/danmestas/bones/internal/githook"
 	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/scaffoldver"
+	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/telemetry"
 	"github.com/danmestas/bones/internal/workspace"
 )
@@ -61,6 +62,18 @@ func runUp(cwd string, verbose bool) (err error) {
 		return err
 	}
 	wsDir := info.WorkspaceDir
+
+	// Migration check (ADR 0050 §"Migration: refuse-to-start on stale
+	// `.claude/worktrees/`"): refuse to proceed when legacy
+	// `.claude/worktrees/agent-*/` dirs are present. The pre-ADR-0050
+	// isolation surface no longer matches the synthetic slot
+	// machinery; silent migration would leave the operator with
+	// disconnected git branches. Recovery: `bones cleanup
+	// --all-worktrees` (#265).
+	if mErr := swarm.CheckStaleClaudeWorktrees(wsDir); mErr != nil {
+		err = mErr
+		return err
+	}
 
 	// Open the audit log under <wsDir>/.bones/up.log (#171). Defer Close
 	// so the exit code + duration land regardless of which step fails
