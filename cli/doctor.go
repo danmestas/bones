@@ -206,6 +206,7 @@ func runBypassReportTo(w io.Writer, cwd string) (warns int, err error) {
 	}
 
 	warns += checkScaffoldGates(w, cwd)
+	warns += checkManifestIntegrity(w, cwd)
 	warns += checkOrphanHubs(w)
 	warns += checkDuplicateHubs(w, cwd)
 	warns += checkStaleSlotDirs(w, cwd)
@@ -404,6 +405,105 @@ func checkDuplicateHubs(w io.Writer, cwd string) int {
 			e.HubPID, e.HubURL, e.NATSURL, age)
 	}
 	return len(dups)
+}
+
+// checkManifestIntegrity reads .claude/skills/.bones-manifest.json
+// and verifies the non-skill scaffold footprint it records (issue
+// #262). Three drift modes:
+//
+//   - tamper: a file in Scaffolded has a different sha256 on disk
+//   - partial: a file in Scaffolded is missing on disk entirely
+//   - mid-version drift: manifest.Version != current binary version
+//
+// The bones-owned hook subset of .claude/settings.json is also
+// hashed (manifest.SettingsHooksSHA256) and compared against the
+// current on-disk hash. Divergence here means somebody has hand-
+// edited or deleted bones's hook entries since `bones up`; doctor
+// surfaces it as a WARN so the operator can re-run `bones up` to
+// restore the canonical set.
+//
+// Read-only and silent on workspaces without a manifest (legacy
+// pre-issue-#262 installs and pre-`bones up` directories).
+//
+// Returns the count of WARN-class findings emitted.
+func checkManifestIntegrity(w io.Writer, cwd string) int {
+	manifest, err := readManifest(cwd)
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "  WARN  read bones manifest: %v\n", err)
+		return 1
+	}
+	if manifest == nil {
+		// No manifest at all — either a fresh workspace before
+		// `bones up`, or a legacy install whose manifest predates
+		// issue #262. Either way, nothing to verify against.
+		return 0
+	}
+
+	var warns int
+
+	// Mid-version drift: manifest stamped by an older bones than
+	// the current binary. scaffoldver already surfaces stamp drift
+	// against `.bones/scaffold_version`; the manifest's Version
+	// field is a second witness — useful when the stamp file got
+	// nuked but the manifest survived.
+	if manifest.Version != "" {
+		bin := version.Get()
+		if scaffoldver.Drifted(manifest.Version, bin) {
+			_, _ = fmt.Fprintf(w,
+				"  WARN  bones manifest v%s, binary v%s — run `bones up` to refresh\n",
+				manifest.Version, bin)
+			warns++
+		}
+	}
+
+	// Per-file tamper / missing checks for the non-skill entries.
+	for _, sf := range manifest.Scaffolded {
+		full := filepath.Join(cwd, filepath.FromSlash(sf.Path))
+		data, err := os.ReadFile(full)
+		if errors.Is(err, fs.ErrNotExist) {
+			_, _ = fmt.Fprintf(w,
+				"  WARN  bones manifest claims %s but it is missing — "+
+					"partial scaffold; run `bones up`\n",
+				sf.Path)
+			warns++
+			continue
+		}
+		if err != nil {
+			_, _ = fmt.Fprintf(w,
+				"  WARN  read %s: %v\n", sf.Path, err)
+			warns++
+			continue
+		}
+		if got := hashHex(data); got != sf.SHA256 {
+			_, _ = fmt.Fprintf(w,
+				"  WARN  bones manifest tamper: %s sha256 drift (manifest=%s on-disk=%s)\n",
+				sf.Path, short(sf.SHA256), short(got))
+			warns++
+		}
+	}
+
+	// Bones-owned hook subset of .claude/settings.json. Empty
+	// recorded value means a legacy manifest from a pre-#262
+	// binary — skip silently rather than false-positive.
+	if manifest.SettingsHooksSHA256 != "" {
+		got, herr := bonesOwnedHooksHashFromDisk(cwd)
+		if herr != nil {
+			_, _ = fmt.Fprintf(w,
+				"  WARN  read bones-owned hooks: %v\n", herr)
+			warns++
+		} else if got != manifest.SettingsHooksSHA256 {
+			_, _ = fmt.Fprintf(w,
+				"  WARN  bones manifest tamper: .claude/settings.json bones-owned hooks "+
+					"sha256 drift (manifest=%s on-disk=%s) — run `bones up` to restore\n",
+				short(manifest.SettingsHooksSHA256), short(got))
+			warns++
+		}
+	}
+
+	if warns == 0 && len(manifest.Scaffolded) > 0 {
+		_, _ = fmt.Fprintln(w, "  OK    bones manifest matches on-disk scaffold")
+	}
+	return warns
 }
 
 // checkStaleSlotDirs reports per-slot directories under

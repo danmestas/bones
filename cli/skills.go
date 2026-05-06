@@ -48,6 +48,19 @@ var bonesOwnedSkills = []string{
 	"using-bones-swarm",
 }
 
+// scaffoldFile records a single bones-written file outside the skills
+// tree (e.g. .bones/agent.id, .bones/scaffold_version). Path is the
+// workspace-relative slash-separated path; SHA256 is hex of the bytes
+// bones observed when stamping the manifest; Size is the byte length
+// of those same bytes. These three together are what `bones doctor`
+// uses to detect tamper / partial-scaffold drift on the non-skill
+// scaffold footprint (issue #262).
+type scaffoldFile struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
 // skillManifest is the on-disk schema for manifestRel. Keys in Files
 // are workspace-relative paths (always forward-slash separated, even
 // on Windows, so a manifest written on one host is portable).
@@ -55,6 +68,14 @@ var bonesOwnedSkills = []string{
 // This is the load-bearing data structure for issue #210: install
 // stamps the bytes it wrote, uninstall trusts that stamp regardless
 // of how the embedded bundle has evolved between the two events.
+//
+// Issue #262 extended this manifest to also cover bones-written files
+// outside the skills tree (.bones/agent.id, .bones/scaffold_version)
+// and the bones-owned hook subset of .claude/settings.json. The
+// non-skill entries live in Scaffolded (with size + sha256) and
+// SettingsHooksSHA256 — sibling fields rather than crammed into
+// Files because removeBonesSkills's per-file remove logic keys off
+// Files entries existing iff they were skill files.
 type skillManifest struct {
 	// Version is the bones binary version that wrote the manifest.
 	// Diagnostic only — not used in the remove decision.
@@ -65,6 +86,33 @@ type skillManifest struct {
 	// against this map: match → bones-owned + unedited (remove);
 	// mismatch → user-edited (preserve + warn).
 	Files map[string]string `json:"files"`
+
+	// Scaffolded records non-skill files bones writes during `bones
+	// up` (.bones/agent.id, .bones/scaffold_version). doctor uses
+	// these entries to detect tamper (sha256 drift) and partial
+	// scaffold (file missing on disk). Empty on legacy manifests
+	// written by pre-#262 binaries.
+	Scaffolded []scaffoldFile `json:"scaffolded,omitempty"`
+
+	// SettingsHooksSHA256 is the SHA-256 hex of the canonical-JSON
+	// rendering of the bones-owned hook subset of
+	// .claude/settings.json — only the hook entries bones installs
+	// (per bonesOwnedHookCommands). User-added hooks alongside
+	// bones's are NOT tamper-detected (they aren't bones's to claim).
+	// Empty on legacy manifests.
+	SettingsHooksSHA256 string `json:"settings_hooks_sha256,omitempty"`
+}
+
+// bonesOwnedHookCommands lists the (event, command) pairs bones
+// installs into .claude/settings.json. The integrity hash recorded in
+// the manifest is computed over a canonical rendering of just these
+// entries — not the whole settings.json, because the user is free to
+// add their own hooks alongside bones's, and the manifest must not
+// false-positive on those.
+var bonesOwnedHookCommands = []struct{ Event, Command string }{
+	{"SessionStart", "bones tasks prime --json"},
+	{"SessionStart", "bones hub start"},
+	{"PreCompact", "bones tasks prime --json"},
 }
 
 // writeBonesSkills materializes the embedded skill bundle into
@@ -79,16 +127,17 @@ type skillManifest struct {
 // New files written are tracked in fp.FilesWritten using their
 // workspace-relative path so the up summary can render them.
 //
-// After all files are processed, writeManifest stamps the install-time
-// provenance record (manifestRel) so `bones down` can recognize this
-// install's bones-owned files even after a binary upgrade swaps the
-// embedded bundle out from under us (issue #210).
+// Stamping the install-time manifest is now the responsibility of
+// scaffoldOrchestrator (issue #262) — it runs after every scaffold
+// step finishes so the manifest can record .bones/scaffold_version,
+// .bones/agent.id, and the bones-owned hook subset of
+// .claude/settings.json alongside the skill files.
 func writeBonesSkills(root string, fp *scaffoldFootprint) error {
 	skillsDir := filepath.Join(root, ".claude", "skills")
 	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir skills: %w", err)
 	}
-	if err := fs.WalkDir(skillsFS, skillsRoot, func(path string, d fs.DirEntry, err error) error {
+	return fs.WalkDir(skillsFS, skillsRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -101,10 +150,7 @@ func writeBonesSkills(root string, fp *scaffoldFootprint) error {
 		}
 		dst := filepath.Join(skillsDir, rel)
 		return materializeSkillFile(skillsFS, path, dst, root, fp)
-	}); err != nil {
-		return err
-	}
-	return writeManifest(root)
+	})
 }
 
 // writeManifest stamps the install-time provenance record at
@@ -134,8 +180,6 @@ func writeBonesSkills(root string, fp *scaffoldFootprint) error {
 //
 // The manifest itself is excluded from its own contents.
 func writeManifest(root string) error {
-	skillsDir := filepath.Join(root, ".claude", "skills")
-
 	prev, err := readManifest(root)
 	if err != nil {
 		return err
@@ -145,61 +189,25 @@ func writeManifest(root string) error {
 		previousHashes = prev.Files
 	}
 
-	// Build the embed-side hash table once so the per-file decision
-	// below is a constant-time lookup rather than re-reading the
-	// embed FS for every on-disk file.
-	embedHashes, err := buildEmbedHashes()
+	files, err := buildSkillFileHashes(root, previousHashes)
 	if err != nil {
 		return err
 	}
-
+	scaff, err := buildScaffoldedEntries(root)
+	if err != nil {
+		return err
+	}
+	hooksHash, err := bonesOwnedHooksHashFromDisk(root)
+	if err != nil {
+		return err
+	}
 	m := skillManifest{
-		Version: bonesVersion(),
-		Files:   map[string]string{},
+		Version:             bonesVersion(),
+		Files:               files,
+		Scaffolded:          scaff,
+		SettingsHooksSHA256: hooksHash,
 	}
-	for _, name := range bonesOwnedSkills {
-		dir := filepath.Join(skillsDir, name)
-		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				if errors.Is(err, fs.ErrNotExist) {
-					return fs.SkipDir
-				}
-				return err
-			}
-			if d.IsDir() {
-				return nil
-			}
-			rel, rerr := filepath.Rel(root, path)
-			if rerr != nil {
-				return fmt.Errorf("rel %s: %w", path, rerr)
-			}
-			relSlash := filepath.ToSlash(rel)
 
-			// Sticky-ownership branch: previously claimed → keep
-			// the previous hash. Even if the user has since edited
-			// the file (bytes diverge), the manifest tracks what
-			// bones installed so down can detect the divergence.
-			if h, ok := previousHashes[relSlash]; ok {
-				m.Files[relSlash] = h
-				return nil
-			}
-
-			data, rerr := os.ReadFile(path)
-			if rerr != nil {
-				return fmt.Errorf("read %s: %w", path, rerr)
-			}
-			cur := hashHex(data)
-			embedRel := strings.TrimPrefix(relSlash, ".claude/skills/")
-			if want, ok := embedHashes[embedRel]; ok && cur == want {
-				m.Files[relSlash] = cur
-			}
-			// else: user-pre-existing, not bones-owned, skip.
-			return nil
-		})
-		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-	}
 	out, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal manifest: %w", err)
@@ -209,6 +217,177 @@ func writeManifest(root string) error {
 		return fmt.Errorf("mkdir manifest dir: %w", err)
 	}
 	return os.WriteFile(path, append(out, '\n'), 0o644)
+}
+
+// buildSkillFileHashes walks the bones-owned skill dirs under
+// .claude/skills/<bones-owned skill>/ and returns the path → hash
+// map that goes into manifest.Files. The selection rule (sticky
+// previous-manifest entry, else current-embed match, else skip) is
+// the issue-#210 contract carried verbatim from the prior inline
+// implementation.
+func buildSkillFileHashes(
+	root string, previousHashes map[string]string,
+) (map[string]string, error) {
+	skillsDir := filepath.Join(root, ".claude", "skills")
+	embedHashes, err := buildEmbedHashes()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, name := range bonesOwnedSkills {
+		dir := filepath.Join(skillsDir, name)
+		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+			return walkSkillFile(path, d, err, root, previousHashes, embedHashes, out)
+		})
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// walkSkillFile is the per-file decision body for buildSkillFileHashes.
+// Extracted from the WalkDir callback to keep buildSkillFileHashes
+// under the funlen cap.
+func walkSkillFile(
+	path string, d fs.DirEntry, err error,
+	root string,
+	previousHashes, embedHashes, out map[string]string,
+) error {
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fs.SkipDir
+		}
+		return err
+	}
+	if d.IsDir() {
+		return nil
+	}
+	rel, rerr := filepath.Rel(root, path)
+	if rerr != nil {
+		return fmt.Errorf("rel %s: %w", path, rerr)
+	}
+	relSlash := filepath.ToSlash(rel)
+
+	// Sticky-ownership branch: previously claimed → keep the
+	// previous hash. Even if the user has since edited the file
+	// (bytes diverge), the manifest tracks what bones installed so
+	// down can detect the divergence.
+	if h, ok := previousHashes[relSlash]; ok {
+		out[relSlash] = h
+		return nil
+	}
+
+	data, rerr := os.ReadFile(path)
+	if rerr != nil {
+		return fmt.Errorf("read %s: %w", path, rerr)
+	}
+	cur := hashHex(data)
+	embedRel := strings.TrimPrefix(relSlash, ".claude/skills/")
+	if want, ok := embedHashes[embedRel]; ok && cur == want {
+		out[relSlash] = cur
+	}
+	// else: user-pre-existing, not bones-owned, skip.
+	return nil
+}
+
+// scaffoldedTrackedPaths is the canonical list of non-skill files
+// `bones up` writes outside .claude/skills/. Adding a path here
+// extends doctor's tamper / partial-scaffold detection (issue #262)
+// to that file. Paths must be slash-separated workspace-relative.
+//
+// Excluded by design:
+//   - .bones/up.log (rolling audit log, content changes every run)
+//   - .bones/hub.pid (lifecycle artifact, only present while hub is
+//     running)
+//   - .claude/settings.json (whole file is user+bones territory; the
+//     bones-owned hook subset is hashed separately as
+//     SettingsHooksSHA256)
+var scaffoldedTrackedPaths = []string{
+	".bones/agent.id",
+	".bones/scaffold_version",
+}
+
+// buildScaffoldedEntries hashes each path in scaffoldedTrackedPaths
+// and returns the resulting scaffoldFile slice. Files that don't
+// exist on disk yet (e.g. the manifest is being stamped before that
+// step ran) are silently omitted — the manifest will simply be
+// missing the entry and doctor will flag the absence on next read.
+// Hard read errors propagate so callers can surface them.
+func buildScaffoldedEntries(root string) ([]scaffoldFile, error) {
+	var out []scaffoldFile
+	for _, rel := range scaffoldedTrackedPaths {
+		full := filepath.Join(root, filepath.FromSlash(rel))
+		data, err := os.ReadFile(full)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", rel, err)
+		}
+		out = append(out, scaffoldFile{
+			Path:   rel,
+			SHA256: hashHex(data),
+			Size:   int64(len(data)),
+		})
+	}
+	return out, nil
+}
+
+// bonesOwnedHooksHashFromDisk reads .claude/settings.json, extracts
+// the bones-owned hook subset (per bonesOwnedHookCommands), and
+// returns the SHA-256 hex of its canonical rendering. Returns an
+// empty string + nil error when settings.json is absent — that
+// matches a workspace where mergeSettings has not yet run.
+func bonesOwnedHooksHashFromDisk(root string) (string, error) {
+	path := filepath.Join(root, ".claude", "settings.json")
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read settings.json: %w", err)
+	}
+	var settings map[string]any
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &settings); err != nil {
+			return "", fmt.Errorf("parse settings.json: %w", err)
+		}
+	}
+	hooks, _ := settings["hooks"].(map[string]any)
+	return hashBonesOwnedHooks(hooks), nil
+}
+
+// hashBonesOwnedHooks computes the canonical SHA-256 hex of the
+// bones-owned hook subset. The canonical form is JSON-serialized as
+// a stable []map{event, command} list, sorted by (event, command),
+// so two manifests with semantically equivalent hooks produce the
+// same hash regardless of map iteration order. Hooks bones doesn't
+// claim are ignored — the subset never includes user-added entries.
+//
+// The function returns the empty string only when zero bones-owned
+// hook commands are present on disk (e.g. user hand-pruned them).
+// In that case doctor compares "" against the manifest's recorded
+// hash and surfaces the divergence as a tamper finding.
+func hashBonesOwnedHooks(hooks map[string]any) string {
+	type entry struct {
+		Event   string `json:"event"`
+		Command string `json:"command"`
+	}
+	var present []entry
+	for _, want := range bonesOwnedHookCommands {
+		if hookCommandPresent(hooks, want.Event, want.Command) {
+			present = append(present, entry{Event: want.Event, Command: want.Command})
+		}
+	}
+	sort.Slice(present, func(i, j int) bool {
+		if present[i].Event != present[j].Event {
+			return present[i].Event < present[j].Event
+		}
+		return present[i].Command < present[j].Command
+	})
+	out, _ := json.Marshal(present)
+	return hashHex(out)
 }
 
 // buildEmbedHashes returns a map from skill-relative path (e.g.
