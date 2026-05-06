@@ -176,7 +176,6 @@ Manual fallback (only if `bones down` fails or the user wants to inspect each st
 3. For each of `AGENTS.md` and `CLAUDE.md`: if the file is bones-owned (whole file, or a CLAUDE.md symlink to AGENTS.md), `rm -f` it; otherwise delete the `<!-- BONES:BEGIN --> … <!-- BONES:END -->` block (markers and all) and leave the rest
 4. Edit `.claude/settings.json` to remove the bones-owned hook entries (the ones whose `command` is `bones hub start` or `bones tasks prime --json`); leave unrelated hooks alone
 5. `rm -rf .fslckout .fossil-settings/` — Fossil checkout (working files are not stored here)
-6. Optionally remove `.fslckout`, `.fossil-settings/`, `.bones/` lines from `.gitignore`
 
 Persistence note: NATS task history and Fossil commit history both live inside `.bones/` and are removed by Step 2. Mention this before the user runs it so they can archive intentionally.
 

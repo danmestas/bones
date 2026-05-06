@@ -84,9 +84,6 @@ commits into the working tree as ordinary file changes. From there
 `git add/commit/push` is the standard flow; PR creation stays
 caller-driven.
 
-`agent-init` appends `.fslckout`, `.fossil-settings/`, and
-`.bones/` to the host project's root `.gitignore` idempotently.
-
 ### Architectural invariants
 
 1. One commit code path: `(*Leaf).Commit` only.
