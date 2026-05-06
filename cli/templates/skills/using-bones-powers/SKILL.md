@@ -42,8 +42,8 @@ bones-powers skills assume you understand these concepts. If any are unfamiliar,
 
 | Term | Meaning |
 |---|---|
-| **workspace** | A directory bootstrapped by `bones up`. Marker: `.bones/repo.fossil`. |
-| **hub** | The Fossil repo at the center of the workspace. Holds trunk and all leaves. |
+| **workspace** | A directory bootstrapped by `bones up`. Marker: a `.bones/` directory at the root. |
+| **hub** | The repo at the center of the workspace. Holds trunk and all leaves. |
 | **trunk** | The mainline branch in the hub. Equivalent to git's `main`. |
 | **slot** | A named worker role (e.g. `alpha`, `frontend`, `infra`). Tasks are routed by slot. |
 | **leaf** | A slot's working session — a worktree + claimed task + open hub branch. Created by `bones swarm join`. |
