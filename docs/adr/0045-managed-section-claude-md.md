@@ -1,5 +1,7 @@
 # ADR 0045: Managed-section model for user-authored CLAUDE.md / AGENTS.md
 
+**Status:** Superseded by #252 (2026-05-06). `bones up` no longer touches AGENTS.md or CLAUDE.md, so the managed-section model has no surface to manage.
+
 ## Context
 
 ADR 0042 made AGENTS.md the universal channel and CLAUDE.md a symlink to it. The migration strategy was "wipe and rewrite": `bones up` owns these two files outright. To prevent silent destruction of user content, the scaffold gate refuses to proceed when CLAUDE.md or AGENTS.md exists in any shape it did not produce — the only accepted shapes are (a) absent, (b) bones-owned outright (a CLAUDE.md symlink to AGENTS.md, a regular-file fallback whose first lines carry the bones marker, or an AGENTS.md whose first line carries the marker).

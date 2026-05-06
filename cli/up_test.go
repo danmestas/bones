@@ -207,10 +207,6 @@ func TestScaffoldOrchestrator_RecoversFromHalfInstall(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(bones, "scaffold_version")); err != nil {
 		t.Errorf("scaffold_version stamp not written after recovery: %v", err)
 	}
-	// AGENTS.md present.
-	if _, err := os.Stat(filepath.Join(dir, "AGENTS.md")); err != nil {
-		t.Errorf("AGENTS.md not written after recovery: %v", err)
-	}
 	// settings.json now has the full hook set.
 	data, err := os.ReadFile(filepath.Join(settingsDir, "settings.json"))
 	if err != nil {

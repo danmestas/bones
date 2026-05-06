@@ -22,11 +22,16 @@ import (
 //  1. workspace init (idempotent — joins if already initialized)
 //  2. orchestrator scaffold (skills, hooks, scaffold version)
 //  3. git pre-commit hook install
-//  4. agent guidance write
-//  5. Fossil drift check (warning only)
+//  4. Fossil drift check (warning only)
 //
 // Per ADR 0041 the hub is no longer started here. Any verb that needs the
 // hub auto-starts it lazily via workspace.Join.
+//
+// Per issue #252, bones up no longer writes AGENTS.md, CLAUDE.md, or
+// .bones/AGENT_GUIDANCE.md at the workspace root — agent-facing guidance
+// lives entirely under .claude/skills/ and the SessionStart hook entries
+// in .claude/settings.json. Cross-harness compatibility (an AGENTS.md
+// universal channel) is deferred to a later pass.
 //
 // Per ADR 0046 (#146), `bones up` is also the recovery path for a
 // half-installed workspace: when step 1 has previously succeeded but
@@ -86,16 +91,6 @@ func runUp(cwd string, verbose bool) (err error) {
 		return err
 	}
 
-	guidanceWritten, gErr := writeAgentGuidance(wsDir)
-	if gErr != nil {
-		err = fmt.Errorf("agent guidance: %w", gErr)
-		return err
-	}
-	if guidanceWritten {
-		fp.FilesWritten = append(fp.FilesWritten,
-			filepath.Join(".bones", "AGENT_GUIDANCE.md"))
-	}
-
 	if dErr := checkFossilDrift(wsDir); dErr != nil {
 		logger.Warnf("up: WARN  %v", dErr)
 	}
@@ -124,10 +119,6 @@ func emitFootprintSummary(logger *upLogger, fp scaffoldFootprint) {
 	if len(fp.FilesWritten) > 0 {
 		emitted = true
 		logger.Infof("up:   wrote %s", strings.Join(fp.FilesWritten, ", "))
-	}
-	for _, path := range fp.MarkerBlockTargets {
-		emitted = true
-		logger.Infof("up:   appended bones marker block to %s", path)
 	}
 	if total := fp.hooksAdded(); total > 0 {
 		emitted = true
@@ -245,64 +236,6 @@ func installGitHook(wsDir string, verbose bool, logger *upLogger) error {
 	}
 	return nil
 }
-
-// writeAgentGuidance creates .bones/AGENT_GUIDANCE.md so subagents
-// that don't read CLAUDE.md still pick up workspace-level direction
-// to use bones rather than direct git. The SessionStart hook reads
-// this file and injects it into agent context.
-//
-// Returns (true, nil) when the file was just created (a fresh up wrote
-// it), (false, nil) when it already existed (re-run no-op). The boolean
-// is consumed by runUp's footprint summary so default-mode output can
-// reflect whether AGENT_GUIDANCE.md is part of this run's diff.
-func writeAgentGuidance(wsDir string) (bool, error) {
-	path := filepath.Join(wsDir, ".bones", "AGENT_GUIDANCE.md")
-	if _, err := os.Stat(path); err == nil {
-		return false, nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return false, err
-	}
-	if err := os.WriteFile(path, []byte(agentGuidance), 0o644); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-const agentGuidance = `# Bones is active in this workspace
-
-A bones leaf is running. Commits go through bones, not direct git.
-
-## What that means for you
-
-If you are about to commit work, use:
-
-    bones swarm commit -m "your message"
-
-Do **not** run ` + "`git commit`" + ` or ` + "`git push`" + ` directly. The
-pre-commit hook will refuse you, and the right answer is to fix
-your workflow rather than bypass.
-
-If bones state looks stale (fossil tip behind git HEAD, hub
-unreachable, etc.), run:
-
-    bones doctor
-
-and report what it says. **Do not silently bypass.** If you are
-absolutely certain the bypass is correct (rare), use
-` + "`git commit --no-verify`" + ` so the override is explicit and
-audited in your tool-call history.
-
-## Why bones exists
-
-Bones linearizes concurrent agent commits onto a single trunk via
-autosync, then gates apply to your git tree behind a user sign-off.
-Skipping bones loses both properties: parallel agents collide, and
-unreviewed commits leak directly to your branches.
-
-See ADR 0034 (` + "`docs/adr/0034-bypass-prevention.md`" + ` in the bones
-repo) for the full rationale.
-`
 
 // checkFossilDrift compares the bones trunk fossil's tip against
 // git HEAD. If they differ, it returns a non-fatal error suitable

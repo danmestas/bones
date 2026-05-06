@@ -1,5 +1,7 @@
 # ADR 0042: AGENTS.md as the harness-agnostic scaffolding channel
 
+**Status:** Superseded by #252 (2026-05-06). `bones up` no longer scaffolds AGENTS.md or CLAUDE.md; cross-harness compatibility is deferred until the Claude-only path is stable. Skills + `.claude/settings.json` hooks remain the scaffolded surface.
+
 ## Context
 
 `bones up` today scaffolds Claude Code-specific artifacts: skill markdown trees under `.claude/skills/{orchestrator,subagent,uninstall-bones}/` and event-driven hooks injected into `.claude/settings.json`. Every other harness (Cursor, Codex CLI, Gemini CLI, Aider, Zed, Warp, JetBrains Junie, Devin, etc.) ignores these — they read their own configuration files and rule formats. The repo's stated design intent is harness-agnostic, so the scaffolding is the gap.
