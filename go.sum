@@ -10,8 +10,8 @@ github.com/cenkalti/backoff/v5 v5.0.3 h1:ZN+IMa753KfX5hd8vVaMixjnqRZ3y8CuJKRKj1x
 github.com/cenkalti/backoff/v5 v5.0.3/go.mod h1:rkhZdG3JZukswDf7f0cwqPNk4K0sa+F97BxZthm/crw=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
-github.com/danmestas/EdgeSync v0.0.14 h1:1gMy6GdO/aRAFhLKhf1J95sZVdWg7cxVyaSWi3UxcoM=
-github.com/danmestas/EdgeSync v0.0.14/go.mod h1:ROwe+oqIDldUr+TTF7yCXHly9S+qSfGjISMlvpy26dU=
+github.com/danmestas/EdgeSync v0.0.15 h1:mZGrYRvGkI3pt0qUTeQo3mKYRj2NM+85YBHqFomQuBA=
+github.com/danmestas/EdgeSync v0.0.15/go.mod h1:ROwe+oqIDldUr+TTF7yCXHly9S+qSfGjISMlvpy26dU=
 github.com/danmestas/EdgeSync/bridge v0.0.3 h1:ebLmh2sXVGWAMGthVNYb0JVpabrK3mr8A39XSgfZv6Y=
 github.com/danmestas/EdgeSync/bridge v0.0.3/go.mod h1:MQvPfVF+9qo5e+Zwb2LzL+bTScLgaUr4EmOdK/rqBDc=
 github.com/danmestas/EdgeSync/leaf v0.0.10 h1:NEA1pV6K3VAPfltG4ZlYuYDuNLBCOa5y5RzjwM1EEts=
