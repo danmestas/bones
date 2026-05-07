@@ -36,6 +36,7 @@ type TasksCmd struct {
 	Dispatch  TasksDispatchCmd  `cmd:"" hidden:"" help:"Dispatch parent/worker (hub-only)"`
 	Aggregate TasksAggregateCmd `cmd:"" help:"Aggregate per-slot task summary"`
 	Compact   TasksCompactCmd   `cmd:"" help:"Compact eligible closed tasks (ADR 0016)"`
+	Ready     TasksReadyCmd     `cmd:"" help:"List unblocked, unclaimed open tasks"`
 }
 
 // TasksDispatchCmd groups dispatch parent/worker subcommands.
