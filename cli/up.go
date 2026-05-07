@@ -108,17 +108,7 @@ func runUp(cwd string, verbose, stealth bool) (err error) {
 		return err
 	}
 
-	gitignoreAdded, gitignoreErr := ensureBonesGitignore(wsDir, stealth)
-	if gitignoreErr != nil {
-		// Non-fatal: a read-only filesystem or gitignore the operator
-		// pinned with chmod 444 must not block scaffold. Surface as a
-		// warning so the host-local agent.id risk is at least visible.
-		logger.Warnf("up: WARN  gitignore: %v", gitignoreErr)
-	}
-
-	if dErr := checkFossilDrift(wsDir); dErr != nil {
-		logger.Warnf("up: WARN  %v", dErr)
-	}
+	gitignoreAdded := runPostScaffoldChecks(wsDir, stealth, logger)
 
 	if verbose {
 		logger.Infof("up: workspace ready. Run any verb (e.g., `bones tasks status`) " +
@@ -133,6 +123,39 @@ func runUp(cwd string, verbose, stealth bool) (err error) {
 	}
 	printHubStatus(logger.Tee(os.Stdout), wsDir)
 	return nil
+}
+
+// runPostScaffoldChecks runs the workspace-wide checks that follow
+// orchestrator scaffold + git-hook install. None of them should
+// block bones up — the scaffold already landed; these are
+// informational. Returns the gitignore entries added so the caller
+// can surface them in the footprint summary.
+//
+// Three checks today:
+//   - ensureBonesGitignore (#306): adds .bones/ + skill manifest entries.
+//   - trackedDeletedFiles (#303): warns about tracked-but-missing files.
+//   - checkFossilDrift: warns when fossil tip diverges from git HEAD.
+func runPostScaffoldChecks(
+	wsDir string, stealth bool, logger *upLogger,
+) []string {
+	gitignoreAdded, gitignoreErr := ensureBonesGitignore(wsDir, stealth)
+	if gitignoreErr != nil {
+		// Non-fatal: a read-only filesystem or gitignore the operator
+		// pinned with chmod 444 must not block scaffold. Surface as a
+		// warning so the host-local agent.id risk is at least visible.
+		logger.Warnf("up: WARN  gitignore: %v", gitignoreErr)
+	}
+
+	if missing, _ := trackedDeletedFiles(wsDir); len(missing) > 0 {
+		logger.Warnf("up: WARN  %s",
+			formatTrackedDeletedWarning(missing))
+	}
+
+	if dErr := checkFossilDrift(wsDir); dErr != nil {
+		logger.Warnf("up: WARN  %v", dErr)
+	}
+
+	return gitignoreAdded
 }
 
 // emitFootprintSummary surfaces per-action file/hook changes from the
