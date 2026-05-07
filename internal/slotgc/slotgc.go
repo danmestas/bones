@@ -18,6 +18,23 @@ import (
 	"time"
 )
 
+// bonesDirEnvVar mirrors workspace.BonesDirEnvVar. Inlined here to
+// avoid the import cycle workspace → hub → slotgc.
+const bonesDirEnvVar = "BONES_DIR"
+
+// bonesDir returns the bones-state directory for workspaceDir. Honors
+// BONES_DIR (issue #291) when set. Mirrors workspace.BonesDir;
+// duplicated to avoid an import cycle.
+func bonesDir(workspaceDir string) string {
+	if env := os.Getenv(bonesDirEnvVar); env != "" {
+		if abs, err := filepath.Abs(env); err == nil {
+			return abs
+		}
+		return env
+	}
+	return filepath.Join(workspaceDir, ".bones")
+}
+
 // DeadSlots lists slot names under .bones/swarm/<slot>/ whose
 // leaf.pid file points at a process that no longer exists. Slots
 // without a pid file (mid-creation, or already partially cleaned)
@@ -26,7 +43,7 @@ import (
 // Read-only. Returns nil + nil when the swarm root doesn't exist
 // (workspace never used swarm verbs).
 func DeadSlots(workspaceDir string) ([]string, error) {
-	swarmRoot := filepath.Join(workspaceDir, ".bones", "swarm")
+	swarmRoot := filepath.Join(bonesDir(workspaceDir), "swarm")
 	entries, err := os.ReadDir(swarmRoot)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -63,7 +80,7 @@ func PruneDead(workspaceDir string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	swarmRoot := filepath.Join(workspaceDir, ".bones", "swarm")
+	swarmRoot := filepath.Join(bonesDir(workspaceDir), "swarm")
 	pruned := make([]string, 0, len(dead))
 	var firstErr error
 	for _, slot := range dead {
@@ -85,7 +102,7 @@ func PruneDead(workspaceDir string) ([]string, error) {
 //
 // Read-only. Returns nil + nil when the swarm root doesn't exist.
 func LiveSlots(workspaceDir string) ([]Slot, error) {
-	swarmRoot := filepath.Join(workspaceDir, ".bones", "swarm")
+	swarmRoot := filepath.Join(bonesDir(workspaceDir), "swarm")
 	entries, err := os.ReadDir(swarmRoot)
 	if err != nil {
 		if os.IsNotExist(err) {

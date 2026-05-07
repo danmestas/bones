@@ -13,6 +13,7 @@ import (
 
 	"github.com/danmestas/bones/internal/assert"
 	"github.com/danmestas/bones/internal/jskv"
+	"github.com/danmestas/bones/internal/workspace"
 )
 
 // DefaultBucketName is the JetStream KV bucket holding swarm sessions.
@@ -319,7 +320,7 @@ func (s *Sessions) List(ctx context.Context) ([]Session, error) {
 func SlotDir(workspaceDir, slot string) string {
 	assert.NotEmpty(workspaceDir, "swarm.SlotDir: workspaceDir is empty")
 	assert.NotEmpty(slot, "swarm.SlotDir: slot is empty")
-	return filepath.Join(workspaceDir, ".bones", "swarm", slot)
+	return filepath.Join(workspace.BonesDir(workspaceDir), "swarm", slot)
 }
 
 // SlotWorktree returns the slot's worktree path. Equivalent to

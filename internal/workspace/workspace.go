@@ -132,7 +132,7 @@ func initLogic(ctx context.Context, cwd string) (Info, error) {
 		}
 	}
 
-	markerDir := filepath.Join(cwd, markerDirName)
+	markerDir := BonesDir(cwd)
 	if err := os.MkdirAll(markerDir, 0o755); err != nil {
 		return Info{}, fmt.Errorf("mkdir .bones: %w", err)
 	}
@@ -231,7 +231,7 @@ func joinLogic(ctx context.Context, cwd string) (Info, error) {
 		return Info{}, fmt.Errorf(
 			"hub URLs not recorded after start in %s; check %s",
 			workspaceDir,
-			filepath.Join(workspaceDir, markerDirName, "hub.log"))
+			filepath.Join(BonesDir(workspaceDir), "hub.log"))
 	}
 
 	return Info{
@@ -251,7 +251,7 @@ func joinLogic(ctx context.Context, cwd string) (Info, error) {
 // hub liveness without going through Join, whose auto-start branch
 // would contradict the lazy-hub promise printed by `bones up`.
 func HubIsHealthy(workspaceDir string) bool {
-	if !pidFileLive(filepath.Join(workspaceDir, markerDirName, "hub.pid")) {
+	if !pidFileLive(filepath.Join(BonesDir(workspaceDir), "hub.pid")) {
 		return false
 	}
 	url := hub.FossilURL(workspaceDir)

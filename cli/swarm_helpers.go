@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/danmestas/bones/internal/logwriter"
+	"github.com/danmestas/bones/internal/workspace"
 )
 
 // timeNow is the time source for swarm verbs. Plain wrapper today;
@@ -22,7 +23,7 @@ func timeNow() time.Time {
 // Uses logwriter.AppendOnce directly — per-slot logs never rotate, so the
 // stateful Writer struct's rotation bookkeeping is wasted at this call site.
 func appendSlotEvent(workspaceDir, slot string, e logwriter.Event) {
-	slotDir := filepath.Join(workspaceDir, ".bones", "swarm", slot)
+	slotDir := filepath.Join(workspace.BonesDir(workspaceDir), "swarm", slot)
 	path := logwriter.SlotLogPath(slotDir, slot)
 	if err := logwriter.AppendOnce(path, e); err != nil {
 		slog.Warn("logwriter append failed (non-fatal)", "slot", slot, "err", err)

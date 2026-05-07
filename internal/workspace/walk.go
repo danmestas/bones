@@ -36,10 +36,30 @@ func FindRoot(start string) (string, error) {
 // callers to mistakenly resolve to $HOME when invoked from any
 // subdirectory of $HOME without a closer .bones/agent.id marker. See
 // issue #140.
+//
+// Honors BONES_DIR (issue #291): when the env var is set and points
+// at a populated bones-state directory containing agent.id, the
+// caller's cwd is treated as the workspace root regardless of any
+// in-tree .bones/ marker. This lets relocated/stealth installs run
+// against a clean checkout that has no .bones/ directory at all.
 func walkUp(start string) (string, error) {
 	cur, err := filepath.Abs(start)
 	if err != nil {
 		return "", fmt.Errorf("absolute path: %w", err)
+	}
+	// BONES_DIR override: a relocated bones-state dir wins over the
+	// in-tree walk. The env value must contain agent.id (otherwise
+	// it's an empty / unrelated directory and we fall through to the
+	// normal walk). cur is returned as-is so subsequent BonesDir(cur)
+	// calls round-trip back to the env value.
+	if env := os.Getenv(BonesDirEnvVar); env != "" {
+		envAbs := env
+		if abs, absErr := filepath.Abs(env); absErr == nil {
+			envAbs = abs
+		}
+		if _, err := os.Stat(filepath.Join(envAbs, agentIDFile)); err == nil {
+			return cur, nil
+		}
 	}
 	for range maxWalkUpDepth {
 		marker := filepath.Join(cur, markerDirName, agentIDFile)

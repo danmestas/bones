@@ -75,10 +75,11 @@ func (c *LogsCmd) Run(g *repocli.Globals) error {
 
 // resolveLogPath returns the log file path for the given workspace dir, slot, or workspace flag.
 func resolveLogPath(workspaceDir, slot string, workspaceLog bool) string {
+	bones := workspace.BonesDir(workspaceDir)
 	if workspaceLog {
-		return filepath.Join(workspaceDir, ".bones", "log")
+		return filepath.Join(bones, "log")
 	}
-	return filepath.Join(workspaceDir, ".bones", "swarm", slot, "log")
+	return filepath.Join(bones, "swarm", slot, "log")
 }
 
 // parseSince parses a duration string (e.g. "5m") or RFC3339 timestamp.

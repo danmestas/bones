@@ -335,7 +335,7 @@ func checkSessionStartSentinel(w io.Writer, cwd string) bool {
 // signal — its presence with a missing scaffold_version stamp means
 // scaffold (step 2) failed mid-flight (#147 / #146).
 func workspaceMarkerPresent(root string) bool {
-	_, err := os.Stat(filepath.Join(root, ".bones", "agent.id"))
+	_, err := os.Stat(filepath.Join(workspace.BonesDir(root), "agent.id"))
 	return err == nil
 }
 
@@ -422,7 +422,7 @@ func checkManifestIntegrity(w io.Writer, cwd string) int {
 
 	// Per-file tamper / missing checks for the non-skill entries.
 	for _, sf := range manifest.Scaffolded {
-		full := filepath.Join(cwd, filepath.FromSlash(sf.Path))
+		full := scaffoldedTrackedAbsPath(cwd, sf.Path)
 		data, err := os.ReadFile(full)
 		if errors.Is(err, fs.ErrNotExist) {
 			_, _ = fmt.Fprintf(w,
@@ -529,7 +529,7 @@ func fossilDrift(cwd string) (tip, head string, drifted bool) {
 }
 
 func readTrunkTip(cwd string) string {
-	path := filepath.Join(cwd, ".bones", "trunk_tip")
+	path := filepath.Join(workspace.BonesDir(cwd), "trunk_tip")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""

@@ -411,7 +411,7 @@ func branchRev(hubFossil, fossilBin, branch string) (string, error) {
 // deliberate: it survives clock skew between the writer and reader,
 // and matches what `ls -t` would do for a human inspecting by hand.
 func latestSlotRecoveryDir(workspaceDir, slot string) (string, error) {
-	recoveryRoot := filepath.Join(workspaceDir, ".bones", "recovery")
+	recoveryRoot := filepath.Join(workspace.BonesDir(workspaceDir), "recovery")
 	entries, err := os.ReadDir(recoveryRoot)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -571,7 +571,7 @@ func openTempCheckout(pre *applyPreflight, version string) (string, func(), erro
 	if version == "" {
 		version = "trunk"
 	}
-	tempDir := filepath.Join(pre.WorkspaceDir, ".bones",
+	tempDir := filepath.Join(workspace.BonesDir(pre.WorkspaceDir),
 		fmt.Sprintf("apply-%d", time.Now().UnixNano()))
 	if err := os.MkdirAll(tempDir, 0o755); err != nil {
 		return "", nil, fmt.Errorf("mkdir temp checkout: %w", err)
@@ -873,10 +873,10 @@ func readLastAppliedMarker(workspaceDir string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-// writeLastAppliedMarker writes the rev to .bones/last-applied,
-// creating .bones/ if needed.
+// writeLastAppliedMarker writes the rev to <BonesDir>/last-applied,
+// creating the bones-state dir if needed.
 func writeLastAppliedMarker(workspaceDir, rev string) error {
-	dir := filepath.Join(workspaceDir, ".bones")
+	dir := workspace.BonesDir(workspaceDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}

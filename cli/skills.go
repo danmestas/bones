@@ -14,7 +14,20 @@ import (
 	"strings"
 
 	"github.com/danmestas/bones/internal/version"
+	"github.com/danmestas/bones/internal/workspace"
 )
+
+// scaffoldedTrackedAbsPath resolves a slash-separated workspace-
+// relative path to its on-disk absolute path. Paths under .bones/
+// route through workspace.BonesDir so BONES_DIR (issue #291)
+// relocation lands the manifest entry on the actual file. All other
+// paths join under root verbatim.
+func scaffoldedTrackedAbsPath(root, rel string) string {
+	if strings.HasPrefix(rel, ".bones/") {
+		return filepath.Join(workspace.BonesDir(root), strings.TrimPrefix(rel, ".bones/"))
+	}
+	return filepath.Join(root, filepath.FromSlash(rel))
+}
 
 //go:embed all:templates/skills
 var skillsFS embed.FS
@@ -317,7 +330,7 @@ var scaffoldedTrackedPaths = []string{
 func buildScaffoldedEntries(root string) ([]scaffoldFile, error) {
 	var out []scaffoldFile
 	for _, rel := range scaffoldedTrackedPaths {
-		full := filepath.Join(root, filepath.FromSlash(rel))
+		full := scaffoldedTrackedAbsPath(root, rel)
 		data, err := os.ReadFile(full)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue

@@ -14,19 +14,31 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/danmestas/bones/internal/workspace"
 )
 
 // StampPath is the relative location under the workspace root where
 // the scaffold version is recorded. Plain text, single line, no
 // trailing newline-noise to fight.
+//
+// Deprecated: prefer Path(root) which honors BONES_DIR (issue #291).
+// Kept as a constant so existing tests that hardcode the relative
+// layout still compile.
 const StampPath = ".bones/scaffold_version"
 
-// Read returns the version stamped at root/.bones/scaffold_version.
+// Path returns the absolute path of the scaffold-version stamp for
+// the workspace at root. Honors BONES_DIR (issue #291) when set.
+func Path(root string) string {
+	return filepath.Join(workspace.BonesDir(root), "scaffold_version")
+}
+
+// Read returns the version stamped at <BonesDir>/scaffold_version.
 // Returns ("", nil) if the file is missing — that's the "fresh
 // workspace, no stamp yet" case, not an error. Other read failures
 // are returned verbatim.
 func Read(root string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(root, StampPath))
+	data, err := os.ReadFile(Path(root))
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
@@ -36,11 +48,11 @@ func Read(root string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-// Write records ver at root/.bones/scaffold_version. Creates parent
+// Write records ver at <BonesDir>/scaffold_version. Creates parent
 // directories as needed. Idempotent: writing the same value twice is
 // a no-op as far as drift detection is concerned.
 func Write(root, ver string) error {
-	path := filepath.Join(root, StampPath)
+	path := Path(root)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}

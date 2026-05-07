@@ -108,7 +108,7 @@ func readAgentIDFile(cwd string) string {
 	if cwd == "" {
 		return ""
 	}
-	data, err := os.ReadFile(filepath.Join(cwd, ".bones", "agent.id"))
+	data, err := os.ReadFile(filepath.Join(bonesDir(cwd), "agent.id"))
 	if err != nil {
 		// Fall through; cwd may have moved or .bones may have been
 		// scrubbed. Treat as unknown rather than failing the listing.

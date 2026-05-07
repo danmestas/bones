@@ -336,7 +336,7 @@ func (noopSummarizer) Summarize(_ context.Context, in coord.CompactInput) (strin
 func openCompactLeaf(
 	ctx context.Context, info workspace.Info,
 ) (*coord.Leaf, func(), error) {
-	workdir := filepath.Join(info.WorkspaceDir, ".bones", "compact")
+	workdir := filepath.Join(workspace.BonesDir(info.WorkspaceDir), "compact")
 	if err := os.MkdirAll(workdir, 0o755); err != nil {
 		return nil, nil, fmt.Errorf("mkdir compact workdir: %w", err)
 	}

@@ -38,15 +38,15 @@ func (e *ErrLockHeld) Error() string {
 }
 
 // LockPath returns the absolute path of the workspace lock file for
-// the workspace at root.
+// the workspace at root. Honors BONES_DIR (issue #291) when set.
 func LockPath(root string) string {
-	return filepath.Join(root, ".bones", LockFileName)
+	return filepath.Join(bonesDir(root), LockFileName)
 }
 
 // LockPidPath returns the absolute path of the sibling pid file
-// recording the lock holder.
+// recording the lock holder. Honors BONES_DIR when set.
 func LockPidPath(root string) string {
-	return filepath.Join(root, ".bones", LockPidFileName)
+	return filepath.Join(bonesDir(root), LockPidFileName)
 }
 
 // AcquireWorkspaceLock takes an exclusive non-blocking advisory lock
@@ -64,7 +64,7 @@ func LockPidPath(root string) string {
 // Windows it falls back to a best-effort pid-file probe (see
 // lock_windows.go) since flock is not available there.
 func AcquireWorkspaceLock(root string) (func(), error) {
-	bones := filepath.Join(root, ".bones")
+	bones := bonesDir(root)
 	if err := os.MkdirAll(bones, 0o755); err != nil {
 		return nil, fmt.Errorf("workspace lock: mkdir: %w", err)
 	}

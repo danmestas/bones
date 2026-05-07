@@ -978,7 +978,7 @@ func commitViaLeaf(
 // Bootstrap is the orchestrator's job; a leaf must never fix it
 // (PR #54).
 func ensureSlotUser(workspaceDir, login, caps string) error {
-	hubRepoPath := filepath.Join(workspaceDir, ".bones", "hub.fossil")
+	hubRepoPath := filepath.Join(workspace.BonesDir(workspaceDir), "hub.fossil")
 	if _, err := os.Stat(hubRepoPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return ErrWorkspaceNotBootstrapped
@@ -1079,7 +1079,7 @@ func openLeaf(
 	ctx context.Context, info workspace.Info,
 	slot, fossilUser, hubURL string, hub *coord.Hub, autosync bool,
 ) (*coord.Leaf, error) {
-	swarmRoot := filepath.Join(info.WorkspaceDir, ".bones", "swarm")
+	swarmRoot := filepath.Join(workspace.BonesDir(info.WorkspaceDir), "swarm")
 	if err := os.MkdirAll(swarmRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir swarm root: %w", err)
 	}
@@ -1151,7 +1151,7 @@ func preserveWorktree(workspaceDir, slot string, now time.Time) (string, int, er
 	}
 
 	recoveryName := fmt.Sprintf("%s-%d", slot, now.Unix())
-	recoveryDir := filepath.Join(workspaceDir, ".bones", "recovery", recoveryName)
+	recoveryDir := filepath.Join(workspace.BonesDir(workspaceDir), "recovery", recoveryName)
 	if err := os.MkdirAll(recoveryDir, 0o755); err != nil {
 		return "", 0, fmt.Errorf("mkdir recovery: %w", err)
 	}

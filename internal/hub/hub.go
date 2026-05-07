@@ -36,6 +36,24 @@ const detachEnv = "BONES_HUB_FOREGROUND"
 // from the legacy .orchestrator/ + .bones/ split into a single .bones/).
 const markerDirName = ".bones"
 
+// bonesDirEnvVar is the relocate-state env var (mirrors
+// internal/workspace.BonesDirEnvVar). Duplicated locally to avoid an
+// import cycle: workspace imports hub, so hub cannot import workspace.
+const bonesDirEnvVar = "BONES_DIR"
+
+// bonesDir returns the bones-state dir for root, honoring BONES_DIR
+// if set. Mirrors workspace.BonesDir; duplicated to avoid the import
+// cycle workspace → hub.
+func bonesDir(root string) string {
+	if env := os.Getenv(bonesDirEnvVar); env != "" {
+		if abs, err := filepath.Abs(env); err == nil {
+			return abs
+		}
+		return env
+	}
+	return filepath.Join(root, markerDirName)
+}
+
 // readyTimeout bounds how long Start waits for each server to accept
 // connections. ADR 0034 raised this from 5s to 15s after the
 // 2026-04-29 serverdom incident, where loaded-machine NATS startup
@@ -681,9 +699,10 @@ type paths struct {
 
 // HubFossilPath returns the on-disk path of the hub fossil for the
 // given workspace root. Use this rather than building the path
-// literally in cli/ so verbs survive future layout changes.
+// literally in cli/ so verbs survive future layout changes. Honors
+// BONES_DIR (issue #291) when set.
 func HubFossilPath(root string) string {
-	return filepath.Join(root, markerDirName, "hub.fossil")
+	return filepath.Join(bonesDir(root), "hub.fossil")
 }
 
 // IsRunning reports whether a hub for the workspace at root is
@@ -706,7 +725,11 @@ func IsRunning(root string) (int, bool) {
 }
 
 // newPaths derives the hub layout from the workspace root. The root must
-// exist; the .bones subdirs are created lazily by Start.
+// exist; the bones-state subdirs are created lazily by Start. Honors
+// BONES_DIR (issue #291): when set, the orchDir/logDir/hubRepo/hubPid/
+// URL-files/coordStore all live under the relocated path. fslckout
+// and fslSettings stay at the workspace root because they are Fossil
+// checkout-at-root markers, not bones state.
 func newPaths(root string) (paths, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
@@ -717,7 +740,7 @@ func newPaths(root string) (paths, error) {
 	} else if !info.IsDir() {
 		return paths{}, fmt.Errorf("hub: root %q is not a directory", abs)
 	}
-	orch := filepath.Join(abs, markerDirName)
+	orch := bonesDir(abs)
 	return paths{
 		root:        abs,
 		orchDir:     orch,

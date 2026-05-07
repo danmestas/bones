@@ -21,6 +21,17 @@ import (
 // list are left alone.
 var legacyBonesSkills = []string{"subagent", "uninstall-bones"}
 
+// scaffoldOpts toggles per-invocation behavior of scaffoldOrchestrator.
+// The zero value is the historical default (full scaffold + hook
+// merge). Per issue #291, --stealth callers set Stealth=true to skip
+// the .claude/settings.json merge.
+type scaffoldOpts struct {
+	// Stealth suppresses the merge into .claude/settings.json. The
+	// skills bundle, scaffold-version stamp, and manifest still write
+	// — only the cross-territory hook merge is skipped.
+	Stealth bool
+}
+
 // scaffoldFootprint captures what scaffoldOrchestrator did during a
 // single invocation, for surfacing in the default-mode `bones up`
 // summary (issue #173). All counts and slices are zero-value safe; a
@@ -70,7 +81,12 @@ func (f *scaffoldFootprint) hooksAdded() int {
 // footprint is best-effort: helpers track only the actions they actually
 // performed, so a fully-scaffolded workspace produces a zero-value
 // footprint.
-func scaffoldOrchestrator(root string) (scaffoldFootprint, error) {
+//
+// scaffoldOpts.Stealth (issue #291) suppresses the .claude/settings.json
+// merge — used by `bones up --stealth` to leave operator-owned Claude
+// configuration untouched. The skills bundle and bones-state writes
+// still proceed; only the cross-territory hook merge is skipped.
+func scaffoldOrchestrator(root string, opts scaffoldOpts) (scaffoldFootprint, error) {
 	var fp scaffoldFootprint
 	fp.HooksAddedByEvent = map[string]int{}
 
@@ -80,8 +96,10 @@ func scaffoldOrchestrator(root string) (scaffoldFootprint, error) {
 	if err := writeBonesSkills(root, &fp); err != nil {
 		return fp, fmt.Errorf("skills bundle: %w", err)
 	}
-	if err := mergeSettings(filepath.Join(root, ".claude", "settings.json"), &fp); err != nil {
-		return fp, fmt.Errorf("settings: %w", err)
+	if !opts.Stealth {
+		if err := mergeSettings(filepath.Join(root, ".claude", "settings.json"), &fp); err != nil {
+			return fp, fmt.Errorf("settings: %w", err)
+		}
 	}
 	if err := scaffoldver.Write(root, version.Get()); err != nil {
 		return fp, fmt.Errorf("scaffold version stamp: %w", err)

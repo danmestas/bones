@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/danmestas/bones/internal/workspace"
 )
 
 // SchemaVersion of the dispatch manifest format. Bump when the schema
@@ -47,8 +49,9 @@ type SlotEntry struct {
 var ErrNoManifest = errors.New("dispatch: no manifest in this workspace")
 
 // Path returns the manifest file path for a given workspace root.
+// Honors BONES_DIR (issue #291) via workspace.BonesDir.
 func Path(root string) string {
-	return filepath.Join(root, ".bones", "swarm", "dispatch.json")
+	return filepath.Join(workspace.BonesDir(root), "swarm", "dispatch.json")
 }
 
 // Write persists the manifest atomically (tmp+rename). Creates the

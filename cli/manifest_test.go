@@ -32,7 +32,7 @@ func TestWriteManifest_StampsScaffoldedEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 
@@ -111,7 +111,7 @@ func TestWriteManifest_OmitsRollingFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	m, err := readManifest(dir)
@@ -249,7 +249,7 @@ func TestCheckManifestIntegrity_Clean(t *testing.T) {
 		[]byte("aid"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -400,7 +400,7 @@ func setupCleanScaffold(t *testing.T) string {
 		[]byte("test-agent-id"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	return dir

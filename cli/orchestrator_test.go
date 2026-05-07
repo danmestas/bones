@@ -15,7 +15,7 @@ import (
 // are no longer scaffolded.
 func TestScaffoldOrchestrator_FreshWorkspace(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 	for _, want := range []string{
@@ -61,7 +61,7 @@ func TestScaffoldOrchestrator_WipesLegacyBonesSkills(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 	for _, name := range legacyBonesSkills {
@@ -84,7 +84,7 @@ func TestScaffoldOrchestrator_PreservesUserAuthoredSkills(t *testing.T) {
 	if err := os.WriteFile(skillPath, []byte("mine\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(userSkill); err != nil {
@@ -102,7 +102,7 @@ func TestScaffoldOrchestrator_LeavesUserAuthoredAGENTSUntouched(t *testing.T) {
 	if err := os.WriteFile(agentsPath, []byte(usersAgents), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatalf("scaffoldOrchestrator on user-authored AGENTS.md: %v", err)
 	}
 	got, _ := os.ReadFile(agentsPath)
@@ -118,7 +118,7 @@ func TestScaffoldOrchestrator_LeavesUserAuthoredAGENTSUntouched(t *testing.T) {
 // committed templates, fresh workspaces stop matching.
 func TestScaffold_BundledSkillsContent(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{
@@ -145,14 +145,14 @@ func TestScaffold_BundledSkillsContent(t *testing.T) {
 // in fp.SkillsModified so `bones up` can warn about it.
 func TestScaffold_Skills_PreservesUserModifiedFiles(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(dir, ".claude", "skills", "orchestrator", "SKILL.md")
 	if err := os.WriteFile(target, []byte("user override\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	fp, err := scaffoldOrchestrator(dir)
+	fp, err := scaffoldOrchestrator(dir, scaffoldOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestScaffoldOrchestrator_LeavesUserAuthoredCLAUDEUntouched(t *testing.T) {
 	if err := os.WriteFile(claudePath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(claudePath)
@@ -190,14 +190,14 @@ func TestScaffoldOrchestrator_LeavesUserAuthoredCLAUDEUntouched(t *testing.T) {
 
 func TestScaffoldOrchestrator_Idempotent(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	first, err := os.ReadFile(filepath.Join(dir, ".claude", "settings.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	second, err := os.ReadFile(filepath.Join(dir, ".claude", "settings.json"))
@@ -224,7 +224,7 @@ func TestScaffoldOrchestrator_PreservesExistingHooks(t *testing.T) {
 	if err := os.WriteFile(settings, []byte(existing), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(settings)
@@ -281,7 +281,7 @@ func TestScaffoldOrchestrator_MigrateLegacyStopHook(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 
@@ -331,7 +331,7 @@ func TestScaffoldOrchestrator_PreservesUnrelatedStopHook(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 
@@ -397,7 +397,7 @@ func countHookCommand(settings map[string]any, event, cmd string) int {
 // "tasks-as-survivor" pressure that keeps planners filing atomic work.
 func TestScaffoldOrchestrator_SessionStartIncludesPrime(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 	cmds := hookCommandsFor(readSettings(t, dir), "SessionStart")
@@ -413,7 +413,7 @@ func TestScaffoldOrchestrator_SessionStartIncludesPrime(t *testing.T) {
 // alone leaves a multi-hour window where freeform context can win.
 func TestScaffoldOrchestrator_PreCompactIncludesPrime(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 	cmds := hookCommandsFor(readSettings(t, dir), "PreCompact")
@@ -431,7 +431,7 @@ func TestScaffoldOrchestrator_PreCompactIncludesPrime(t *testing.T) {
 func TestScaffoldOrchestrator_PrimeHookIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	for i := range 3 {
-		if _, err := scaffoldOrchestrator(dir); err != nil {
+		if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 			t.Fatalf("scaffold pass %d: %v", i+1, err)
 		}
 	}
@@ -507,7 +507,7 @@ func TestScaffoldOrchestrator_MigrateLegacySessionEndShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 
@@ -549,7 +549,7 @@ func TestScaffoldOrchestrator_PreservesUnrelatedSessionEndHook(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 
@@ -565,7 +565,7 @@ func TestScaffoldOrchestrator_PreservesUnrelatedSessionEndHook(t *testing.T) {
 // a value to compare against.
 func TestScaffoldOrchestrator_StampsScaffoldVersion(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 	stamp, err := os.ReadFile(filepath.Join(dir, ".bones", "scaffold_version"))
@@ -699,7 +699,7 @@ func TestScaffoldOrchestrator_MigratesLegacyBootstrap(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := scaffoldOrchestrator(dir); err != nil {
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 
