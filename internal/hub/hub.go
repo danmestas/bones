@@ -267,7 +267,12 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 		defer close(httpDone)
 		_ = h.ServeHTTP(httpCtx)
 	}()
-	fmt.Printf("hub: fossil at %s, nats at %s\n", h.HTTPAddr(), h.NATSURL())
+	// Stderr (not stdout) so verbs that auto-start the hub via
+	// workspace.Join can emit clean stdout — `bones tasks prime
+	// --json` is wired into SessionStart and PreCompact hooks and
+	// must produce valid JSON on stdout for the hook contract (#304).
+	fmt.Fprintf(os.Stderr, "hub: fossil at %s, nats at %s\n",
+		h.HTTPAddr(), h.NATSURL())
 	if err := registry.Write(registry.Entry{
 		Cwd:       p.root,
 		Name:      filepath.Base(p.root),
@@ -528,7 +533,9 @@ func spawnDetachedChild(p paths, o opts) error {
 		return fmt.Errorf("hub: release child: %w", err)
 	}
 
-	fmt.Printf("hub: fossil at http://127.0.0.1:%d, nats at nats://127.0.0.1:%d (pid=%d)\n",
+	// Stderr per #304 — same JSON-stdout contract as line above.
+	fmt.Fprintf(os.Stderr,
+		"hub: fossil at http://127.0.0.1:%d, nats at nats://127.0.0.1:%d (pid=%d)\n",
 		o.repoPort, o.coordPort, pid)
 	return nil
 }

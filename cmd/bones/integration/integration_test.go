@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -779,20 +780,35 @@ func TestCLI_Prime(t *testing.T) {
 		// #170: even with zero tasks, the envelope must be present
 		// so the SessionStart hook injects a "bones is active"
 		// signal into agent context.
+		//
+		// #304: stdout MUST be parseable JSON. Earlier loose checks
+		// (`strings.Contains`) passed even when an auto-start hub
+		// preamble polluted stdout — this is the cold-start path,
+		// so it exercises spawnDetachedChild's printf. Strict
+		// json.Unmarshal is the contract the SessionStart hook
+		// consumer relies on.
 		stdout, stderr, code := runCmd(t, bonesBin, dir, "tasks", "prime", "--json")
 		if code != 0 {
 			t.Fatalf("prime --json exit=%d stderr=%s", code, stderr)
 		}
-		if len(strings.TrimSpace(stdout)) == 0 {
-			t.Fatalf("zero-tasks prime emitted empty stdout; want envelope")
+		var envelope struct {
+			OpenTasks    []any `json:"open_tasks"`
+			ReadyTasks   []any `json:"ready_tasks"`
+			ClaimedTasks []any `json:"claimed_tasks"`
+			Threads      []any `json:"threads"`
+			Peers        []any `json:"peers"`
 		}
-		for _, key := range []string{
-			`"open_tasks"`, `"ready_tasks"`, `"claimed_tasks"`,
-			`"threads"`, `"peers"`,
-		} {
-			if !strings.Contains(stdout, key) {
-				t.Errorf("envelope missing %s; got=%q", key, stdout)
-			}
+		if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+			t.Fatalf("prime --json stdout is not valid JSON: %v\n"+
+				"got=%q\nstderr=%q", err, stdout, stderr)
+		}
+		// Slices must exist (zero-length is fine) so the agent
+		// context always sees the envelope shape.
+		if envelope.OpenTasks == nil {
+			t.Errorf("envelope.open_tasks is nil; want []")
+		}
+		if envelope.Peers == nil {
+			t.Errorf("envelope.peers is nil; want []")
 		}
 	})
 
