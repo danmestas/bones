@@ -44,7 +44,11 @@ import (
 // Default output is a single confirmation line. With verbose=true, prints
 // per-step status lines. WARN lines from drift / missing-git checks
 // always print because they describe real issues operators must see.
-func runUp(cwd string, verbose bool) (err error) {
+//
+// stealth=true (issue #291) skips the merge into `.claude/settings.json`.
+// Operators set this — typically alongside BONES_DIR — when running bones
+// against a project they don't want to mark with Claude hook entries.
+func runUp(cwd string, verbose, stealth bool) (err error) {
 	ctx, end := telemetry.RecordCommand(context.Background(), "bones.up",
 		telemetry.String("workspace_hash", telemetry.WorkspaceHash(cwd)),
 	)
@@ -90,7 +94,7 @@ func runUp(cwd string, verbose bool) (err error) {
 		logger.Warnf("bones: scaffold incomplete from prior run — re-running scaffold")
 	}
 
-	fp, scaffErr := scaffoldOrchestrator(wsDir)
+	fp, scaffErr := scaffoldOrchestrator(wsDir, scaffoldOpts{Stealth: stealth})
 	if scaffErr != nil {
 		err = fmt.Errorf("orchestrator scaffold: %w", scaffErr)
 		return err
@@ -291,7 +295,7 @@ func readGitHead(wsDir string) (string, error) {
 // the trunk; reading it here keeps this package free of a fossil
 // dependency.
 func readFossilTip(wsDir string) string {
-	path := filepath.Join(wsDir, ".bones", "trunk_tip")
+	path := filepath.Join(workspace.BonesDir(wsDir), "trunk_tip")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""

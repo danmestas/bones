@@ -60,7 +60,7 @@ func runPlanFinalize(c *PlanFinalizeCmd, workspaceDir string, out io.Writer) err
 	}
 	_, _ = fmt.Fprintf(out, "plan finalize: %s\n", planSource)
 
-	hubRepoPath := filepath.Join(workspaceDir, ".bones", "hub.fossil")
+	hubRepoPath := filepath.Join(workspace.BonesDir(workspaceDir), "hub.fossil")
 	repo, err := edgehub.OpenRepo(hubRepoPath)
 	if err != nil {
 		return fmt.Errorf("plan finalize: open hub: %w", err)

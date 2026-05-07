@@ -249,13 +249,13 @@ func planKillSwarmLeaves(root string, c *DownCmd) []downAction {
 	return plan
 }
 
-// legacyLeafPID returns the pid recorded in .bones/leaf.pid (the
+// legacyLeafPID returns the pid recorded in <BonesDir>/leaf.pid (the
 // pre-ADR-0041 workspace-leaf marker) if the file exists and points
 // at a live process. Returns (0, false) on any read/parse failure or
 // dead pid. Used by planKillSwarmLeaves to clean up orphans surviving
 // the layout migration.
 func legacyLeafPID(root string) (int, bool) {
-	path := filepath.Join(root, ".bones", "leaf.pid")
+	path := filepath.Join(workspace.BonesDir(root), "leaf.pid")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return 0, false
@@ -366,7 +366,7 @@ func planRemoveRegistry(root string) []downAction {
 }
 
 func planRemoveBonesDir(root string) []downAction {
-	dir := filepath.Join(root, ".bones")
+	dir := workspace.BonesDir(root)
 	if !dirExists(dir) {
 		return nil
 	}

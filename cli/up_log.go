@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/danmestas/bones/internal/workspace"
 )
 
 // upLogger tees `bones up` output to a file under <wsDir>/.bones/up.log
@@ -40,7 +42,7 @@ type upLogger struct {
 // runs *after* workspace.Init has done so, but the logger is opened
 // before scaffolding, so a fresh clone may not have it yet.
 func openUpLog(wsDir string) *upLogger {
-	dir := filepath.Join(wsDir, ".bones")
+	dir := workspace.BonesDir(wsDir)
 	_ = os.MkdirAll(dir, 0o755)
 	path := filepath.Join(dir, "up.log")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)

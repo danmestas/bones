@@ -32,7 +32,7 @@ func TestSwarmUp_RejectsStaleClaudeWorktrees(t *testing.T) {
 		t.Fatalf("mkdir .bones: %v", err)
 	}
 
-	err := runUp(dir, false)
+	err := runUp(dir, false, false)
 	if err == nil {
 		t.Fatal("runUp succeeded on workspace with stale agent worktree; want error")
 	}
@@ -56,7 +56,7 @@ func TestSwarmUp_AcceptsCleanWorkspace_NoMigrationFailure(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	err := runUp(dir, false)
+	err := runUp(dir, false, false)
 	// runUp may fail downstream (no git repo to scaffold, etc.).
 	// What matters is the migration check did NOT fire.
 	if errors.Is(err, swarm.ErrStaleClaudeWorktrees) {

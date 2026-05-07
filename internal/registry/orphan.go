@@ -40,7 +40,7 @@ func IsOrphan(e Entry) bool {
 	if _, err := os.Stat(e.Cwd); os.IsNotExist(err) {
 		return true
 	}
-	marker := filepath.Join(e.Cwd, ".bones", "agent.id")
+	marker := filepath.Join(bonesDir(e.Cwd), "agent.id")
 	if _, err := os.Stat(marker); os.IsNotExist(err) {
 		return true
 	}

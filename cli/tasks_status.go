@@ -13,6 +13,7 @@ import (
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/tasks"
+	"github.com/danmestas/bones/internal/workspace"
 )
 
 // TasksStatusCmd prints a one-shot snapshot of hub and backlog state.
@@ -34,7 +35,7 @@ func (c *TasksStatusCmd) Run(g *repocli.Globals) error {
 	// Hub liveness: read the hub PID. workspace.Join already
 	// guarantees the hub is up by this point (auto-start fired if not),
 	// so a read failure here is unexpected and worth surfacing.
-	pidPath := filepath.Join(info.WorkspaceDir, ".bones", "hub.pid")
+	pidPath := filepath.Join(workspace.BonesDir(info.WorkspaceDir), "hub.pid")
 	pidStr, err := os.ReadFile(pidPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr,

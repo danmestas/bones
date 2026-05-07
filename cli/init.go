@@ -47,7 +47,16 @@ func (c *JoinCmd) Run(g *repocli.Globals) error {
 // banner plus per-step status lines. WARN lines (drift, missing git)
 // print regardless because they describe real issues the operator must
 // see. Verbosity comes from the global -v flag on repocli.Globals.
-type UpCmd struct{}
+//
+// --stealth (issue #291) suppresses the merge into .claude/settings.json
+// — useful when running bones against a project where the operator does
+// not want bones-managed hook entries written into Claude config.
+// Combine with BONES_DIR=/some/path for a zero-workspace-write install.
+type UpCmd struct {
+	// Stealth skips the .claude/settings.json merge. Combine with
+	// BONES_DIR=/path for a zero-workspace-write install.
+	Stealth bool `name:"stealth" help:"skip .claude/settings.json merge (combine with BONES_DIR)"`
+}
 
 func (c *UpCmd) Run(g *repocli.Globals) error {
 	if g.Verbose {
@@ -57,7 +66,7 @@ func (c *UpCmd) Run(g *repocli.Globals) error {
 	if err != nil {
 		return fmt.Errorf("cwd: %w", err)
 	}
-	return runUp(cwd, g.Verbose)
+	return runUp(cwd, g.Verbose, c.Stealth)
 }
 
 // reportWorkspace formats the standard workspace report and returns nil
