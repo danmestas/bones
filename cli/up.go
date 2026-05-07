@@ -108,6 +108,14 @@ func runUp(cwd string, verbose, stealth bool) (err error) {
 		return err
 	}
 
+	gitignoreAdded, gitignoreErr := ensureBonesGitignore(wsDir, stealth)
+	if gitignoreErr != nil {
+		// Non-fatal: a read-only filesystem or gitignore the operator
+		// pinned with chmod 444 must not block scaffold. Surface as a
+		// warning so the host-local agent.id risk is at least visible.
+		logger.Warnf("up: WARN  gitignore: %v", gitignoreErr)
+	}
+
 	if dErr := checkFossilDrift(wsDir); dErr != nil {
 		logger.Warnf("up: WARN  %v", dErr)
 	}
@@ -118,6 +126,10 @@ func runUp(cwd string, verbose, stealth bool) (err error) {
 	} else {
 		logger.Infof("up: ready at %s", wsDir)
 		emitFootprintSummary(logger, fp)
+		if len(gitignoreAdded) > 0 {
+			logger.Infof("up:   added to .gitignore: %s",
+				strings.Join(gitignoreAdded, ", "))
+		}
 	}
 	printHubStatus(logger.Tee(os.Stdout), wsDir)
 	return nil
