@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -862,36 +863,9 @@ func seedHubRepo(ctx context.Context, h *edgehub.Hub, p paths) error {
 		return err
 	}
 
-	// Build FileToCommit list from every tracked path. Reading every
-	// file into memory mirrors the bash flow (xargs fossil add); for
-	// the workspace sizes we target (single repo, hundreds of MB at
-	// most) this is fine.
-	commitFiles := make([]edgehub.FileToCommit, 0, len(files))
-	for _, rel := range files {
-		abs := filepath.Join(p.root, rel)
-		info, err := os.Lstat(abs)
-		if err != nil {
-			return fmt.Errorf("stat %s: %w", rel, err)
-		}
-		// Skip symlinks and non-regular files; the bash script's
-		// `fossil add` handled these as a no-op via fossil's own
-		// filters.
-		if !info.Mode().IsRegular() {
-			continue
-		}
-		data, err := os.ReadFile(abs)
-		if err != nil {
-			return fmt.Errorf("read %s: %w", rel, err)
-		}
-		perm := ""
-		if info.Mode()&0o111 != 0 {
-			perm = "x"
-		}
-		commitFiles = append(commitFiles, edgehub.FileToCommit{
-			Name:    rel,
-			Content: data,
-			Perm:    perm,
-		})
+	commitFiles, err := collectSeedFiles(p.root, files)
+	if err != nil {
+		return err
 	}
 
 	_, err = h.Commit(ctx, edgehub.CommitOpts{
@@ -904,6 +878,54 @@ func seedHubRepo(ctx context.Context, h *edgehub.Hub, p paths) error {
 		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
+}
+
+// collectSeedFiles reads each git-tracked path from disk and returns
+// edgehub.FileToCommit entries. Mirrors the bash flow (xargs fossil
+// add); reading file contents into memory is fine at workspace sizes.
+//
+// Three classes of entries are skipped (not failed):
+//
+//   - tracked-but-deleted (ENOENT): `git ls-files` returns paths from
+//     the index, which can name files that have been removed from the
+//     working tree without `git rm`. fossil add would have skipped
+//     these silently; aborting the seed against a normal git state
+//     bricked every hub start in workspaces with any deleted-tracked
+//     file (#302).
+//   - non-regular files: symlinks, sockets, fifos. The legacy bash
+//     flow let fossil's own filters handle these as no-ops.
+//
+// Real I/O failures (permission, broken device) propagate.
+func collectSeedFiles(root string, files []string) ([]edgehub.FileToCommit, error) {
+	out := make([]edgehub.FileToCommit, 0, len(files))
+	for _, rel := range files {
+		abs := filepath.Join(root, rel)
+		info, err := os.Lstat(abs)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				// Tracked-but-deleted; see comment above.
+				continue
+			}
+			return nil, fmt.Errorf("stat %s: %w", rel, err)
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		data, err := os.ReadFile(abs)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", rel, err)
+		}
+		perm := ""
+		if info.Mode()&0o111 != 0 {
+			perm = "x"
+		}
+		out = append(out, edgehub.FileToCommit{
+			Name:    rel,
+			Content: data,
+			Perm:    perm,
+		})
+	}
+	return out, nil
 }
 
 // ErrSeedPrecondition is returned by Start when the workspace has no
