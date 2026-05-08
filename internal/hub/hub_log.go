@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"time"
 
@@ -182,9 +181,3 @@ func chooseLogLevel(flag string) LogLevel {
 // hubLogLevelEnv names the env var that overrides --log-level when no
 // flag is passed. Pulled out for tests that flip it via t.Setenv.
 const hubLogLevelEnv = "BONES_HUB_LOG_LEVEL"
-
-// pidFromInt returns a pid as a printable decimal. Centralized so the
-// formatting choice (decimal, no padding) is stable across log lines.
-// The function exists rather than inlining strconv.Itoa so a future
-// op who wants e.g. fixed-width pids has one place to change.
-func pidFromInt(pid int) string { return strconv.Itoa(pid) }

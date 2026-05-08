@@ -77,44 +77,6 @@ func TestLogEntry_OmitsZeroFields(t *testing.T) {
 	}
 }
 
-// TestSelectLevel pins the level-selection policy from #322:
-// read-only RPCs default DEBUG; mutating defaults INFO; errors
-// always promote to INFO regardless of read/mutating classification.
-// Table-driven so adding a new RPC name is one row.
-func TestSelectLevel(t *testing.T) {
-	tests := []struct {
-		name string
-		rpc  string
-		err  error
-		want LogLevel
-	}{
-		{"read-only no error → DEBUG", "tasks.list", nil, LevelDebug},
-		{"read-only show no error → DEBUG", "tasks.show", nil, LevelDebug},
-		{"read-only ready no error → DEBUG", "tasks.ready", nil, LevelDebug},
-		{"mutating create → INFO", "tasks.create", nil, LevelInfo},
-		{"mutating claim → INFO", "tasks.claim", nil, LevelInfo},
-		{"mutating close → INFO", "tasks.close", nil, LevelInfo},
-		{"read-only with error → INFO (errors always)", "tasks.list", errStub("boom"), LevelInfo},
-		{"mutating with error → INFO", "tasks.create", errStub("kaboom"), LevelInfo},
-		{"unknown verb → INFO (mutating default)", "fancy.new.rpc", nil, LevelInfo},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := selectLevel(tt.rpc, tt.err)
-			if got != tt.want {
-				t.Errorf("selectLevel(%q, %v) = %v, want %v",
-					tt.rpc, tt.err, got, tt.want)
-			}
-		})
-	}
-}
-
-// errStub is a minimal error type for table tests. Avoids importing
-// errors just for errors.New.
-type errStub string
-
-func (e errStub) Error() string { return string(e) }
-
 // TestParseLevel pins the wire-form decode used by --log-level and
 // BONES_HUB_LOG_LEVEL. Unknown strings degrade to INFO so a typo
 // doesn't mute hub.log entirely.

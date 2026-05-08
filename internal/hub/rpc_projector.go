@@ -2,7 +2,7 @@ package hub
 
 import (
 	"context"
-	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -87,27 +87,27 @@ func startRPCProjector(
 		return nopStop
 	}
 
-	_, cancel := context.WithCancel(ctx)
 	cc, err := cons.Consume(func(msg jetstream.Msg) {
 		_ = msg.Ack()
 		projectOne(hl, msg.Data())
 	})
 	if err != nil {
-		cancel()
 		nc.Close()
 		hl.Warnf("hub: rpc-log projector skipped (consume: %v)", err)
 		return nopStop
 	}
 
-	stopOnce := false
+	// sync.Once guards against duplicate stop calls (deferred stop +
+	// an explicit teardown path in tests). Without it, cc.Stop() and
+	// nc.Close() would run twice on the second call — both are
+	// idempotent in practice but the contract should not depend on
+	// upstream best-effort behavior.
+	var stopOnce sync.Once
 	return func() {
-		if stopOnce {
-			return
-		}
-		stopOnce = true
-		cc.Stop()
-		cancel()
-		nc.Close()
+		stopOnce.Do(func() {
+			cc.Stop()
+			nc.Close()
+		})
 	}
 }
 
@@ -133,14 +133,17 @@ func projectOne(hl *hubLogger, raw []byte) {
 	}
 	rpc := rpcNameFromEventType(env.Type.String())
 	agent := agentFromPayload(env)
+	// Every event on tasks.events.> is by definition a state-mutating
+	// operation (ADR 0052: only Tx callbacks publish to the stream).
+	// INFO is the right floor — read-only RPCs would be DEBUG, but
+	// they never appear here because read paths don't publish events.
 	hl.Log(LogEntry{
-		Level: selectLevel(rpc, nil),
+		Level: LevelInfo,
 		Event: EventRPC,
 		RPC:   rpc,
 		Agent: agent,
 		Task:  env.TaskID,
 	})
-	_ = json.RawMessage(env.Payload)
 }
 
 // agentFromPayload extracts the agent identity from typed payloads
