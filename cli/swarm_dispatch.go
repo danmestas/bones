@@ -14,6 +14,7 @@ import (
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/cli/schemas"
+	"github.com/danmestas/bones/cli/uxprint"
 	"github.com/danmestas/bones/internal/dispatch"
 	"github.com/danmestas/bones/internal/tasks"
 	"github.com/danmestas/bones/internal/workspace"
@@ -40,6 +41,7 @@ type SwarmDispatchCmd struct {
 	Wave     int    `name:"wave" help:"explicit wave number (rare; for testing)"`
 	JSON     bool   `name:"json" help:"emit manifest path + summary as JSON"`
 	DryRun   bool   `name:"dry-run" help:"validate; don't touch NATS or filesystem"`
+	Quiet    bool   `name:"quiet" help:"suppress success output"`
 }
 
 // Run dispatches to the appropriate subcommand based on which flag is set.
@@ -98,8 +100,10 @@ func (c *SwarmDispatchCmd) runDispatch(
 		return fmt.Errorf("dispatch: plan %q has %d validation error(s)", planPath, len(res.Errors))
 	}
 	if c.DryRun {
-		fmt.Printf("dispatch: --dry-run: %q valid (%d slot(s)); no tasks or manifest written\n",
-			planPath, len(res.Slots))
+		if !c.Quiet {
+			fmt.Printf("dispatch: --dry-run: %q valid (%d slot(s)); no tasks or manifest written\n",
+				planPath, len(res.Slots))
+		}
 		return nil
 	}
 
@@ -204,10 +208,47 @@ func (c *SwarmDispatchCmd) printDispatchResult(
 				PlanSHA256:   m.PlanSHA256,
 			})
 	}
-	fmt.Printf("dispatch: created %d task(s) from %q\n", len(taskIDs), planPath)
+	if c.Quiet {
+		return nil
+	}
+	// Multi-target convention: one line per task, plus a one-line
+	// summary, plus the manifest/next-step lines that aren't a per-
+	// entity success signature but are still operationally useful.
+	// Iterate slots in stable order so the per-task lines are
+	// reproducible across runs.
+	slotNames := make([]string, 0, len(taskIDs))
+	for slot := range taskIDs {
+		slotNames = append(slotNames, slot)
+	}
+	sortStrings(slotNames)
+	for _, slot := range slotNames {
+		uxprint.Created(os.Stdout, truncateID(taskIDs[slot], 8), slot)
+	}
+	uxprint.Summary(os.Stdout, len(taskIDs), pluralize("task", len(taskIDs)), "created")
 	fmt.Printf("dispatch: manifest written to %s\n", manifestPath)
 	fmt.Println("dispatch: next step — run `bones swarm dispatch --advance` after wave 1 completes")
 	return nil
+}
+
+// sortStrings is a small wrapper around sort.Strings kept local to
+// swarm_dispatch.go so the import surface of the file does not grow
+// for a one-line operation. The wider sort already lives in the
+// package via tasks_slot.go's groupBySlot.
+func sortStrings(in []string) {
+	for i := 1; i < len(in); i++ {
+		for j := i; j > 0 && in[j-1] > in[j]; j-- {
+			in[j-1], in[j] = in[j], in[j-1]
+		}
+	}
+}
+
+// pluralize returns "task" or "tasks" depending on count, matching
+// the brief's "2 tasks created" / "1 task created" examples.
+func pluralize(noun string, n int) string {
+	if n == 1 {
+		return noun
+	}
+	return noun + "s"
 }
 
 // runAdvance opens the task manager, wires an isClosed shim, calls
@@ -235,12 +276,16 @@ func (c *SwarmDispatchCmd) runAdvance(ctx context.Context, info workspace.Info) 
 			return fmt.Errorf("dispatch advance: wave not yet complete")
 		}
 		if errors.Is(err, dispatch.ErrAllWavesComplete) {
-			fmt.Println("dispatch: all waves complete — dispatch is finished")
+			if !c.Quiet {
+				fmt.Println("dispatch: all waves complete — dispatch is finished")
+			}
 			return nil
 		}
 		return err
 	}
-	fmt.Printf("dispatch: advanced to wave %d of %d\n", updated.CurrentWave, len(updated.Waves))
+	if !c.Quiet {
+		fmt.Printf("dispatch: advanced to wave %d of %d\n", updated.CurrentWave, len(updated.Waves))
+	}
 	return nil
 }
 
@@ -276,6 +321,8 @@ func (c *SwarmDispatchCmd) runCancel(ctx context.Context, info workspace.Info) e
 	if err := dispatch.Cancel(info.WorkspaceDir, closeTask); err != nil {
 		return err
 	}
-	fmt.Println("dispatch: canceled and manifest removed")
+	if !c.Quiet {
+		fmt.Println("dispatch: canceled and manifest removed")
+	}
 	return nil
 }

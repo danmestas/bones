@@ -9,6 +9,7 @@ import (
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 	"github.com/google/uuid"
 
+	"github.com/danmestas/bones/cli/uxprint"
 	"github.com/danmestas/bones/internal/tasks"
 )
 
@@ -21,6 +22,7 @@ type TasksCreateCmd struct {
 	Slot       string   `name:"slot" help:"slot name; stamps Context[slot]"`
 	Context    []string `name:"context" help:"key=value (repeatable)" sep:"none"`
 	JSON       bool     `name:"json" help:"emit JSON"`
+	Quiet      bool     `name:"quiet" help:"suppress success output"`
 }
 
 func (c *TasksCreateCmd) Run(g *repocli.Globals) error {
@@ -86,7 +88,9 @@ func (c *TasksCreateCmd) Run(g *repocli.Globals) error {
 		if c.JSON {
 			return emitEnvelope(os.Stdout, "tasks.create", taskToSchema(t))
 		}
-		fmt.Println(t.ID)
+		if !c.Quiet {
+			uxprint.Created(os.Stdout, truncateID(t.ID, 8), t.Title)
+		}
 		return nil
 	}))
 }
