@@ -11,6 +11,7 @@ import (
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/cli/schemas"
+	"github.com/danmestas/bones/cli/uxprint"
 	"github.com/danmestas/bones/internal/tasks"
 )
 
@@ -51,7 +52,13 @@ func (c *TasksAggregateCmd) Run(g *repocli.Globals) error {
 			return fmt.Errorf("aggregate: list tasks: %w", err)
 		}
 		slots, totalTasks, activeSlots := buildAggregateSlots(allTasks, c.Since)
-		return emitAggregateOutput(c.Since, slots, totalTasks, activeSlots, c.JSON)
+		// hasOlder distinguishes "your --since hid these rows"
+		// (filter-emptiness hint shown) from "the workspace has no
+		// task history at all" (silent). The hint exists to point
+		// the operator at the escape hatch (--since=) when their
+		// window is the reason for emptiness.
+		hasOlder := totalTasks == 0 && len(allTasks) > 0
+		return emitAggregateOutput(c.Since, slots, totalTasks, activeSlots, c.JSON, hasOlder)
 	}))
 }
 
@@ -101,7 +108,7 @@ func emitAggregateOutput(
 	since time.Duration,
 	slots []aggregateSlot,
 	totalTasks, activeSlots int,
-	asJSON bool,
+	asJSON, hasOlder bool,
 ) error {
 	if asJSON {
 		schemaSlots := make([]schemas.TasksAggregateSlot, len(slots))
@@ -122,20 +129,30 @@ func emitAggregateOutput(
 		}
 		return emitEnvelope(os.Stdout, "tasks.aggregate", payload)
 	}
-	return printAggregateSummary(since, slots, totalTasks, activeSlots)
+	return printAggregateSummary(since, slots, totalTasks, activeSlots, hasOlder)
 }
 
 func printAggregateSummary(
 	since time.Duration,
 	slots []aggregateSlot,
 	totalTasks, activeSlots int,
+	hasOlder bool,
 ) error {
 	sep := strings.Repeat("─", 53)
 	var b strings.Builder
 	fmt.Fprintf(&b, "Run summary (last %s)\n", since)
 	fmt.Fprintln(&b, sep)
 	if len(slots) == 0 {
-		fmt.Fprintln(&b, "(no tasks in window)")
+		// Filter-emptiness hint: if there are older tasks but the
+		// --since window hid them, point the operator at the escape
+		// hatch. When the workspace has no tasks at all, fall back
+		// to the legacy "(no tasks in window)" line so the report
+		// frame is still readable.
+		if hasOlder {
+			uxprint.NoRecentActivity(&b, since.String())
+		} else {
+			fmt.Fprintln(&b, "(no tasks in window)")
+		}
 	}
 	for _, s := range slots {
 		summary := summarizeFiles(s.Files, 3)

@@ -8,6 +8,7 @@ import (
 
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
+	"github.com/danmestas/bones/cli/uxprint"
 	"github.com/danmestas/bones/internal/coord"
 	"github.com/danmestas/bones/internal/tasks"
 	"github.com/danmestas/bones/internal/workspace"
@@ -78,6 +79,14 @@ func (c *SwarmTasksCmd) run(ctx context.Context, info workspace.Info) error {
 	}
 	if c.JSON {
 		return emitEnvelope(os.Stdout, "swarm.tasks", tasksToSchema(out))
+	}
+	// Filter-emptiness hint: when --slot narrows to zero ready tasks
+	// but the readiness gate produced rows for other slots, surface
+	// the broaden-the-filter hint so the operator distinguishes "no
+	// tasks for THIS slot" from "no tasks at all anywhere".
+	if len(out) == 0 && len(readies) > 0 {
+		uxprint.NoReadyTasks(os.Stdout, len(readies))
+		return nil
 	}
 	for _, t := range out {
 		fmt.Println(formatListLine(t))

@@ -9,6 +9,7 @@ import (
 
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
+	"github.com/danmestas/bones/cli/uxprint"
 	"github.com/danmestas/bones/internal/tasks"
 	"github.com/danmestas/bones/internal/workspace"
 )
@@ -61,7 +62,32 @@ func (c *TasksReadyCmd) run(
 	}
 
 	ready := selectReady(all, c.Slot, c.Mine, info.AgentID, c.Limit, time.Now().UTC())
+	// Filter-emptiness hint: when no ready tasks survive the filter
+	// pipeline but the workspace has open tasks, point the operator
+	// at the broaden-the-filter escape hatch. Silent when the
+	// workspace truly has no open tasks at all.
+	if !c.JSON && len(ready) == 0 {
+		openCount := countOpen(all)
+		if openCount > 0 {
+			uxprint.NoReadyTasks(out, openCount)
+			return nil
+		}
+	}
 	return emitReady(out, ready, c.JSON)
+}
+
+// countOpen returns the number of non-closed tasks. Used by the
+// filter-emptiness hint logic in tasks_ready.go to distinguish "the
+// readiness/slot/mine filter hid all rows" from "there is nothing
+// open to be ready".
+func countOpen(in []tasks.Task) int {
+	n := 0
+	for _, t := range in {
+		if t.Status != tasks.StatusClosed {
+			n++
+		}
+	}
+	return n
 }
 
 // selectReady runs the full filter pipeline used by `bones tasks
