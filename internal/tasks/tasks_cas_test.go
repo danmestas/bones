@@ -29,7 +29,7 @@ func TestUpdate_CAS_RetryFires(t *testing.T) {
 	ctx := context.Background()
 	id := "bones-retry001"
 
-	if err := m.Create(ctx, newTask(id)); err != nil {
+	if err := tasks.NewAdminWrite(m).Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -57,7 +57,7 @@ func TestUpdate_CAS_RetryFires(t *testing.T) {
 	})
 	defer restorePre()
 
-	err := m.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
+	err := tasks.NewAdminWrite(m).Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
 		t.Status = tasks.StatusClaimed
 		t.ClaimedBy = "agent-a"
 		t.UpdatedAt = time.Now().UTC()
@@ -94,7 +94,7 @@ func TestUpdate_CAS_ConcurrentContention(t *testing.T) {
 	ctx := context.Background()
 	id := "bones-stress01"
 
-	if err := m.Create(ctx, newTask(id)); err != nil {
+	if err := tasks.NewAdminWrite(m).Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -111,7 +111,7 @@ func TestUpdate_CAS_ConcurrentContention(t *testing.T) {
 		go func(idx int, k string) {
 			defer wg.Done()
 			<-startGun
-			errs[idx] = m.Update(
+			errs[idx] = tasks.NewAdminWrite(m).Update(
 				ctx, id,
 				func(t tasks.Task) (tasks.Task, error) {
 					if t.Context == nil {
@@ -160,7 +160,7 @@ func TestUpdate_CAS_ExhaustedRetries(t *testing.T) {
 	ctx := context.Background()
 	id := "bones-exhaust0"
 
-	if err := m.Create(ctx, newTask(id)); err != nil {
+	if err := tasks.NewAdminWrite(m).Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -174,7 +174,7 @@ func TestUpdate_CAS_ExhaustedRetries(t *testing.T) {
 	defer restore()
 
 	// The mutate closure always succeeds; the CAS race is what fails.
-	err := m.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
+	err := tasks.NewAdminWrite(m).Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
 		t.Title = "target"
 		return t, nil
 	})

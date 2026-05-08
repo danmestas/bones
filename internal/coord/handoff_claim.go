@@ -39,9 +39,12 @@ func (c *Coord) HandoffClaim(
 		return nil, err
 	}
 	var newEpoch uint64
-	if err := c.sub.tasks.Update(
-		ctx, string(taskID), c.handoffMutator(fromAgent, &newEpoch),
-	); err != nil {
+	mutate := c.handoffMutator(fromAgent, &newEpoch)
+	if err := c.sub.tasks.Tx(ctx, string(taskID), func(tx *tasks.Tx) error {
+		return tx.Mutate(mutate,
+			tasks.MustFieldChange("claimed_by", fromAgent, c.cfg.AgentID),
+		)
+	}); err != nil {
 		return nil, translateHandoffCASErr(err)
 	}
 	c.activeEpochs.Store(taskID, newEpoch)

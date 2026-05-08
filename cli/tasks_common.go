@@ -140,10 +140,11 @@ func openManager(
 		return nil, nil, fmt.Errorf("openManager: nats connect: %w", err)
 	}
 	m, err := tasks.Open(ctx, nc, tasks.Config{
-		BucketName:   tasks.DefaultBucketName,
-		HistoryDepth: 10,
-		MaxValueSize: 64 * 1024,
-		ChanBuffer:   32,
+		BucketName:     tasks.DefaultBucketName,
+		HistoryDepth:   10,
+		MaxValueSize:   64 * 1024,
+		ChanBuffer:     32,
+		EnableEventLog: true,
 	})
 	if err != nil {
 		nc.Close()

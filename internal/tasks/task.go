@@ -7,8 +7,10 @@ import (
 
 // SchemaVersion is the currently-written task record schema. Every
 // Create stamps this on the record so future migrations can fan out on
-// observed version. v3 adds closed-task compaction metadata.
-const SchemaVersion = 3
+// observed version. v3 adds closed-task compaction metadata. v4 adds
+// LastEventSeq, the projection-watermark wired by the event log per
+// ADR 0052.
+const SchemaVersion = 4
 
 // Status is the task lifecycle state. ADR 0005 fixes the enum to
 // exactly these three values; invariant 13 (amended by ADR 0007)
@@ -139,6 +141,14 @@ type Task struct {
 
 	// SchemaVersion stamps the schema this record was written against.
 	SchemaVersion int `json:"schema_version"`
+
+	// LastEventSeq is the JetStream stream sequence of the most recent
+	// task event whose effect has been applied to this projection. The
+	// hub-side recovery loop on bones up reads the live KV record and
+	// the stream's latest sequence per task subject; if the stream
+	// sequence is greater, pending events are replayed and the
+	// projection is brought to parity. Added in schema v4 (ADR 0052).
+	LastEventSeq uint64 `json:"last_event_seq,omitempty"`
 }
 
 // encode serializes a Task to JSON bytes for KV storage. Separated from

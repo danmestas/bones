@@ -61,10 +61,11 @@ func (c *TasksStatusCmd) Run(g *repocli.Globals) error {
 	defer nc.Close()
 
 	m, err := tasks.Open(ctx, nc, tasks.Config{
-		BucketName:   tasks.DefaultBucketName,
-		HistoryDepth: 10,
-		MaxValueSize: 64 * 1024,
-		ChanBuffer:   32,
+		BucketName:     tasks.DefaultBucketName,
+		HistoryDepth:   10,
+		MaxValueSize:   64 * 1024,
+		ChanBuffer:     32,
+		EnableEventLog: true,
 	})
 	if err != nil {
 		fmt.Printf("hub:     %s\nnats:    %s\n", hubLine, info.NATSURL)

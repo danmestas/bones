@@ -45,7 +45,7 @@ func (c *TasksClaimCmd) Run(g *repocli.Globals) error {
 		defer func() { _ = mgr.Close() }()
 
 		var updated tasks.Task
-		err = mgr.Update(ctx, c.ID, func(t tasks.Task) (tasks.Task, error) {
+		mutate := func(t tasks.Task) (tasks.Task, error) {
 			switch {
 			case t.Status == tasks.StatusClaimed && t.ClaimedBy == info.AgentID:
 				// Idempotent: already ours.
@@ -61,6 +61,12 @@ func (c *TasksClaimCmd) Run(g *repocli.Globals) error {
 			t.UpdatedAt = time.Now().UTC()
 			updated = t
 			return t, nil
+		}
+		err = mgr.Tx(ctx, c.ID, func(tx *tasks.Tx) error {
+			return tx.Mutate(mutate,
+				tasks.MustFieldChange("status", tasks.StatusOpen, tasks.StatusClaimed),
+				tasks.MustFieldChange("claimed_by", "", info.AgentID),
+			)
 		})
 		if err != nil {
 			return err

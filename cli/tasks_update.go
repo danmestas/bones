@@ -65,7 +65,11 @@ func (c *TasksUpdateCmd) Run(g *repocli.Globals) error {
 
 		var updated tasks.Task
 		mutate := buildUpdateMutator(c, statusUpdate, parsedDeferUntil, &updated)
-		if err := mgr.Update(ctx, c.ID, mutate); err != nil {
+		if err := mgr.Tx(ctx, c.ID, func(tx *tasks.Tx) error {
+			return tx.Mutate(mutate,
+				tasks.MustFieldChange("update", "before", "after"),
+			)
+		}); err != nil {
 			return err
 		}
 		if c.JSON {

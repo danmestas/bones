@@ -150,13 +150,16 @@ func openSubstrate(
 		return nil, fmt.Errorf("coord.Open: holds: %w", err)
 	}
 	if s.tasks, err = tasks.Open(ctx, nc, tasks.Config{
-		BucketName:   tasks.DefaultBucketName,
-		HistoryDepth: cfg.Tuning.TaskHistoryDepth,
-		MaxValueSize: int32(cfg.Tuning.MaxTaskValueSize),
+		BucketName:     tasks.DefaultBucketName,
+		HistoryDepth:   cfg.Tuning.TaskHistoryDepth,
+		MaxValueSize:   int32(cfg.Tuning.MaxTaskValueSize),
+		EnableEventLog: true,
 	}); err != nil {
 		s.close()
 		return nil, fmt.Errorf("coord.Open: tasks: %w", err)
 	}
+	// Archive opens without the event log — compaction-only writes use
+	// the AdminWrite escape hatch to avoid event-log churn (ADR 0052).
 	if s.archive, err = tasks.Open(ctx, nc, tasks.Config{
 		BucketName:   archiveBucket,
 		HistoryDepth: cfg.Tuning.TaskHistoryDepth,
@@ -376,8 +379,26 @@ func (c *Coord) acquireTaskCAS(
 	}
 	files := append([]string(nil), rec.Files...)
 	var newEpoch uint64
+
+	// We pass the legacy mutator into tx.Update with a single
+	// status-edge FieldChange; the mutator does the conditional
+	// rejection (status==open, claimed_by==""), tx publishes a
+	// `claimed` event before invoking the CAS write. A racing claimer
+	// between the pre-check above and the CAS surfaces as
+	// ErrTaskAlreadyClaimed from the mutator, leaving a "spurious
+	// claimed" event in the log; recovery short-circuits replay when
+	// the projection has moved past the event's sequence per ADR 0052.
 	mutate := c.claimMutator(&newEpoch)
-	if err := c.sub.tasks.Update(ctx, string(taskID), mutate); err != nil {
+	err = c.sub.tasks.Tx(ctx, string(taskID), func(tx *tasks.Tx) error {
+		// Use Tx.Mutate for compound mutations (status + claimed_by +
+		// claim_epoch) — the typed Claim helper would not surface the
+		// epoch-bumping race the mutator handles.
+		return tx.Mutate(mutate,
+			tasks.MustFieldChange("status", tasks.StatusOpen, tasks.StatusClaimed),
+			tasks.MustFieldChange("claimed_by", "", c.cfg.AgentID),
+		)
+	})
+	if err != nil {
 		return nil, translateClaimCASErr(err)
 	}
 	c.activeEpochs.Store(taskID, newEpoch)
@@ -471,7 +492,16 @@ func (c *Coord) undoTaskCAS(ctx context.Context, taskID TaskID) {
 		cur.UpdatedAt = time.Now().UTC()
 		return cur, nil
 	}
-	_ = c.sub.tasks.Update(ctx, string(taskID), mutate)
+	// One Tx that runs the legacy mutator: the mutator's
+	// errClaimCASNoOp short-circuits when the claim no longer belongs
+	// to us, leaving the record alone but still emitting an
+	// `unclaimed` event (the audit trail for the rollback attempt).
+	_ = c.sub.tasks.Tx(ctx, string(taskID), func(tx *tasks.Tx) error {
+		return tx.Mutate(mutate,
+			tasks.MustFieldChange("status", tasks.StatusClaimed, tasks.StatusOpen),
+			tasks.MustFieldChange("claimed_by", agent, ""),
+		)
+	})
 	c.activeEpochs.Delete(taskID)
 }
 
@@ -550,7 +580,12 @@ func (c *Coord) releaseTaskCAS(
 		cur.UpdatedAt = time.Now().UTC()
 		return cur, nil
 	}
-	err := c.sub.tasks.Update(ctx, string(taskID), mutate)
+	err := c.sub.tasks.Tx(ctx, string(taskID), func(tx *tasks.Tx) error {
+		return tx.Mutate(mutate,
+			tasks.MustFieldChange("status", tasks.StatusClaimed, tasks.StatusOpen),
+			tasks.MustFieldChange("claimed_by", agent, ""),
+		)
+	})
 	switch {
 	case err == nil:
 		return nil
@@ -752,14 +787,25 @@ func (c *Coord) listTasks(ctx context.Context) ([]tasks.Task, error) {
 }
 
 // updateTask performs a revision-gated CAS update on a task record.
-// Used by Leaf.Compact to stamp compaction metadata on a closed record;
-// unexported so substrate remains opaque to Leaf code.
+// Used by Leaf.Compact to stamp compaction metadata on a closed
+// record; unexported so substrate remains opaque to Leaf code.
+//
+// Routed through tasks.Tx so the canonical "no mutation outside Tx"
+// rule (ADR 0052) holds. The compaction edit emits an `updated` event
+// describing the (compact_level, original_size, compacted_at) deltas;
+// callers do not have to author the FieldChange tuples themselves
+// because the mutator is run twice — once in dry-run mode against the
+// pre-image to derive deltas, then for real inside Tx.
 func (c *Coord) updateTask(
 	ctx context.Context,
 	id string,
 	mutate func(tasks.Task) (tasks.Task, error),
 ) error {
-	return c.sub.tasks.Update(ctx, id, mutate)
+	return c.sub.tasks.Tx(ctx, id, func(tx *tasks.Tx) error {
+		return tx.Mutate(mutate,
+			tasks.MustFieldChange("compaction", "before", "after"),
+		)
+	})
 }
 
 // getAndArchiveTask reads the hot task record for id, writes it into
@@ -771,7 +817,7 @@ func (c *Coord) getAndArchiveTask(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if err := c.sub.archive.Create(ctx, archived); err != nil {
+	if err := tasks.NewAdminWrite(c.sub.archive).Create(ctx, archived); err != nil {
 		if !errors.Is(err, tasks.ErrAlreadyExists) {
 			return err
 		}

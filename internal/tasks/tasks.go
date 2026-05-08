@@ -44,6 +44,14 @@ type Config struct {
 	// ChanBuffer sets the channel buffer for Watch. Zero yields the
 	// package default (defaultChanBuffer).
 	ChanBuffer int
+
+	// EnableEventLog opts the Manager into the append-only task event
+	// log per ADR 0052. When true, Open creates (or attaches to) the
+	// `tasks-events` JetStream stream and Tx publishes one event per
+	// mutation. Coord's primary task Manager opens with this true; the
+	// archive Manager (compacted closed-task snapshots) opens false
+	// so that compaction-only writes do not flood the event log.
+	EnableEventLog bool
 }
 
 // defaultChanBuffer is the Watch channel buffer used when Config leaves
@@ -53,11 +61,12 @@ const defaultChanBuffer = 32
 // Manager owns a JetStream KV bucket that stores task records. Every
 // public method is safe to call concurrently. Close is idempotent.
 type Manager struct {
-	cfg  Config
-	js   jetstream.JetStream
-	kv   jetstream.KeyValue
-	buf  int
-	done atomic.Bool
+	cfg    Config
+	js     jetstream.JetStream
+	kv     jetstream.KeyValue
+	stream jetstream.Stream
+	buf    int
+	done   atomic.Bool
 
 	mu   sync.Mutex
 	subs []chan Event
@@ -88,7 +97,20 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Manager, error) {
 	if buf == 0 {
 		buf = defaultChanBuffer
 	}
-	return &Manager{cfg: cfg, js: js, kv: kv, buf: buf}, nil
+	mgr := &Manager{cfg: cfg, js: js, kv: kv, buf: buf}
+	if cfg.EnableEventLog {
+		stream, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+			Name:      EventStreamName,
+			Subjects:  []string{AllEventsSubject},
+			Storage:   jetstream.FileStorage,
+			Retention: jetstream.LimitsPolicy,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("tasks.Open: events stream: %w", err)
+		}
+		mgr.stream = stream
+	}
+	return mgr, nil
 }
 
 // assertOpenConfig panics on any Config field that would corrupt the
@@ -130,23 +152,20 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-// Create writes a new task record. Uses jetstream.KeyValue.Create
-// (revision 0), so a key that already exists rejects with
-// ErrAlreadyExists — under the ADR 0005 ID generator a Create collision
-// is a programmer error at the caller, but the sentinel lets the
-// caller distinguish the mistake from an unrelated substrate failure.
-// Invariant 11 and 13 are checked against the record's own fields
-// before the CAS call; invariant 14 is checked after encoding.
-func (m *Manager) Create(ctx context.Context, t Task) error {
-	assert.NotNil(ctx, "tasks.Create: ctx is nil")
-	assert.NotEmpty(t.ID, "tasks.Create: t.ID is empty")
+// create writes a new task record. Private; reachable only from Tx
+// (via createLocked) and from the import-restricted internal/tasks/
+// admin package. ADR 0052 makes Tx the only public mutation entry
+// point on Manager; this helper is the storage primitive Tx uses.
+func (m *Manager) create(ctx context.Context, t Task) error {
+	assert.NotNil(ctx, "tasks.create: ctx is nil")
+	assert.NotEmpty(t.ID, "tasks.create: t.ID is empty")
 	if m.done.Load() {
 		return ErrClosed
 	}
 	if err := validateForCreate(t); err != nil {
 		return err
 	}
-	payload, err := m.encodeBounded(t, "tasks.Create")
+	payload, err := m.encodeBounded(t, "tasks.create")
 	if err != nil {
 		return err
 	}
@@ -154,7 +173,7 @@ func (m *Manager) Create(ctx context.Context, t Task) error {
 		if errors.Is(err, jetstream.ErrKeyExists) {
 			return ErrAlreadyExists
 		}
-		return fmt.Errorf("tasks.Create: %w", err)
+		return fmt.Errorf("tasks.create: %w", err)
 	}
 	return nil
 }
@@ -189,28 +208,25 @@ func (m *Manager) Get(
 	return t, entry.Revision(), nil
 }
 
-// Update performs a revision-gated CAS update. The mutate function
-// receives the current Task value and returns the desired new value;
-// returning a non-nil error aborts the update and propagates the error
-// unwrapped so callers can switch on mutate's own sentinels. On
-// revision conflict the loop re-reads the record and re-invokes
-// mutate, up to jskv.MaxRetries times, before surfacing ErrCASConflict.
-// Invariants 11, 13, and 14 are checked on each attempt against the
-// value mutate returned.
-func (m *Manager) Update(
+// update performs a revision-gated CAS update. Private; reachable only
+// from Tx (via updateLocked) and from the import-restricted
+// internal/tasks/admin package. ADR 0052 makes Tx the only public
+// mutation entry point on Manager; this helper is the storage
+// primitive Tx uses.
+func (m *Manager) update(
 	ctx context.Context,
 	id string,
 	mutate func(Task) (Task, error),
 ) error {
-	assert.NotNil(ctx, "tasks.Update: ctx is nil")
-	assert.NotEmpty(id, "tasks.Update: id is empty")
-	assert.NotNil(mutate, "tasks.Update: mutate is nil")
+	assert.NotNil(ctx, "tasks.update: ctx is nil")
+	assert.NotEmpty(id, "tasks.update: id is empty")
+	assert.NotNil(mutate, "tasks.update: mutate is nil")
 	if m.done.Load() {
 		return ErrClosed
 	}
 	var attempt int
 	for attempt = 0; attempt < jskv.MaxRetries; attempt++ {
-		assert.Precondition(attempt < jskv.MaxRetries, "tasks.Update: CAS attempt exceeded bound")
+		assert.Precondition(attempt < jskv.MaxRetries, "tasks.update: CAS attempt exceeded bound")
 		done, err := m.updateAttempt(ctx, id, mutate)
 		if done {
 			return err
@@ -218,7 +234,7 @@ func (m *Manager) Update(
 		casRetryHook()
 	}
 	assert.Postcondition(attempt == jskv.MaxRetries,
-		"tasks.Update: exited CAS loop without exhausting retries or returning")
+		"tasks.update: exited CAS loop without exhausting retries or returning")
 	return ErrCASConflict
 }
 
