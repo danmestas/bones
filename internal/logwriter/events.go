@@ -3,6 +3,8 @@ package logwriter
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/danmestas/bones/internal/timefmt"
 )
 
 // EventType is one entry in the closed catalog of slot/workspace event kinds.
@@ -55,8 +57,10 @@ func (e Event) MarshalJSON() ([]byte, error) {
 		m[k] = v
 	}
 
-	// Reserved keys overwrite any Fields collision.
-	m["ts"] = e.Timestamp.UTC().Format(time.RFC3339Nano)
+	// Reserved keys overwrite any Fields collision. Per #324 the
+	// timestamp uses timefmt.Logged (UTC RFC3339) so the event log
+	// shares one shape with up.log, hub.log, and --json payloads.
+	m["ts"] = timefmt.Logged(e.Timestamp)
 	m["event"] = string(e.Event)
 	if e.Slot != "" {
 		m["slot"] = e.Slot

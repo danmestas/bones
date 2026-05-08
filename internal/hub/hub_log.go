@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/danmestas/bones/internal/timefmt"
 )
 
 // hubLogger appends structured lifecycle events to .bones/hub.log so a
@@ -82,5 +84,5 @@ func (l *hubLogger) appendLine(level, msg string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	_, _ = fmt.Fprintf(l.file, "%s %-5s %s\n",
-		time.Now().UTC().Format(time.RFC3339), level, msg)
+		timefmt.Logged(time.Now()), level, msg)
 }

@@ -12,6 +12,7 @@ import (
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/tasks"
+	"github.com/danmestas/bones/internal/timefmt"
 )
 
 // TasksWatchCmd subscribes to the task event log and streams human-
@@ -106,9 +107,11 @@ func watchBackfill(
 }
 
 // printEventEnvelope renders a single event-log envelope in the same
-// shape as printTaskEvent so live and backfill output align.
+// shape as printTaskEvent so live and backfill output align. The
+// bracket prefix is timefmt.Display per #324 — live operator surface,
+// local time + zone abbreviation.
 func printEventEnvelope(env tasks.EventEnvelope) {
-	ts := env.Timestamp.Local().Format("15:04:05")
+	ts := timefmt.Display(env.Timestamp)
 	fmt.Printf("[%s] %-12s id=%s seq=%d\n",
 		ts, env.Type.String(), env.TaskID, env.StreamSeq)
 }
@@ -117,7 +120,7 @@ func printEventEnvelope(env tasks.EventEnvelope) {
 // Retained for the live KV-watch path; the event-log path uses
 // printEventEnvelope above.
 func printTaskEvent(ev tasks.Event) {
-	ts := time.Now().Format("15:04:05")
+	ts := timefmt.Display(time.Now())
 	switch ev.Kind {
 	case tasks.EventCreated:
 		fmt.Printf("[%s] created  task=%q id=%s\n", ts, ev.Task.Title, ev.ID)

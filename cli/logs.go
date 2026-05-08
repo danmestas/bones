@@ -17,6 +17,7 @@ import (
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/internal/logwriter"
+	"github.com/danmestas/bones/internal/timefmt"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
@@ -192,11 +193,15 @@ func applyFilters(events []parsedEvent, since time.Time, last int) []parsedEvent
 
 // renderEvent formats a single event for human-readable output.
 func renderEvent(pe parsedEvent, fullTime bool, isTTY bool, w io.Writer) {
+	// Per #324: full mode uses Logged (UTC RFC3339), the audit shape;
+	// short mode uses Display (local + zone abbreviation), the live-
+	// operator shape. Both rendered via timefmt so the AST-walk
+	// enforcement keeps catching regressions.
 	var tsStr string
 	if fullTime {
-		tsStr = pe.event.Timestamp.UTC().Format(time.RFC3339)
+		tsStr = timefmt.Logged(pe.event.Timestamp)
 	} else {
-		tsStr = pe.event.Timestamp.UTC().Format("15:04:05")
+		tsStr = timefmt.Display(pe.event.Timestamp)
 	}
 
 	evType := string(pe.event.Event)

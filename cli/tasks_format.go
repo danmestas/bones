@@ -11,6 +11,7 @@ import (
 	"github.com/danmestas/bones/cli/schemas"
 	"github.com/danmestas/bones/internal/coord"
 	"github.com/danmestas/bones/internal/tasks"
+	"github.com/danmestas/bones/internal/timefmt"
 )
 
 // glyphFor mirrors bd's one-rune status markers.
@@ -81,7 +82,7 @@ func formatTime(ts time.Time) string {
 	if ts.IsZero() {
 		return ""
 	}
-	return ts.UTC().Format(time.RFC3339)
+	return timefmt.Logged(ts)
 }
 
 // emitJSON marshals v as JSON to w with trailing newline.

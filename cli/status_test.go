@@ -16,6 +16,7 @@ import (
 	"github.com/danmestas/bones/internal/registry"
 	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/tasks"
+	"github.com/danmestas/bones/internal/timefmt"
 )
 
 func TestRenderStatus_Empty(t *testing.T) {
@@ -31,8 +32,12 @@ func TestRenderStatus_Empty(t *testing.T) {
 		t.Fatalf("renderStatus: %v", err)
 	}
 	out := buf.String()
+	// "as of" header now carries a zone abbreviation (#324). Compute
+	// the expected string via timefmt.Display so the test stays
+	// host-zone-independent.
+	wantAsOf := "as of " + timefmt.Display(rep.GeneratedAt)
 	for _, want := range []string{
-		"workspace: bones", "trunk: —", "as of 14:05:02",
+		"workspace: bones", "trunk: —", wantAsOf,
 		"(no active swarm sessions)", "Recent activity:", "(none)",
 		"Tasks: 0 open · 0 claimed · 0 closed",
 		"Hub not running",
