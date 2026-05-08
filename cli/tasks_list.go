@@ -29,12 +29,51 @@ import (
 type TasksListCmd struct {
 	All       bool   `name:"all" help:"include closed tasks"`
 	Status    string `name:"status" help:"open|claimed|closed"`
+	Closed    bool   `name:"closed" help:"alias for --status=closed"`
+	Open      bool   `name:"open" help:"alias for --status=open"`
+	Claimed   bool   `name:"claimed" help:"alias for --status=claimed"`
 	ClaimedBy string `name:"claimed-by" help:"agent id, or - for unclaimed"`
 	Ready     bool   `name:"ready" help:"only tasks ready to claim (open, unblocked, not deferred)"`
 	Stale     int    `name:"stale" help:"only tasks not updated in N days; 0 = off"`
 	Orphans   bool   `name:"orphans" help:"only claimed tasks whose claimer is offline"`
 	BySlot    bool   `name:"by-slot" help:"group by slot; flag hot slots"`
 	JSON      bool   `name:"json" help:"emit JSON"`
+}
+
+// resolveStatusFlags collapses the alias bools (--closed/--open/--claimed)
+// down to a single status string, errorring if the operator combined more
+// than one alias or combined an alias with --status. Returns the resolved
+// status string (which may be empty when no filter is requested).
+//
+// The aliases exist for #312: operators reach for --closed first; the
+// long-form --status=closed is awkward enough that three obvious flags
+// were producing "unknown flag" errors. Aliases route through the same
+// code path as --status, so --json shape and downstream filtering are
+// unchanged — only the surface flag spelling is new.
+func resolveStatusFlags(status string, closed, open, claimed bool) (string, error) {
+	aliases := map[string]bool{
+		"closed":  closed,
+		"open":    open,
+		"claimed": claimed,
+	}
+	picked := ""
+	count := 0
+	for name, set := range aliases {
+		if set {
+			picked = name
+			count++
+		}
+	}
+	if count > 1 {
+		return "", fmt.Errorf("--closed, --open, --claimed are mutually exclusive")
+	}
+	if count == 1 && status != "" {
+		return "", fmt.Errorf("--%s and --status are mutually exclusive", picked)
+	}
+	if count == 1 {
+		return picked, nil
+	}
+	return status, nil
 }
 
 func (c *TasksListCmd) Run(g *repocli.Globals) error {
@@ -45,9 +84,13 @@ func (c *TasksListCmd) Run(g *repocli.Globals) error {
 	defer stop()
 
 	return taskCLIError(runOp(ctx, "list", func(ctx context.Context) error {
+		statusStr, err := resolveStatusFlags(c.Status, c.Closed, c.Open, c.Claimed)
+		if err != nil {
+			return err
+		}
 		var filterStatus tasks.Status
-		if c.Status != "" {
-			s, err := parseStatus(c.Status)
+		if statusStr != "" {
+			s, err := parseStatus(statusStr)
 			if err != nil {
 				return err
 			}
