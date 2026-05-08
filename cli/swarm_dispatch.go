@@ -172,7 +172,9 @@ func createTasksAndManifest(
 			UpdatedAt:     now,
 			SchemaVersion: tasks.SchemaVersion,
 		}
-		if err := mgr.Create(ctx, t); err != nil {
+		if err := mgr.Tx(ctx, t.ID, func(tx *tasks.Tx) error {
+			return tx.Create(t)
+		}); err != nil {
 			return dispatch.Manifest{}, nil,
 				fmt.Errorf("dispatch: create task for slot %q: %w", s.Name, err)
 		}
@@ -256,7 +258,7 @@ func (c *SwarmDispatchCmd) runCancel(ctx context.Context, info workspace.Info) e
 	defer func() { _ = mgr.Close() }()
 
 	closeTask := func(taskID, reason string) error {
-		return mgr.Update(ctx, taskID, func(t tasks.Task) (tasks.Task, error) {
+		mutate := func(t tasks.Task) (tasks.Task, error) {
 			now := time.Now().UTC()
 			t.Status = tasks.StatusClosed
 			t.ClosedAt = &now
@@ -267,6 +269,9 @@ func (c *SwarmDispatchCmd) runCancel(ctx context.Context, info workspace.Info) e
 			t.ClosedReason = reason
 			t.UpdatedAt = now
 			return t, nil
+		}
+		return mgr.Tx(ctx, taskID, func(tx *tasks.Tx) error {
+			return tx.Close("", reason, mutate)
 		})
 	}
 

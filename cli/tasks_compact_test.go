@@ -116,7 +116,7 @@ func (f *compactFixture) seedTask(t *testing.T, rec tasks.Task) {
 		t.Fatalf("tasks.Open: %v", err)
 	}
 	defer func() { _ = mgr.Close() }()
-	if err := mgr.Create(ctx, rec); err != nil {
+	if err := tasks.NewAdminWrite(mgr).Create(ctx, rec); err != nil {
 		t.Fatalf("seed Create %q: %v", rec.ID, err)
 	}
 }

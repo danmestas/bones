@@ -65,7 +65,9 @@ func (c *TasksCreateCmd) Run(g *repocli.Globals) error {
 			UpdatedAt:     now,
 			SchemaVersion: tasks.SchemaVersion,
 		}
-		if err := mgr.Create(ctx, t); err != nil {
+		if err := mgr.Tx(ctx, t.ID, func(tx *tasks.Tx) error {
+			return tx.Create(t)
+		}); err != nil {
 			return err
 		}
 		// Hot-slot advisory (issue #214 fix C). Re-list and count after

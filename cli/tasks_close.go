@@ -91,7 +91,7 @@ func (c *TasksCloseCmd) legacyClose(
 	ctx context.Context, mgr *tasks.Manager, info workspace.Info,
 ) error {
 	var updated tasks.Task
-	err := mgr.Update(ctx, c.ID, func(t tasks.Task) (tasks.Task, error) {
+	mutate := func(t tasks.Task) (tasks.Task, error) {
 		now := time.Now().UTC()
 		t.Status = tasks.StatusClosed
 		t.ClosedAt = &now
@@ -115,6 +115,9 @@ func (c *TasksCloseCmd) legacyClose(
 		t.ClaimedBy = ""
 		updated = t
 		return t, nil
+	}
+	err := mgr.Tx(ctx, c.ID, func(tx *tasks.Tx) error {
+		return tx.Close(info.AgentID, c.Reason, mutate)
 	})
 	if err != nil {
 		return err

@@ -142,25 +142,24 @@ func TestRenderStatus_WithSessionsAndTasks(t *testing.T) {
 	}
 }
 
-func TestGatherTaskEvents(t *testing.T) {
+// TestTaskEventsToActivity replaces TestGatherTaskEvents per ADR 0052
+// — Recent activity now sources from the task event log via Replay,
+// and the helper translating envelopes into activityEvent rows is
+// what we test instead.
+func TestTaskEventsToActivity(t *testing.T) {
 	now := time.Now().UTC()
-	closed := now.Add(-10 * time.Minute)
-	in := []tasks.Task{
-		{
-			ID: "t1", Title: "open one",
-			CreatedAt: now.Add(-1 * time.Hour),
-			Status:    tasks.StatusOpen,
-		},
-		{
-			ID: "t2", Title: "closed one",
-			CreatedAt: now.Add(-2 * time.Hour),
-			ClosedAt:  &closed,
-			Status:    tasks.StatusClosed,
-		},
+	envs := []tasks.EventEnvelope{
+		{Type: tasks.EventTypeCreated, TaskID: "t1", Timestamp: now.Add(-time.Hour)},
+		{Type: tasks.EventTypeCreated, TaskID: "t2", Timestamp: now.Add(-2 * time.Hour)},
+		{Type: tasks.EventTypeClosed, TaskID: "t2", Timestamp: now.Add(-10 * time.Minute)},
 	}
-	got := gatherTaskEvents(in)
+	byID := map[string]tasks.Task{
+		"t1": {ID: "t1", Title: "open one"},
+		"t2": {ID: "t2", Title: "closed one"},
+	}
+	got := taskEventsToActivity(envs, byID)
 	if len(got) != 3 {
-		t.Fatalf("want 3 events (1 create for t1 + create+close for t2), got %d", len(got))
+		t.Fatalf("want 3 activity rows, got %d", len(got))
 	}
 	kinds := map[activityKind]int{}
 	for _, e := range got {

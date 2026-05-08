@@ -239,8 +239,9 @@ func TestSwarmDispatch_Advance_AllWavesComplete(t *testing.T) {
 	defer func() { _ = mgr.Close() }()
 
 	now := time.Now().UTC()
+	aw := tasks.NewAdminWrite(mgr)
 	for _, s := range m.Waves[0].Slots {
-		if err := mgr.Update(ctx, s.TaskID, func(t tasks.Task) (tasks.Task, error) {
+		if err := aw.Update(ctx, s.TaskID, func(t tasks.Task) (tasks.Task, error) {
 			t.Status = tasks.StatusClosed
 			t.ClosedAt = &now
 			t.ClosedReason = "done"
@@ -297,7 +298,7 @@ func TestSwarmDispatch_Cancel_ClosesTasksAndRemovesManifest(t *testing.T) {
 			UpdatedAt:     now,
 			SchemaVersion: tasks.SchemaVersion,
 		}
-		if err := mgr.Create(ctx, task); err != nil {
+		if err := tasks.NewAdminWrite(mgr).Create(ctx, task); err != nil {
 			t.Fatalf("create task %s: %v", id, err)
 		}
 	}

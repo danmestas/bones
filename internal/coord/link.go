@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/danmestas/bones/internal/assert"
 	"github.com/danmestas/bones/internal/tasks"
@@ -41,20 +40,26 @@ func (c *Coord) Link(ctx context.Context, from, to TaskID, edgeType EdgeType) er
 	}
 
 	internalType := tasks.EdgeType(edgeType)
-	mutate := func(cur tasks.Task) (tasks.Task, error) {
-		for _, e := range cur.Edges {
-			if e.Type == internalType && e.Target == string(to) {
-				return cur, nil // idempotent no-op
-			}
+
+	// Idempotent fast-path: if the edge already exists, return without
+	// publishing an event. The Tx-side Link emits an event for every
+	// call, so the no-op check has to happen here, not in the mutator.
+	cur, _, err := c.sub.tasks.Get(ctx, string(from))
+	if err != nil {
+		if errors.Is(err, tasks.ErrNotFound) {
+			return fmt.Errorf("coord.Link: from=%s: %w", from, ErrTaskNotFound)
 		}
-		cur.Edges = append(cur.Edges, tasks.Edge{
-			Type:   internalType,
-			Target: string(to),
-		})
-		cur.UpdatedAt = time.Now().UTC()
-		return cur, nil
+		return fmt.Errorf("coord.Link: from=%s: %w", from, err)
 	}
-	if err := c.sub.tasks.Update(ctx, string(from), mutate); err != nil {
+	for _, e := range cur.Edges {
+		if e.Type == internalType && e.Target == string(to) {
+			return nil // idempotent no-op
+		}
+	}
+
+	if err := c.sub.tasks.Tx(ctx, string(from), func(tx *tasks.Tx) error {
+		return tx.Link(string(to), string(edgeType))
+	}); err != nil {
 		if errors.Is(err, tasks.ErrNotFound) {
 			return fmt.Errorf("coord.Link: from=%s: %w", from, ErrTaskNotFound)
 		}

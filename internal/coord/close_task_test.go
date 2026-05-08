@@ -34,7 +34,7 @@ func seedClaimedTask(t *testing.T, c *Coord, id string) {
 		UpdatedAt:     now,
 		SchemaVersion: tasks.SchemaVersion,
 	}
-	if err := c.sub.tasks.Create(context.Background(), rec); err != nil {
+	if err := tasks.NewAdminWrite(c.sub.tasks).Create(context.Background(), rec); err != nil {
 		t.Fatalf("seed claimed task: %v", err)
 	}
 }
@@ -52,7 +52,7 @@ func seedOpenTask(t *testing.T, c *Coord, id string) {
 		UpdatedAt:     now,
 		SchemaVersion: tasks.SchemaVersion,
 	}
-	if err := c.sub.tasks.Create(context.Background(), rec); err != nil {
+	if err := tasks.NewAdminWrite(c.sub.tasks).Create(context.Background(), rec); err != nil {
 		t.Fatalf("seed open task: %v", err)
 	}
 }
@@ -73,7 +73,7 @@ func seedClaimedByOther(
 		UpdatedAt:     now,
 		SchemaVersion: tasks.SchemaVersion,
 	}
-	if err := c.sub.tasks.Create(context.Background(), rec); err != nil {
+	if err := tasks.NewAdminWrite(c.sub.tasks).Create(context.Background(), rec); err != nil {
 		t.Fatalf("seed peer-claimed task: %v", err)
 	}
 }
@@ -95,7 +95,7 @@ func seedClosedTask(t *testing.T, c *Coord, id string) {
 		ClosedReason:  "prior close",
 		SchemaVersion: tasks.SchemaVersion,
 	}
-	if err := c.sub.tasks.Create(context.Background(), rec); err != nil {
+	if err := tasks.NewAdminWrite(c.sub.tasks).Create(context.Background(), rec); err != nil {
 		t.Fatalf("seed closed task: %v", err)
 	}
 }
@@ -275,7 +275,8 @@ func TestCloseTask_StaleEpoch_Refused(t *testing.T) {
 
 	// Bump the record's epoch directly via the substrate to simulate
 	// a concurrent Reclaim having bumped past our view.
-	err := c.sub.tasks.Update(ctx, string(taskID), func(cur tasks.Task) (tasks.Task, error) {
+	aw := tasks.NewAdminWrite(c.sub.tasks)
+	err := aw.Update(ctx, string(taskID), func(cur tasks.Task) (tasks.Task, error) {
 		cur.ClaimEpoch += 1
 		return cur, nil
 	})

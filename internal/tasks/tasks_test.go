@@ -102,7 +102,7 @@ func TestCreate_HappyPath(t *testing.T) {
 	ctx := context.Background()
 	id := "bones-aaaaaaaa"
 
-	if err := m.Create(ctx, newTask(id)); err != nil {
+	if err := tasks.NewAdminWrite(m).Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	got, rev, err := m.Get(ctx, id)
@@ -126,10 +126,10 @@ func TestCreate_Duplicate_ReturnsAlreadyExists(t *testing.T) {
 	ctx := context.Background()
 	id := "bones-aaaaaaab"
 
-	if err := m.Create(ctx, newTask(id)); err != nil {
+	if err := tasks.NewAdminWrite(m).Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create 1: %v", err)
 	}
-	err := m.Create(ctx, newTask(id))
+	err := tasks.NewAdminWrite(m).Create(ctx, newTask(id))
 	if !errors.Is(err, tasks.ErrAlreadyExists) {
 		t.Fatalf("Create 2: got %v, want ErrAlreadyExists", err)
 	}
@@ -151,12 +151,12 @@ func TestUpdate_HappyPath(t *testing.T) {
 	ctx := context.Background()
 	id := "bones-update001"
 
-	if err := m.Create(ctx, newTask(id)); err != nil {
+	if err := tasks.NewAdminWrite(m).Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	_, preRev, _ := m.Get(ctx, id)
 
-	err := m.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
+	err := tasks.NewAdminWrite(m).Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
 		t.Status = tasks.StatusClaimed
 		t.ClaimedBy = "agent-a"
 		t.UpdatedAt = time.Now().UTC()
@@ -190,10 +190,10 @@ func TestUpdate_Invariant11_Violation_Rejected(t *testing.T) {
 	ctx := context.Background()
 	id := "bones-inv110001"
 
-	if err := m.Create(ctx, newTask(id)); err != nil {
+	if err := tasks.NewAdminWrite(m).Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	err := m.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
+	err := tasks.NewAdminWrite(m).Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
 		t.Status = tasks.StatusClaimed
 		// ClaimedBy deliberately empty — the invariant-11 violation.
 		return t, nil
@@ -218,13 +218,13 @@ func TestUpdate_InvalidTransition_Rejected(t *testing.T) {
 	ctx := context.Background()
 	id := "bones-dag00001"
 
-	if err := m.Create(ctx, newTask(id)); err != nil {
+	if err := tasks.NewAdminWrite(m).Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	// Walk open → closed (a legal edge) so we can then attempt a
 	// backwards closed → open edge.
 	now := time.Now().UTC()
-	err := m.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
+	err := tasks.NewAdminWrite(m).Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
 		t.Status = tasks.StatusClosed
 		t.ClosedAt = &now
 		t.ClosedBy = "agent-a"
@@ -235,7 +235,7 @@ func TestUpdate_InvalidTransition_Rejected(t *testing.T) {
 		t.Fatalf("Update to closed: %v", err)
 	}
 
-	err = m.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
+	err = tasks.NewAdminWrite(m).Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
 		t.Status = tasks.StatusOpen
 		t.ClosedAt = nil
 		t.ClosedBy = ""
@@ -253,11 +253,11 @@ func TestUpdate_ClosedIsTerminal_RejectsSelfEdge(t *testing.T) {
 	ctx := context.Background()
 	id := "bones-closed01"
 
-	if err := m.Create(ctx, newTask(id)); err != nil {
+	if err := tasks.NewAdminWrite(m).Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	now := time.Now().UTC()
-	err := m.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
+	err := tasks.NewAdminWrite(m).Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
 		t.Status = tasks.StatusClosed
 		t.ClosedAt = &now
 		t.ClosedBy = "agent-a"
@@ -269,7 +269,7 @@ func TestUpdate_ClosedIsTerminal_RejectsSelfEdge(t *testing.T) {
 	}
 	// closed→closed (metadata-only update on a terminal record) must
 	// fail so the closed snapshot stays immutable.
-	err = m.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
+	err = tasks.NewAdminWrite(m).Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
 		t.ClosedReason = "mutated after close"
 		return t, nil
 	})
@@ -286,11 +286,11 @@ func TestUpdate_ClosedCompactionMetadata_AllowsSelfEdge(t *testing.T) {
 	ctx := context.Background()
 	id := "bones-closed02"
 
-	if err := m.Create(ctx, newTask(id)); err != nil {
+	if err := tasks.NewAdminWrite(m).Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	now := time.Now().UTC()
-	err := m.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
+	err := tasks.NewAdminWrite(m).Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
 		t.Status = tasks.StatusClosed
 		t.ClosedAt = &now
 		t.ClosedBy = "agent-a"
@@ -301,7 +301,7 @@ func TestUpdate_ClosedCompactionMetadata_AllowsSelfEdge(t *testing.T) {
 		t.Fatalf("Update to closed: %v", err)
 	}
 	compactedAt := now.Add(time.Hour)
-	err = m.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
+	err = tasks.NewAdminWrite(m).Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
 		t.OriginalSize = 123
 		t.CompactLevel = 1
 		t.CompactedAt = &compactedAt
@@ -329,13 +329,13 @@ func TestUpdate_ValueTooLarge_Rejected(t *testing.T) {
 	ctx := context.Background()
 	id := "bones-big00001"
 
-	if err := m.Create(ctx, newTask(id)); err != nil {
+	if err := tasks.NewAdminWrite(m).Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	bigCtx := make(map[string]string, 1)
 	bigCtx["blob"] = strings.Repeat("x", 16*1024)
 
-	err := m.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
+	err := tasks.NewAdminWrite(m).Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
 		t.Context = bigCtx
 		return t, nil
 	})
@@ -350,11 +350,11 @@ func TestUpdate_MutateError_Propagates(t *testing.T) {
 	ctx := context.Background()
 	id := "bones-mut00001"
 
-	if err := m.Create(ctx, newTask(id)); err != nil {
+	if err := tasks.NewAdminWrite(m).Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	sentinel := errors.New("caller sentinel")
-	err := m.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
+	err := tasks.NewAdminWrite(m).Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
 		return t, sentinel
 	})
 	if !errors.Is(err, sentinel) {
@@ -373,7 +373,7 @@ func TestList_ReturnsAllRecords(t *testing.T) {
 		"bones-list0003",
 	}
 	for _, id := range ids {
-		if err := m.Create(ctx, newTask(id)); err != nil {
+		if err := tasks.NewAdminWrite(m).Create(ctx, newTask(id)); err != nil {
 			t.Fatalf("Create %s: %v", id, err)
 		}
 	}
@@ -414,7 +414,7 @@ func TestPurge_RemovesRecord(t *testing.T) {
 	ctx := context.Background()
 	id := "bones-purge001"
 
-	if err := m.Create(ctx, newTask(id)); err != nil {
+	if err := tasks.NewAdminWrite(m).Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if err := m.Purge(ctx, id); err != nil {
@@ -439,7 +439,7 @@ func TestCreate_InvalidStatus_Rejected(t *testing.T) {
 
 	bad := newTask("bones-status01")
 	bad.Status = "totally-bogus"
-	err := m.Create(context.Background(), bad)
+	err := tasks.NewAdminWrite(m).Create(context.Background(), bad)
 	if !errors.Is(err, tasks.ErrInvalidStatus) {
 		t.Fatalf("Create: got %v, want ErrInvalidStatus", err)
 	}
@@ -452,7 +452,7 @@ func TestCreate_Invariant11_OnCreate_Rejected(t *testing.T) {
 	bad := newTask("bones-inv1101c")
 	bad.Status = tasks.StatusClaimed
 	// ClaimedBy deliberately empty.
-	err := m.Create(context.Background(), bad)
+	err := tasks.NewAdminWrite(m).Create(context.Background(), bad)
 	if !errors.Is(err, tasks.ErrInvariant11) {
 		t.Fatalf("Create: got %v, want ErrInvariant11", err)
 	}
@@ -464,13 +464,13 @@ func TestInvariant_NilCtx(t *testing.T) {
 	var ctx context.Context
 
 	requirePanic(t, func() {
-		_ = m.Create(ctx, newTask("bones-ctx00001"))
+		_ = tasks.NewAdminWrite(m).Create(ctx, newTask("bones-ctx00001"))
 	}, "ctx is nil")
 	requirePanic(t, func() {
 		_, _, _ = m.Get(ctx, "bones-ctx00002")
 	}, "ctx is nil")
 	requirePanic(t, func() {
-		_ = m.Update(ctx, "bones-ctx00003",
+		_ = tasks.NewAdminWrite(m).Update(ctx, "bones-ctx00003",
 			func(t tasks.Task) (tasks.Task, error) { return t, nil })
 	}, "ctx is nil")
 	requirePanic(t, func() {
@@ -487,13 +487,13 @@ func TestInvariant_EmptyID(t *testing.T) {
 	ctx := context.Background()
 
 	requirePanic(t, func() {
-		_ = m.Create(ctx, newTask(""))
+		_ = tasks.NewAdminWrite(m).Create(ctx, newTask(""))
 	}, "t.ID is empty")
 	requirePanic(t, func() {
 		_, _, _ = m.Get(ctx, "")
 	}, "id is empty")
 	requirePanic(t, func() {
-		_ = m.Update(ctx, "",
+		_ = tasks.NewAdminWrite(m).Update(ctx, "",
 			func(t tasks.Task) (tasks.Task, error) { return t, nil })
 	}, "id is empty")
 }
@@ -503,7 +503,7 @@ func TestInvariant_NilMutate(t *testing.T) {
 	defer cleanup()
 
 	requirePanic(t, func() {
-		_ = m.Update(context.Background(), "x", nil)
+		_ = tasks.NewAdminWrite(m).Update(context.Background(), "x", nil)
 	}, "mutate is nil")
 }
 
@@ -576,7 +576,7 @@ func TestInvariant_UseAfterClose(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	ctx := context.Background()
-	if err := m.Create(ctx, newTask("x")); !errors.Is(
+	if err := tasks.NewAdminWrite(m).Create(ctx, newTask("x")); !errors.Is(
 		err, tasks.ErrClosed,
 	) {
 		t.Fatalf("Create after Close: got %v, want ErrClosed", err)
@@ -586,7 +586,7 @@ func TestInvariant_UseAfterClose(t *testing.T) {
 	) {
 		t.Fatalf("Get after Close: got %v, want ErrClosed", err)
 	}
-	if err := m.Update(ctx, "x",
+	if err := tasks.NewAdminWrite(m).Update(ctx, "x",
 		func(t tasks.Task) (tasks.Task, error) { return t, nil },
 	); !errors.Is(err, tasks.ErrClosed) {
 		t.Fatalf("Update after Close: got %v, want ErrClosed", err)

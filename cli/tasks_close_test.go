@@ -352,7 +352,8 @@ func TestTasksClose_NonSlotClaim(t *testing.T) {
 		t.Fatalf("tasks.Open: %v", err)
 	}
 	defer func() { _ = mgr.Close() }()
-	if err := mgr.Update(ctx, taskID, func(cur tasks.Task) (tasks.Task, error) {
+	aw := tasks.NewAdminWrite(mgr)
+	if err := aw.Update(ctx, taskID, func(cur tasks.Task) (tasks.Task, error) {
 		cur.Status = tasks.StatusClaimed
 		cur.ClaimedBy = "operator-x"
 		cur.UpdatedAt = time.Now().UTC()

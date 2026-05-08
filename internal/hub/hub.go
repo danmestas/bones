@@ -273,6 +273,17 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 	// must produce valid JSON on stdout for the hook contract (#304).
 	fmt.Fprintf(os.Stderr, "hub: fossil at %s, nats at %s\n",
 		h.HTTPAddr(), h.NATSURL())
+
+	// Reconcile any orphan events from a prior unclean shutdown
+	// (event published, projection-write didn't land) BEFORE the
+	// registry-write below makes the hub discoverable to CLI verbs.
+	// Synchronous here because we hold the workspace lock and no
+	// live Tx writer can race; running serially is what makes
+	// ADR 0052's "no race between Recover and live writers"
+	// guarantee real (Recover stays opt-in via tasks.Config because
+	// every other tasks.Open call is concurrent with live Tx).
+	runTaskRecovery(ctx, h.NATSURL(), hl)
+
 	if err := registry.Write(registry.Entry{
 		Cwd:       p.root,
 		Name:      filepath.Base(p.root),

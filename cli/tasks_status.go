@@ -61,10 +61,11 @@ func (c *TasksStatusCmd) Run(g *repocli.Globals) error {
 	defer nc.Close()
 
 	m, err := tasks.Open(ctx, nc, tasks.Config{
-		BucketName:   tasks.DefaultBucketName,
-		HistoryDepth: 10,
-		MaxValueSize: 64 * 1024,
-		ChanBuffer:   32,
+		BucketName:     tasks.DefaultBucketName,
+		HistoryDepth:   10,
+		MaxValueSize:   64 * 1024,
+		ChanBuffer:     32,
+		EnableEventLog: true,
 	})
 	if err != nil {
 		fmt.Printf("hub:     %s\nnats:    %s\n", hubLine, info.NATSURL)
@@ -72,30 +73,33 @@ func (c *TasksStatusCmd) Run(g *repocli.Globals) error {
 	}
 	defer func() { _ = m.Close() }()
 
+	// Counts via TaskTally — single shared source with `bones status`
+	// per ADR 0052. Replays the full event log and bucket-counts.
+	envs, err := m.Replay(ctx, tasks.LogReadOpts{})
+	if err != nil {
+		return fmt.Errorf("replay events: %w", err)
+	}
+	tally := tasks.TaskTally(envs)
+
+	// "closed last 24h" remains a separate KV-side query because it
+	// scopes by ClosedAt timestamp, not just terminal status. Tally
+	// gives total closed; this filter narrows to the 24h window.
 	all, err := m.List(ctx)
 	if err != nil {
 		return fmt.Errorf("list tasks: %w", err)
 	}
-
-	var open, claimed, closed24h int
+	var closed24h int
 	cutoff := time.Now().Add(-24 * time.Hour)
 	for _, t := range all {
-		switch t.Status {
-		case tasks.StatusOpen:
-			open++
-		case tasks.StatusClaimed:
-			claimed++
-		case tasks.StatusClosed:
-			if t.ClosedAt != nil && t.ClosedAt.After(cutoff) {
-				closed24h++
-			}
+		if t.Status == tasks.StatusClosed && t.ClosedAt != nil && t.ClosedAt.After(cutoff) {
+			closed24h++
 		}
 	}
 
 	fmt.Printf("hub:     %s\n", hubLine)
 	fmt.Printf("nats:    %s\n", info.NATSURL)
 	fmt.Printf("backlog: %d open · %d claimed · %d closed (last 24h)\n",
-		open, claimed, closed24h)
+		tally.Open, tally.Claimed, closed24h)
 	return nil
 }
 

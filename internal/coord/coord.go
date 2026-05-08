@@ -150,13 +150,16 @@ func openSubstrate(
 		return nil, fmt.Errorf("coord.Open: holds: %w", err)
 	}
 	if s.tasks, err = tasks.Open(ctx, nc, tasks.Config{
-		BucketName:   tasks.DefaultBucketName,
-		HistoryDepth: cfg.Tuning.TaskHistoryDepth,
-		MaxValueSize: int32(cfg.Tuning.MaxTaskValueSize),
+		BucketName:     tasks.DefaultBucketName,
+		HistoryDepth:   cfg.Tuning.TaskHistoryDepth,
+		MaxValueSize:   int32(cfg.Tuning.MaxTaskValueSize),
+		EnableEventLog: true,
 	}); err != nil {
 		s.close()
 		return nil, fmt.Errorf("coord.Open: tasks: %w", err)
 	}
+	// Archive opens without the event log — compaction-only writes use
+	// the AdminWrite escape hatch to avoid event-log churn (ADR 0052).
 	if s.archive, err = tasks.Open(ctx, nc, tasks.Config{
 		BucketName:   archiveBucket,
 		HistoryDepth: cfg.Tuning.TaskHistoryDepth,
@@ -376,8 +379,30 @@ func (c *Coord) acquireTaskCAS(
 	}
 	files := append([]string(nil), rec.Files...)
 	var newEpoch uint64
+
+	// tx.Claim publishes a `claimed` event then runs claimMutator
+	// inside the CAS loop. The mutator does the conditional rejection
+	// (status==open, claimed_by==""); a racing claimer between the
+	// pre-check above and the CAS surfaces as ErrTaskAlreadyClaimed
+	// from the mutator, leaving a "spurious claimed" event in the
+	// log. Recovery's LastEventSeq guard prevents replay from
+	// clobbering a later projection (ADR 0052 §"Recovery").
 	mutate := c.claimMutator(&newEpoch)
-	if err := c.sub.tasks.Update(ctx, string(taskID), mutate); err != nil {
+	err = c.sub.tasks.Tx(ctx, string(taskID), func(tx *tasks.Tx) error {
+		return tx.Claim(tasks.ClaimArgs{
+			AgentID: c.cfg.AgentID,
+			// ClaimEpoch is set inside the mutator (cur.ClaimEpoch++)
+			// because we cannot know the new epoch without the CAS
+			// read; the event payload's ClaimEpoch field is filled
+			// from the post-mutate state via Tx — but Tx.Claim takes
+			// the args up front. To keep the typed payload accurate
+			// we pass rec.ClaimEpoch+1 (best-effort guess; mutator
+			// authoritatively sets the projection's value).
+			ClaimEpoch: rec.ClaimEpoch + 1,
+			Mutate:     mutate,
+		})
+	})
+	if err != nil {
 		return nil, translateClaimCASErr(err)
 	}
 	c.activeEpochs.Store(taskID, newEpoch)
@@ -471,7 +496,13 @@ func (c *Coord) undoTaskCAS(ctx context.Context, taskID TaskID) {
 		cur.UpdatedAt = time.Now().UTC()
 		return cur, nil
 	}
-	_ = c.sub.tasks.Update(ctx, string(taskID), mutate)
+	// tx.Unclaim publishes the unclaimed event then runs the mutator
+	// inside the CAS loop. The mutator's errClaimCASNoOp short-
+	// circuits when the claim no longer belongs to us, leaving the
+	// record alone (the event still ships as the audit trail).
+	_ = c.sub.tasks.Tx(ctx, string(taskID), func(tx *tasks.Tx) error {
+		return tx.Unclaim("claim rollback after hold failure", mutate)
+	})
 	c.activeEpochs.Delete(taskID)
 }
 
@@ -550,7 +581,9 @@ func (c *Coord) releaseTaskCAS(
 		cur.UpdatedAt = time.Now().UTC()
 		return cur, nil
 	}
-	err := c.sub.tasks.Update(ctx, string(taskID), mutate)
+	err := c.sub.tasks.Tx(ctx, string(taskID), func(tx *tasks.Tx) error {
+		return tx.Unclaim("release", mutate)
+	})
 	switch {
 	case err == nil:
 		return nil
@@ -752,14 +785,23 @@ func (c *Coord) listTasks(ctx context.Context) ([]tasks.Task, error) {
 }
 
 // updateTask performs a revision-gated CAS update on a task record.
-// Used by Leaf.Compact to stamp compaction metadata on a closed record;
-// unexported so substrate remains opaque to Leaf code.
+// Used by Leaf.Compact to stamp compaction metadata on a closed
+// record; unexported so substrate remains opaque to Leaf code.
+//
+// Compaction metadata writes (compact_level, original_size,
+// compacted_at) are bookkeeping internal to the leaf-side compaction
+// pipeline — not user-driven mutations and not interesting in the
+// task event log. Routing them through Tx would emit `updated` events
+// for every compaction tick, polluting the audit trail with noise
+// that has no correspondence to a user-visible state change. ADR 0052
+// permits AdminWrite for hub-side bookkeeping; compaction metadata is
+// the same shape and uses the same escape hatch.
 func (c *Coord) updateTask(
 	ctx context.Context,
 	id string,
 	mutate func(tasks.Task) (tasks.Task, error),
 ) error {
-	return c.sub.tasks.Update(ctx, id, mutate)
+	return tasks.NewAdminWrite(c.sub.tasks).Update(ctx, id, mutate)
 }
 
 // getAndArchiveTask reads the hot task record for id, writes it into
@@ -771,7 +813,7 @@ func (c *Coord) getAndArchiveTask(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if err := c.sub.archive.Create(ctx, archived); err != nil {
+	if err := tasks.NewAdminWrite(c.sub.archive).Create(ctx, archived); err != nil {
 		if !errors.Is(err, tasks.ErrAlreadyExists) {
 			return err
 		}

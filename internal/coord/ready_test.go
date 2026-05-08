@@ -29,7 +29,7 @@ func readyBaseline(id string, created time.Time) tasks.Task {
 // rejects invariant-11 mismatches and fixed-enum violations.
 func seedTask(t *testing.T, c *Coord, rec tasks.Task) {
 	t.Helper()
-	if err := c.sub.tasks.Create(context.Background(), rec); err != nil {
+	if err := tasks.NewAdminWrite(c.sub.tasks).Create(context.Background(), rec); err != nil {
 		t.Fatalf("seed Create %q: %v", rec.ID, err)
 	}
 }

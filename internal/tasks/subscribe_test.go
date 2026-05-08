@@ -47,7 +47,7 @@ func TestWatch_ReceivesCreate(t *testing.T) {
 		t.Fatalf("Watch: %v", err)
 	}
 	id := "bones-watch001"
-	if err := m.Create(ctx, newTask(id)); err != nil {
+	if err := tasks.NewAdminWrite(m).Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	ev := waitForKind(t, ch, id, tasks.EventCreated)
@@ -70,12 +70,12 @@ func TestWatch_ReceivesUpdate(t *testing.T) {
 		t.Fatalf("Watch: %v", err)
 	}
 	id := "bones-watch002"
-	if err := m.Create(ctx, newTask(id)); err != nil {
+	if err := tasks.NewAdminWrite(m).Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	waitForKind(t, ch, id, tasks.EventCreated)
 
-	err = m.Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
+	err = tasks.NewAdminWrite(m).Update(ctx, id, func(t tasks.Task) (tasks.Task, error) {
 		t.Status = tasks.StatusClaimed
 		t.ClaimedBy = "agent-a"
 		t.UpdatedAt = time.Now().UTC()
@@ -103,7 +103,7 @@ func TestWatch_ReceivesDelete(t *testing.T) {
 		t.Fatalf("Watch: %v", err)
 	}
 	id := "bones-watch003"
-	if err := m.Create(ctx, newTask(id)); err != nil {
+	if err := tasks.NewAdminWrite(m).Create(ctx, newTask(id)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	waitForKind(t, ch, id, tasks.EventCreated)

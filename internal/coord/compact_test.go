@@ -57,7 +57,7 @@ func openLeafFixture(t *testing.T, slotID string) (*Leaf, string) {
 // OpenTask/Claim/Close cycle.
 func seedLeafClosedTask(t *testing.T, l *Leaf, rec tasks.Task) {
 	t.Helper()
-	if err := l.coord.sub.tasks.Create(context.Background(), rec); err != nil {
+	if err := tasks.NewAdminWrite(l.coord.sub.tasks).Create(context.Background(), rec); err != nil {
 		t.Fatalf("seed Create %q: %v", rec.ID, err)
 	}
 }

@@ -80,7 +80,9 @@ func (c *Coord) OpenTask(
 		UpdatedAt:     now,
 		SchemaVersion: tasks.SchemaVersion,
 	}
-	if err := c.sub.tasks.Create(ctx, rec); err != nil {
+	if err := c.sub.tasks.Tx(ctx, string(id), func(tx *tasks.Tx) error {
+		return tx.Create(rec)
+	}); err != nil {
 		return "", translateCreateErr(id, err)
 	}
 	return id, nil
