@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -148,17 +149,7 @@ func applyEvent(ctx context.Context, m *Manager, env EventEnvelope) error {
 	case EventTypeUnclaimed:
 		return applyUnclaimedEvent(ctx, aw, env)
 	case EventTypeUpdated:
-		// updated carries field-level deltas; replay is best-effort.
-		// We bump LastEventSeq without rewriting the body because the
-		// projection's correctness lives elsewhere and a full
-		// reconstruction from FieldChange tuples is out of scope for
-		// this PR's recovery — see ADR 0052 §"Compaction" for the
-		// rationale (the synthetic created summary carries the full
-		// post-truncation state).
-		return aw.Update(ctx, env.TaskID, func(t Task) (Task, error) {
-			t.LastEventSeq = env.StreamSeq
-			return t, nil
-		})
+		return applyUpdatedEvent(ctx, aw, env)
 	case EventTypeLinked:
 		return applyLinkedEvent(ctx, aw, env)
 	case EventTypeSlotChanged:
@@ -263,6 +254,82 @@ func applyLinkedEvent(ctx context.Context, aw AdminWrite, env EventEnvelope) err
 		t.LastEventSeq = env.StreamSeq
 		return t, nil
 	})
+}
+
+// applyUpdatedEvent walks the FieldChange tuples on env and applies
+// each one's New JSON blob to the corresponding Task field. Per ADR
+// 0052 §"Recovery": "the log alone — no KV consult — must suffice to
+// reconstruct any prior state." The (field, old, new) shape is what
+// makes that possible; this dispatcher is what consumes it.
+//
+// Unknown field names are skipped (additive-only evolution rule); a
+// future schema addition can grow this dispatcher without breaking
+// older logs.
+func applyUpdatedEvent(ctx context.Context, aw AdminWrite, env EventEnvelope) error {
+	p, err := DecodePayload(env)
+	if err != nil {
+		return err
+	}
+	up := p.(UpdatedPayload)
+	return aw.Update(ctx, env.TaskID, func(t Task) (Task, error) {
+		for _, ch := range up.Changes {
+			if applyErr := applyFieldChange(&t, ch); applyErr != nil {
+				return t, fmt.Errorf("applyUpdatedEvent: field %q: %w",
+					ch.Field, applyErr)
+			}
+		}
+		t.UpdatedAt = env.Timestamp
+		t.LastEventSeq = env.StreamSeq
+		return t, nil
+	})
+}
+
+// applyFieldChange unmarshals ch.New into the corresponding field on
+// t. The dispatcher is keyed by ch.Field; field names are the stable
+// JSON tag values (e.g. "title", "claimed_by"), not Go struct names.
+// Unknown fields are silently dropped to honor the additive-only rule.
+//
+// Adding a new task field:
+//
+//  1. Add the field to Task with a json tag.
+//  2. Update diffTaskFields in cli/tasks_update.go to emit a tuple
+//     when the field changes.
+//  3. Add a case here to apply the unmarshal.
+//  4. Add a test under TestRecover_AppliesUpdatedEventField_<field>.
+func applyFieldChange(t *Task, ch FieldChange) error {
+	switch ch.Field {
+	case "title":
+		return jsonInto(ch.New, &t.Title)
+	case "status":
+		return jsonInto(ch.New, &t.Status)
+	case "claimed_by":
+		return jsonInto(ch.New, &t.ClaimedBy)
+	case "parent":
+		return jsonInto(ch.New, &t.Parent)
+	case "files":
+		return jsonInto(ch.New, &t.Files)
+	case "context":
+		return jsonInto(ch.New, &t.Context)
+	case "defer_until":
+		return jsonInto(ch.New, &t.DeferUntil)
+	case "edges":
+		return jsonInto(ch.New, &t.Edges)
+	case "closed_by":
+		return jsonInto(ch.New, &t.ClosedBy)
+	case "closed_reason":
+		return jsonInto(ch.New, &t.ClosedReason)
+	case "claim_epoch":
+		return jsonInto(ch.New, &t.ClaimEpoch)
+	default:
+		// Unknown field — additive-only rule, drop quietly.
+		return nil
+	}
+}
+
+// jsonInto is a tiny helper that unmarshals raw into target. Pulled
+// out so each case in applyFieldChange stays a single line.
+func jsonInto(raw json.RawMessage, target any) error {
+	return json.Unmarshal(raw, target)
 }
 
 func applyClosedEvent(ctx context.Context, aw AdminWrite, env EventEnvelope) error {
