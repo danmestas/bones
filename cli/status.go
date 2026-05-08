@@ -240,7 +240,7 @@ func taskEventsToActivity(
 			continue
 		}
 		out = append(out, activityEvent{
-			Time:   env.Timestamp,
+			Time:   env.Timestamp.Time,
 			Kind:   kind,
 			TaskID: env.TaskID,
 			Title:  title,
@@ -706,7 +706,7 @@ func renderStatusAllJSON(w io.Writer) error {
 			Name:      e.Name,
 			HubURL:    e.HubURL,
 			Sessions:  sessions.CountByWorkspace(e.Cwd),
-			StartedAt: e.StartedAt,
+			StartedAt: timefmt.NewLoggedTime(e.StartedAt),
 		}
 	}
 	return emitEnvelope(w, "status", schemas.StatusAllPayload{Workspaces: rows})

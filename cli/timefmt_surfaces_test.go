@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danmestas/bones/cli/schemas"
 	"github.com/danmestas/bones/internal/tasks"
 	"github.com/danmestas/bones/internal/timefmt"
 )
@@ -52,8 +54,9 @@ func TestTimefmtSurface_TasksWatchBracket(t *testing.T) {
 	env := tasks.EventEnvelope{
 		TaskID:    "abc",
 		StreamSeq: 1,
-		Timestamp: time.Date(2026, 1, 15, 20, 30, 45, 0, time.UTC),
-		Type:      tasks.EventTypeCreated,
+		Timestamp: timefmt.NewLoggedTime(
+			time.Date(2026, 1, 15, 20, 30, 45, 0, time.UTC)),
+		Type: tasks.EventTypeCreated,
 	}
 
 	// printEventEnvelope writes to stdout directly. Use the
@@ -128,6 +131,87 @@ func TestTimefmtSurface_CrossSurfaceConsistency(t *testing.T) {
 	}
 	if !strings.HasSuffix(displayShape, " PST") {
 		t.Errorf("Display shape %q missing PST zone marker", displayShape)
+	}
+}
+
+// TestTimefmtSurface_JSONPayloadEnvelopeIsUTC pins the load-bearing
+// guarantee for B1: a representative payload struct with timestamp
+// fields marshals every timestamp as UTC RFC3339 (Z-suffixed, no
+// fractional seconds) regardless of system zone. Default time.Time
+// marshaling would emit a local-zone offset string with nanoseconds
+// — that's the regression LoggedTime exists to prevent.
+func TestTimefmtSurface_JSONPayloadEnvelopeIsUTC(t *testing.T) {
+	restore := withLocalZone(t, "America/Los_Angeles")
+	defer restore()
+
+	// The instant carries non-zero nanoseconds intentionally —
+	// MarshalJSON must drop them.
+	instant := time.Date(2026, 1, 15, 20, 30, 45, 999999999, time.UTC)
+	payload := schemas.Task{
+		ID:        "abc",
+		Title:     "test",
+		Status:    "open",
+		Files:     []string{},
+		CreatedAt: timefmt.NewLoggedTime(instant),
+		UpdatedAt: timefmt.NewLoggedTime(instant),
+	}
+
+	b, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	got := string(b)
+
+	// Both timestamp fields must end in Z (UTC), not -08:00 or
+	// -07:00. A regression to the default time.Time marshal path
+	// would produce the offset.
+	wantSubstr := `"created_at":"2026-01-15T20:30:45Z"`
+	if !strings.Contains(got, wantSubstr) {
+		t.Errorf("payload missing Z-suffixed UTC created_at:\n%s",
+			got)
+	}
+	wantUpdated := `"updated_at":"2026-01-15T20:30:45Z"`
+	if !strings.Contains(got, wantUpdated) {
+		t.Errorf("payload missing Z-suffixed UTC updated_at:\n%s",
+			got)
+	}
+
+	// No nanoseconds anywhere.
+	if strings.Contains(got, ".999") || strings.Contains(got, "999Z") {
+		t.Errorf("payload kept fractional seconds:\n%s", got)
+	}
+	// No local-zone offset markers.
+	if strings.Contains(got, "-08:00") || strings.Contains(got, "-07:00") {
+		t.Errorf("payload leaked local-zone offset:\n%s", got)
+	}
+}
+
+// TestTimefmtSurface_EventEnvelopeJSONIsUTC pins the same guarantee
+// for tasks.EventEnvelope, the JetStream wire shape consumed by
+// every recovery loop and watch consumer across bones versions.
+func TestTimefmtSurface_EventEnvelopeJSONIsUTC(t *testing.T) {
+	restore := withLocalZone(t, "Asia/Tokyo")
+	defer restore()
+
+	instant := time.Date(2026, 1, 15, 20, 30, 45, 0, time.UTC)
+	env := tasks.EventEnvelope{
+		Type:      tasks.EventTypeCreated,
+		TaskID:    "abc",
+		Timestamp: timefmt.NewLoggedTime(instant),
+		Payload:   json.RawMessage(`{}`),
+	}
+
+	b, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+	got := string(b)
+	want := `"timestamp":"2026-01-15T20:30:45Z"`
+	if !strings.Contains(got, want) {
+		t.Errorf("envelope timestamp not UTC RFC3339:\n%s", got)
+	}
+	if strings.Contains(got, "+09:00") {
+		t.Errorf("envelope leaked Tokyo zone offset:\n%s", got)
 	}
 }
 

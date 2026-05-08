@@ -111,7 +111,7 @@ func watchBackfill(
 // bracket prefix is timefmt.Display per #324 — live operator surface,
 // local time + zone abbreviation.
 func printEventEnvelope(env tasks.EventEnvelope) {
-	ts := timefmt.Display(env.Timestamp)
+	ts := timefmt.Display(env.Timestamp.Time)
 	fmt.Printf("[%s] %-12s id=%s seq=%d\n",
 		ts, env.Type.String(), env.TaskID, env.StreamSeq)
 }

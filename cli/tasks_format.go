@@ -138,16 +138,16 @@ func taskToSchema(t tasks.Task) schemas.Task {
 		Files:         t.Files,
 		Parent:        t.Parent,
 		Context:       t.Context,
-		CreatedAt:     t.CreatedAt,
-		UpdatedAt:     t.UpdatedAt,
-		DeferUntil:    t.DeferUntil,
-		ClosedAt:      t.ClosedAt,
+		CreatedAt:     timefmt.NewLoggedTime(t.CreatedAt),
+		UpdatedAt:     timefmt.NewLoggedTime(t.UpdatedAt),
+		DeferUntil:    ptrLoggedTime(t.DeferUntil),
+		ClosedAt:      ptrLoggedTime(t.ClosedAt),
 		ClosedBy:      t.ClosedBy,
 		ClosedReason:  t.ClosedReason,
 		ClaimEpoch:    t.ClaimEpoch,
 		OriginalSize:  t.OriginalSize,
 		CompactLevel:  t.CompactLevel,
-		CompactedAt:   t.CompactedAt,
+		CompactedAt:   ptrLoggedTime(t.CompactedAt),
 		SchemaVersion: t.SchemaVersion,
 		LastEventSeq:  t.LastEventSeq,
 	}
@@ -179,9 +179,21 @@ func coordTaskToSchema(t coord.Task) schemas.TasksPrimeTask {
 		Title:     t.Title(),
 		Files:     t.Files(),
 		ClaimedBy: t.ClaimedBy(),
-		CreatedAt: t.CreatedAt(),
-		UpdatedAt: t.UpdatedAt(),
+		CreatedAt: timefmt.NewLoggedTime(t.CreatedAt()),
+		UpdatedAt: timefmt.NewLoggedTime(t.UpdatedAt()),
 	}
+}
+
+// ptrLoggedTime wraps a *time.Time as *timefmt.LoggedTime, returning
+// nil when the input is nil. Used at the schemas-package boundary so
+// optional pointer-typed timestamp fields convert without each caller
+// re-implementing the nil check.
+func ptrLoggedTime(t *time.Time) *timefmt.LoggedTime {
+	if t == nil {
+		return nil
+	}
+	lt := timefmt.NewLoggedTime(*t)
+	return &lt
 }
 
 func coordTasksToSchema(ts []coord.Task) []schemas.TasksPrimeTask {
@@ -206,7 +218,7 @@ func primeToSchema(r coord.PrimeResult) schemas.TasksPrimePayload {
 	for _, t := range r.Threads {
 		out.Threads = append(out.Threads, schemas.TasksPrimeThread{
 			ThreadShort:  t.ThreadShort(),
-			LastActivity: t.LastActivity(),
+			LastActivity: timefmt.NewLoggedTime(t.LastActivity()),
 			MessageCount: t.MessageCount(),
 			LastBody:     t.LastBody(),
 		})
@@ -215,8 +227,8 @@ func primeToSchema(r coord.PrimeResult) schemas.TasksPrimePayload {
 		out.Peers = append(out.Peers, schemas.TasksPrimePresence{
 			AgentID:   p.AgentID(),
 			Project:   p.Project(),
-			StartedAt: p.StartedAt(),
-			LastSeen:  p.LastSeen(),
+			StartedAt: timefmt.NewLoggedTime(p.StartedAt()),
+			LastSeen:  timefmt.NewLoggedTime(p.LastSeen()),
 		})
 	}
 	return out

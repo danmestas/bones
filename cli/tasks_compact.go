@@ -180,15 +180,18 @@ func formatCompactLine(t tasks.Task, orig, newBytes int, dryRun bool) string {
 func formatFooter(
 	n int, eligibleSince time.Time, maxN int, summarizerName string, dryRun bool,
 ) string {
+	// Footer prints to operator stdout alongside the per-task
+	// "(dry-run) ✓ <id> <title>" lines. Per #324 that's a Display
+	// surface (live operator output, local frame), not Logged.
 	if dryRun {
 		return fmt.Sprintf(
 			"(dry-run) would compact %d tasks (eligible-since %s, --max=%d, --summarizer=%s)",
-			n, timefmt.Logged(eligibleSince), maxN, summarizerName,
+			n, timefmt.Display(eligibleSince), maxN, summarizerName,
 		)
 	}
 	return fmt.Sprintf(
 		"compacted %d tasks (eligible-since %s, --max=%d, --summarizer=%s)",
-		n, timefmt.Logged(eligibleSince), maxN, summarizerName,
+		n, timefmt.Display(eligibleSince), maxN, summarizerName,
 	)
 }
 

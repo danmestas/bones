@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/danmestas/bones/internal/assert"
+	"github.com/danmestas/bones/internal/timefmt"
 )
 
 // migrationMarkerKey is the KV key whose presence (in the bones-tasks
@@ -181,8 +182,8 @@ func applyCreatedEvent(ctx context.Context, aw AdminWrite, env EventEnvelope) er
 		Title:         created.Title,
 		Status:        StatusOpen,
 		Files:         append([]string(nil), created.Files...),
-		CreatedAt:     env.Timestamp,
-		UpdatedAt:     env.Timestamp,
+		CreatedAt:     env.Timestamp.Time,
+		UpdatedAt:     env.Timestamp.Time,
 		SchemaVersion: SchemaVersion,
 		LastEventSeq:  env.StreamSeq,
 	}
@@ -207,7 +208,7 @@ func applyClaimedEvent(ctx context.Context, aw AdminWrite, env EventEnvelope) er
 		if cl.ClaimEpoch > t.ClaimEpoch {
 			t.ClaimEpoch = cl.ClaimEpoch
 		}
-		t.UpdatedAt = env.Timestamp
+		t.UpdatedAt = env.Timestamp.Time
 		t.LastEventSeq = env.StreamSeq
 		return t, nil
 	})
@@ -217,7 +218,7 @@ func applyUnclaimedEvent(ctx context.Context, aw AdminWrite, env EventEnvelope) 
 	return aw.Update(ctx, env.TaskID, func(t Task) (Task, error) {
 		t.Status = StatusOpen
 		t.ClaimedBy = ""
-		t.UpdatedAt = env.Timestamp
+		t.UpdatedAt = env.Timestamp.Time
 		t.LastEventSeq = env.StreamSeq
 		return t, nil
 	})
@@ -240,7 +241,7 @@ func applyLinkedEvent(ctx context.Context, aw AdminWrite, env EventEnvelope) err
 			Type:   EdgeType(lp.EdgeType),
 			Target: lp.OtherID,
 		})
-		t.UpdatedAt = env.Timestamp
+		t.UpdatedAt = env.Timestamp.Time
 		t.LastEventSeq = env.StreamSeq
 		return t, nil
 	})
@@ -268,7 +269,7 @@ func applyUpdatedEvent(ctx context.Context, aw AdminWrite, env EventEnvelope) er
 					ch.Field, applyErr)
 			}
 		}
-		t.UpdatedAt = env.Timestamp
+		t.UpdatedAt = env.Timestamp.Time
 		t.LastEventSeq = env.StreamSeq
 		return t, nil
 	})
@@ -345,7 +346,7 @@ func applyClosedEvent(ctx context.Context, aw AdminWrite, env EventEnvelope) err
 		}
 		t.ClosedBy = closer
 		t.ClosedReason = cp.Reason
-		ts := env.Timestamp
+		ts := env.Timestamp.Time
 		t.ClosedAt = &ts
 		t.ClaimedBy = ""
 		t.UpdatedAt = ts
@@ -418,7 +419,7 @@ func emitSyntheticEvents(
 		if err != nil {
 			return emitted, err
 		}
-		env.Timestamp = t.CreatedAt
+		env.Timestamp = timefmt.NewLoggedTime(t.CreatedAt)
 		seq, err := publishMigrationEnvelope(ctx, m, env)
 		if err != nil {
 			return emitted, err
@@ -433,7 +434,7 @@ func emitSyntheticEvents(
 			if err != nil {
 				return emitted, err
 			}
-			env.Timestamp = t.UpdatedAt
+			env.Timestamp = timefmt.NewLoggedTime(t.UpdatedAt)
 			seq, err := publishMigrationEnvelope(ctx, m, env)
 			if err != nil {
 				return emitted, err
@@ -449,7 +450,7 @@ func emitSyntheticEvents(
 			if err != nil {
 				return emitted, err
 			}
-			env.Timestamp = *t.ClosedAt
+			env.Timestamp = timefmt.NewLoggedTime(*t.ClosedAt)
 			seq, err := publishMigrationEnvelope(ctx, m, env)
 			if err != nil {
 				return emitted, err
