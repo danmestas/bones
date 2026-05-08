@@ -21,13 +21,14 @@ import (
 	"github.com/danmestas/bones/internal/workspace"
 )
 
-// LogsCmd implements `bones logs`. Reads per-slot or workspace-level NDJSON
-// event logs with formatting, follow mode, and filters.
+// LogsCmd implements `bones logs`. Reads per-slot, workspace-level,
+// or hub NDJSON event logs with formatting, follow mode, and filters.
 //
-// Exactly one of --slot or --workspace must be specified.
+// Exactly one of --slot, --workspace, or --hub must be specified.
 type LogsCmd struct {
 	Slot      string `name:"slot" help:"slot name to read log from"`
 	Workspace bool   `name:"workspace" help:"read workspace-level log instead of a slot log"`
+	Hub       bool   `name:"hub" help:"read .bones/hub.log (operator RPC log per #322)"`
 	Tail      bool   `name:"tail" short:"f" help:"follow: poll for new events after EOF"`
 	Since     string `name:"since" help:"filter events after duration (e.g. 5m) or RFC3339 time"`
 	Last      int    `name:"last" help:"keep only the last N events"`
@@ -37,12 +38,22 @@ type LogsCmd struct {
 
 // Run is the Kong entry point for `bones logs`.
 func (c *LogsCmd) Run(g *repocli.Globals) error {
-	// Validate: exactly one of --slot or --workspace.
-	if c.Slot == "" && !c.Workspace {
-		return fmt.Errorf("bones logs: specify --slot=<name> or --workspace")
+	// Validate: exactly one of --slot / --workspace / --hub.
+	modes := 0
+	if c.Slot != "" {
+		modes++
 	}
-	if c.Slot != "" && c.Workspace {
-		return fmt.Errorf("bones logs: --slot and --workspace are mutually exclusive")
+	if c.Workspace {
+		modes++
+	}
+	if c.Hub {
+		modes++
+	}
+	if modes == 0 {
+		return fmt.Errorf("bones logs: specify --slot=<name>, --workspace, or --hub")
+	}
+	if modes > 1 {
+		return fmt.Errorf("bones logs: --slot, --workspace, and --hub are mutually exclusive")
 	}
 
 	ctx := context.Background()
@@ -55,7 +66,7 @@ func (c *LogsCmd) Run(g *repocli.Globals) error {
 		return err
 	}
 
-	logPath := resolveLogPath(info.WorkspaceDir, c.Slot, c.Workspace)
+	logPath := resolveLogPath(info.WorkspaceDir, c.Slot, c.Workspace, c.Hub)
 
 	// Parse --since cutoff.
 	var since time.Time
@@ -74,9 +85,14 @@ func (c *LogsCmd) Run(g *repocli.Globals) error {
 	return readLog(logPath, c, since, isTTY, os.Stdout)
 }
 
-// resolveLogPath returns the log file path for the given workspace dir, slot, or workspace flag.
-func resolveLogPath(workspaceDir, slot string, workspaceLog bool) string {
+// resolveLogPath returns the log file path for the given workspace
+// dir, slot, workspace flag, or hub flag. Per #322's mutual-exclusion
+// invariant, exactly one of slot/workspaceLog/hubLog is set.
+func resolveLogPath(workspaceDir, slot string, workspaceLog, hubLog bool) string {
 	bones := workspace.BonesDir(workspaceDir)
+	if hubLog {
+		return filepath.Join(bones, "hub.log")
+	}
 	if workspaceLog {
 		return filepath.Join(bones, "log")
 	}
