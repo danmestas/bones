@@ -54,6 +54,11 @@ type HubStartCmd struct {
 	// DrainTimeout bounds NATS/Fossil drain on shutdown before
 	// runForeground returns errDrainTimeout (non-zero exit). See #158.
 	DrainTimeout time.Duration `name:"drain-timeout" default:"30s" help:"max drain wait"` //nolint:lll
+	// LogLevel controls hub.log entry verbosity (#322). Standard four
+	// severities: debug, info, warn, error. Default INFO (read-only
+	// RPCs demoted to DEBUG; mutating + errors at INFO). Honored as
+	// "flag wins, then BONES_HUB_LOG_LEVEL env var, then INFO".
+	LogLevel string `name:"log-level" help:"hub.log min level: debug|info|warn|error (env BONES_HUB_LOG_LEVEL)"` //nolint:lll
 }
 
 func (c *HubStartCmd) Run(g *repocli.Globals) error {
@@ -73,6 +78,7 @@ func (c *HubStartCmd) Run(g *repocli.Globals) error {
 		hub.WithCoordPort(c.CoordPort),
 		hub.WithDetach(c.Detach),
 		hub.WithDrainTimeout(c.DrainTimeout),
+		hub.WithLogLevel(c.LogLevel),
 		hub.WithLeaseWatcher(startLeaseWatcher),
 	)
 }
