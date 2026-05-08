@@ -16,6 +16,7 @@ import (
 	"github.com/danmestas/bones/internal/registry"
 	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/tasks"
+	"github.com/danmestas/bones/internal/timefmt"
 )
 
 func TestRenderStatus_Empty(t *testing.T) {
@@ -31,8 +32,12 @@ func TestRenderStatus_Empty(t *testing.T) {
 		t.Fatalf("renderStatus: %v", err)
 	}
 	out := buf.String()
+	// "as of" header now carries a zone abbreviation (#324). Compute
+	// the expected string via timefmt.Display so the test stays
+	// host-zone-independent.
+	wantAsOf := "as of " + timefmt.Display(rep.GeneratedAt)
 	for _, want := range []string{
-		"workspace: bones", "trunk: —", "as of 14:05:02",
+		"workspace: bones", "trunk: —", wantAsOf,
 		"(no active swarm sessions)", "Recent activity:", "(none)",
 		"Tasks: 0 open · 0 claimed · 0 closed",
 		"Hub not running",
@@ -149,9 +154,12 @@ func TestRenderStatus_WithSessionsAndTasks(t *testing.T) {
 func TestTaskEventsToActivity(t *testing.T) {
 	now := time.Now().UTC()
 	envs := []tasks.EventEnvelope{
-		{Type: tasks.EventTypeCreated, TaskID: "t1", Timestamp: now.Add(-time.Hour)},
-		{Type: tasks.EventTypeCreated, TaskID: "t2", Timestamp: now.Add(-2 * time.Hour)},
-		{Type: tasks.EventTypeClosed, TaskID: "t2", Timestamp: now.Add(-10 * time.Minute)},
+		{Type: tasks.EventTypeCreated, TaskID: "t1",
+			Timestamp: timefmt.NewLoggedTime(now.Add(-time.Hour))},
+		{Type: tasks.EventTypeCreated, TaskID: "t2",
+			Timestamp: timefmt.NewLoggedTime(now.Add(-2 * time.Hour))},
+		{Type: tasks.EventTypeClosed, TaskID: "t2",
+			Timestamp: timefmt.NewLoggedTime(now.Add(-10 * time.Minute))},
 	}
 	byID := map[string]tasks.Task{
 		"t1": {ID: "t1", Title: "open one"},

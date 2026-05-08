@@ -21,6 +21,7 @@ import (
 	"github.com/danmestas/bones/internal/sessions"
 	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/tasks"
+	"github.com/danmestas/bones/internal/timefmt"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
@@ -239,7 +240,7 @@ func taskEventsToActivity(
 			continue
 		}
 		out = append(out, activityEvent{
-			Time:   env.Timestamp,
+			Time:   env.Timestamp.Time,
 			Kind:   kind,
 			TaskID: env.TaskID,
 			Title:  title,
@@ -314,10 +315,13 @@ func renderStatus(rep statusReport, w io.Writer) error {
 	// concept (a "leaf" here is a hub instance), and operators only
 	// need to see swarm-session counts (rendered in the body table
 	// via renderSlotTable). Header stays in operator vocabulary.
+	// Display = local time + zone abbreviation per #324. The "as of"
+	// header is an operator-facing live display, so the wall-clock
+	// frame matches the operator's terminal session.
 	header := fmt.Sprintf("bones · workspace: %s · trunk: %s · as of %s\n\n",
 		filepath.Base(rep.WorkspaceDir),
 		hubField(rep.TrunkHead, rep.HubAvailable),
-		rep.GeneratedAt.Format("15:04:05"),
+		timefmt.Display(rep.GeneratedAt),
 	)
 	if _, err := io.WriteString(w, header); err != nil {
 		return err
@@ -411,16 +415,19 @@ func renderActivity(rep statusReport, w io.Writer) error {
 	}
 	for _, e := range rep.Activity {
 		var line string
+		// Activity rows share the "as of" header's frame: operator-
+		// facing live display, so route through Display per #324.
+		ts := timefmt.Display(e.Time)
 		switch e.Kind {
 		case actCommit:
 			line = fmt.Sprintf("    %s  ◆ commit  %s  %s\n",
-				e.Time.Format("15:04:05"), e.Hash, e.Comment)
+				ts, e.Hash, e.Comment)
 		case actTaskCreate:
 			line = fmt.Sprintf("    %s  + create  %s  %s\n",
-				e.Time.Format("15:04:05"), truncateID(e.TaskID, 8), e.Title)
+				ts, truncateID(e.TaskID, 8), e.Title)
 		case actTaskClose:
 			line = fmt.Sprintf("    %s  ✓ close   %s  %s\n",
-				e.Time.Format("15:04:05"), truncateID(e.TaskID, 8), e.Title)
+				ts, truncateID(e.TaskID, 8), e.Title)
 		}
 		if _, err := io.WriteString(w, line); err != nil {
 			return err
@@ -699,7 +706,7 @@ func renderStatusAllJSON(w io.Writer) error {
 			Name:      e.Name,
 			HubURL:    e.HubURL,
 			Sessions:  sessions.CountByWorkspace(e.Cwd),
-			StartedAt: e.StartedAt,
+			StartedAt: timefmt.NewLoggedTime(e.StartedAt),
 		}
 	}
 	return emitEnvelope(w, "status", schemas.StatusAllPayload{Workspaces: rows})

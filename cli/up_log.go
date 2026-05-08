@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/danmestas/bones/internal/timefmt"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
@@ -153,9 +154,9 @@ func (t *teeWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// ts formats a time for log output. Local time keeps the file readable
-// for the operator; UTC would be cleaner for ingestion but bones logs
-// are operator-facing first.
+// ts formats a time for up.log output. Per #324 every persisted log
+// entry is UTC RFC3339 so cross-host correlation across up.log,
+// hub.log, and the event log doesn't require mental zone arithmetic.
 func ts(t time.Time) string {
-	return t.Format("2006-01-02T15:04:05.000")
+	return timefmt.Logged(t)
 }

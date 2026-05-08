@@ -12,6 +12,7 @@ import (
 
 	"github.com/danmestas/bones/cli/schemas"
 	"github.com/danmestas/bones/internal/registry"
+	"github.com/danmestas/bones/internal/timefmt"
 )
 
 // WorkspacesCmd groups the cross-workspace inspection verbs (#174).
@@ -192,7 +193,7 @@ func toJSONRow(i registry.Info) schemas.WorkspacesRow {
 		Name:        i.Name,
 		Cwd:         i.Cwd,
 		HubStatus:   string(i.HubStatus),
-		LastTouched: i.LastTouched.UTC().Format(time.RFC3339),
+		LastTouched: timefmt.Logged(i.LastTouched),
 		AgentID:     i.AgentID,
 		NATSURL:     i.NATSURL,
 		HubURL:      i.HubURL,

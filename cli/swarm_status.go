@@ -14,6 +14,7 @@ import (
 	"github.com/danmestas/bones/cli/schemas"
 	"github.com/danmestas/bones/internal/dispatch"
 	"github.com/danmestas/bones/internal/swarm"
+	"github.com/danmestas/bones/internal/timefmt"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
@@ -38,15 +39,15 @@ type SwarmStatusCmd struct {
 // schema is explicit and stable for downstream consumers (`bones
 // doctor`, future `bones swarm dispatch`).
 type statusRow struct {
-	Slot         string    `json:"slot"`
-	TaskID       string    `json:"task_id"`
-	AgentID      string    `json:"agent_id"`
-	Host         string    `json:"host"`
-	LeafPID      int       `json:"leaf_pid"`
-	StartedAt    time.Time `json:"started_at"`
-	LastRenewed  time.Time `json:"last_renewed"`
-	State        string    `json:"state"`
-	StaleSeconds int64     `json:"stale_seconds"`
+	Slot         string             `json:"slot"`
+	TaskID       string             `json:"task_id"`
+	AgentID      string             `json:"agent_id"`
+	Host         string             `json:"host"`
+	LeafPID      int                `json:"leaf_pid"`
+	StartedAt    timefmt.LoggedTime `json:"started_at"`
+	LastRenewed  timefmt.LoggedTime `json:"last_renewed"`
+	State        string             `json:"state"`
+	StaleSeconds int64              `json:"stale_seconds"`
 }
 
 func (c *SwarmStatusCmd) Run(g *repocli.Globals) error {
@@ -121,8 +122,8 @@ func buildStatusRows(sessions []swarm.Session, host string, now time.Time) []sta
 			AgentID:      s.AgentID,
 			Host:         s.Host,
 			LeafPID:      s.LeafPID,
-			StartedAt:    s.StartedAt,
-			LastRenewed:  s.LastRenewed,
+			StartedAt:    timefmt.NewLoggedTime(s.StartedAt),
+			LastRenewed:  timefmt.NewLoggedTime(s.LastRenewed),
 			State:        state,
 			StaleSeconds: stale,
 		})

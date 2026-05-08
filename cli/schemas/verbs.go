@@ -2,7 +2,7 @@ package schemas
 
 //go:generate go run ../../cmd/bones-schemagen -out ../../schemas
 
-import "time"
+import "github.com/danmestas/bones/internal/timefmt"
 
 // Verb identifies one CLI emit site. The dotted name matches the
 // command path (`tasks.list` ↔ `bones tasks list`); CurrentVersion is
@@ -84,11 +84,11 @@ type StatusAllPayload struct {
 
 // StatusWorkspaceRow is one row of the status --all view.
 type StatusWorkspaceRow struct {
-	Cwd       string    `json:"cwd"`
-	Name      string    `json:"name"`
-	HubURL    string    `json:"hub_url"`
-	Sessions  int       `json:"sessions"`
-	StartedAt time.Time `json:"started_at"`
+	Cwd       string             `json:"cwd"`
+	Name      string             `json:"name"`
+	HubURL    string             `json:"hub_url"`
+	Sessions  int                `json:"sessions"`
+	StartedAt timefmt.LoggedTime `json:"started_at"`
 }
 
 // SwarmDispatchPayload is the payload for `bones swarm dispatch --json`.
@@ -106,15 +106,15 @@ type SwarmStatusPayload []SwarmStatusRow
 
 // SwarmStatusRow is one swarm-session row.
 type SwarmStatusRow struct {
-	Slot         string    `json:"slot"`
-	TaskID       string    `json:"task_id"`
-	AgentID      string    `json:"agent_id"`
-	Host         string    `json:"host"`
-	LeafPID      int       `json:"leaf_pid"`
-	StartedAt    time.Time `json:"started_at"`
-	LastRenewed  time.Time `json:"last_renewed"`
-	State        string    `json:"state"`
-	StaleSeconds int64     `json:"stale_seconds"`
+	Slot         string             `json:"slot"`
+	TaskID       string             `json:"task_id"`
+	AgentID      string             `json:"agent_id"`
+	Host         string             `json:"host"`
+	LeafPID      int                `json:"leaf_pid"`
+	StartedAt    timefmt.LoggedTime `json:"started_at"`
+	LastRenewed  timefmt.LoggedTime `json:"last_renewed"`
+	State        string             `json:"state"`
+	StaleSeconds int64              `json:"stale_seconds"`
 }
 
 // SwarmTasksPayload is the payload for `bones swarm tasks --json`.
@@ -196,28 +196,28 @@ type TasksPrimePayload struct {
 // TasksPrimeTask is the trimmed task shape used inside a tasks.prime
 // payload — coord.Task projection without storage-internal fields.
 type TasksPrimeTask struct {
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	Files     []string  `json:"files,omitempty"`
-	ClaimedBy string    `json:"claimed_by,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        string             `json:"id"`
+	Title     string             `json:"title"`
+	Files     []string           `json:"files,omitempty"`
+	ClaimedBy string             `json:"claimed_by,omitempty"`
+	CreatedAt timefmt.LoggedTime `json:"created_at"`
+	UpdatedAt timefmt.LoggedTime `json:"updated_at"`
 }
 
 // TasksPrimeThread is the chat-thread row inside a tasks.prime payload.
 type TasksPrimeThread struct {
-	ThreadShort  string    `json:"thread_short"`
-	LastActivity time.Time `json:"last_activity"`
-	MessageCount int       `json:"message_count"`
-	LastBody     string    `json:"last_body"`
+	ThreadShort  string             `json:"thread_short"`
+	LastActivity timefmt.LoggedTime `json:"last_activity"`
+	MessageCount int                `json:"message_count"`
+	LastBody     string             `json:"last_body"`
 }
 
 // TasksPrimePresence is the peer-presence row inside a tasks.prime payload.
 type TasksPrimePresence struct {
-	AgentID   string    `json:"agent_id"`
-	Project   string    `json:"project"`
-	StartedAt time.Time `json:"started_at"`
-	LastSeen  time.Time `json:"last_seen"`
+	AgentID   string             `json:"agent_id"`
+	Project   string             `json:"project"`
+	StartedAt timefmt.LoggedTime `json:"started_at"`
+	LastSeen  timefmt.LoggedTime `json:"last_seen"`
 }
 
 // TasksReadyPayload is the payload for `bones tasks ready --json`.

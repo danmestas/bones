@@ -11,6 +11,7 @@ import (
 
 	"github.com/danmestas/bones/internal/clauderhooks"
 	"github.com/danmestas/bones/internal/coord"
+	"github.com/danmestas/bones/internal/timefmt"
 	"github.com/danmestas/bones/internal/version"
 )
 
@@ -119,7 +120,7 @@ func writeSessionStartSentinel(workspaceDir string) {
 		return
 	}
 	body := fmt.Sprintf("%s\t%s\n",
-		time.Now().UTC().Format(time.RFC3339), version.Get())
+		timefmt.Logged(time.Now()), version.Get())
 	_ = os.WriteFile(path, []byte(body), 0o644)
 }
 
@@ -157,7 +158,7 @@ func formatPrime(r coord.PrimeResult) string {
 	for _, t := range r.Threads {
 		out += fmt.Sprintf("- %s (%s, %d msgs)\n",
 			t.ThreadShort(),
-			t.LastActivity().Format(time.RFC3339),
+			timefmt.Logged(t.LastActivity()),
 			t.MessageCount(),
 		)
 	}
@@ -170,7 +171,7 @@ func formatPrime(r coord.PrimeResult) string {
 	for _, p := range r.Peers {
 		out += fmt.Sprintf("- %s (last seen %s)\n",
 			p.AgentID(),
-			p.LastSeen().Format(time.RFC3339),
+			timefmt.Logged(p.LastSeen()),
 		)
 	}
 	if len(r.Peers) == 0 {

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/danmestas/bones/internal/timefmt"
 )
 
 // EventType identifies the shape of a task event published on the
@@ -89,10 +91,16 @@ func (t EventType) Valid() bool {
 // JetStream message metadata; it is NOT part of the JSON envelope and
 // is zero for messages that have not yet been published.
 type EventEnvelope struct {
-	Type      EventType       `json:"type"`
-	TaskID    string          `json:"task_id"`
-	Timestamp time.Time       `json:"timestamp"`
-	Payload   json.RawMessage `json:"payload"`
+	Type   EventType `json:"type"`
+	TaskID string    `json:"task_id"`
+	// Timestamp is the wall-clock instant the event was emitted.
+	// timefmt.LoggedTime per #324: serializes as UTC RFC3339 so
+	// recovery loops on a different host or different system zone
+	// see the same instant a producing slot stamped. Decoding is
+	// lenient (accepts RFC3339Nano with offset) so legacy records
+	// pre-#324 still replay.
+	Timestamp timefmt.LoggedTime `json:"timestamp"`
+	Payload   json.RawMessage    `json:"payload"`
 
 	// StreamSeq is the JetStream message sequence at the time the
 	// envelope was consumed. Set by the recovery loop and the watch
@@ -189,7 +197,7 @@ func EncodeEnvelope(t EventType, taskID string, payload any) (EventEnvelope, err
 	return EventEnvelope{
 		Type:      t,
 		TaskID:    taskID,
-		Timestamp: time.Now().UTC(),
+		Timestamp: timefmt.NewLoggedTime(time.Now()),
 		Payload:   raw,
 	}, nil
 }
