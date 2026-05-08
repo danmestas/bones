@@ -1,0 +1,405 @@
+Usage: bones <command> [flags]
+
+bones unified CLI: workspace, orchestrator, tasks
+
+Flags:
+  -h, --help           Show context-sensitive help.
+  -R, --repo=STRING    Path to repository file
+  -v, --verbose        Verbose output
+
+Daily
+  up [flags]
+    Bootstrap workspace, lazy hub (ADR 0041)
+
+  down [flags]
+    Reverse up: stop hub + clean scaffold
+
+  status [flags]
+    Snapshot tasks, sessions, hub activity
+
+  tasks create <title> [flags]
+    Create a new task
+
+  tasks list [flags]
+    List tasks
+
+  tasks show <id> [flags]
+    Show a task
+
+  tasks update <id> [flags]
+    Update a task
+
+  tasks claim <id> [flags]
+    Claim a task
+
+  tasks close <id> [flags]
+    Close a task
+
+  tasks watch [flags]
+    Stream task lifecycle events
+
+  tasks status
+    Snapshot of all tasks by status
+
+  tasks link <from> <to> [flags]
+    Link two tasks with an edge type
+
+  tasks prime [flags]
+    Print agent-tasks context (prime)
+
+  tasks autoclaim [flags]
+    Run one autoclaim tick
+
+  tasks aggregate [flags]
+    Aggregate per-slot task summary
+
+  tasks compact [flags]
+    Compact eligible closed tasks (ADR 0016)
+
+  tasks ready [flags]
+    List unblocked, unclaimed open tasks
+
+  swarm join [flags]
+    Open a leaf, claim a task, prepare a worktree
+
+  swarm commit --message=STRING [<files> ...] [flags]
+    Commit changes (heartbeats the session)
+
+  swarm close [flags]
+    Release claim, post result, stop the leaf
+
+  swarm status [flags]
+    List active swarm sessions
+
+  swarm cwd --slot=STRING
+    Print the slot's worktree path
+
+  swarm tasks --slot=STRING [flags]
+    List ready tasks matching slot
+
+  swarm fan-in [flags]
+    Merge open hub leaves into trunk
+
+  swarm reap [flags]
+    Force-close stale same-host sessions as result=fail
+
+  swarm dispatch [<plan>] [flags]
+    Dispatch a plan: create tasks + write manifest
+
+  logs [flags]
+    Read per-slot or workspace event logs
+
+  apply [flags]
+    Materialize hub trunk into git tree
+
+  env [flags]
+    Emit shell exports for current workspace
+
+  rename <new-name> [flags]
+    Set workspace display name
+
+  cleanup [flags]
+    Reap slot or legacy worktrees
+
+  workspaces ls [flags]
+    List all known workspaces (live + stopped)
+
+  workspaces show <name> [flags]
+    Show one workspace by name (or filename id)
+
+Repository
+  repo new <path> [flags]
+    Create a new repository
+
+  repo clone [<url> [<path>]] [flags]
+    Clone a remote repository
+
+  repo ci --message=STRING <files> ... [flags]
+    Checkin file changes
+
+  repo co [<version>] [flags]
+    Checkout a version
+
+  repo ls [<version>] [flags]
+    List files in a version
+
+  repo timeline [flags]
+    Show repository history
+
+  repo cat <artifact> [flags]
+    Output artifact content
+
+  repo info
+    Repository statistics
+
+  repo hash <files> ... [flags]
+    Hash files (SHA1 or SHA3)
+
+  repo delta create <source> <target> [flags]
+    Create a delta between two files
+
+  repo delta apply <source> <delta> [flags]
+    Apply a delta to a source file
+
+  repo config ls
+    List all config entries
+
+  repo config get <key>
+    Get a config value
+
+  repo config set <key> <value>
+    Set a config value
+
+  repo query <sql>
+    Execute SQL against repository
+
+  repo verify
+    Verify repository integrity
+
+  repo resolve <name>
+    Resolve symbolic name to UUID
+
+  repo extract [<files> ...] [flags]
+    Extract files from a version
+
+  repo wiki ls
+    List wiki pages
+
+  repo wiki export <page> [flags]
+    Export a wiki page
+
+  repo tag ls [<version>]
+    List tags on an artifact
+
+  repo tag add <tag> [<value>] [flags]
+    Add a tag to an artifact
+
+  repo open [<dir>]
+    Open a checkout in a directory
+
+  repo status [flags]
+    Show working directory changes
+
+  repo add <files> ... [flags]
+    Stage files for addition
+
+  repo rm <files> ... [flags]
+    Stage files for removal
+
+  repo rename <from> <to> [flags]
+    Rename a tracked file
+
+  repo revert [<files> ...] [flags]
+    Undo staging changes
+
+  repo diff [<version>] [flags]
+    Show changes vs a version
+
+  repo merge <version> [flags]
+    Merge a divergent version
+
+  repo conflicts ls [flags]
+    List all conflicts
+
+  repo conflicts show <file> [flags]
+    Show all versions of a conflicted file
+
+  repo conflicts pick <file> [flags]
+    Resolve by picking one version
+
+  repo conflicts merge <file> [flags]
+    Resolve by re-merging with a different strategy
+
+  repo conflicts extract <file> [flags]
+    Extract all versions to disk for manual editing
+
+  repo mark-resolved <file> [flags]
+    Mark a conflict as resolved
+
+  repo undo [flags]
+    Undo last operation
+
+  repo redo [flags]
+    Redo undone operation
+
+  repo stash save [flags]
+    Stash working changes
+
+  repo stash pop [flags]
+    Apply top stash and drop it
+
+  repo stash apply [<id>] [flags]
+    Apply stash without dropping
+
+  repo stash ls
+    List stash entries
+
+  repo stash drop <id>
+    Remove stash entry
+
+  repo stash clear
+    Remove all stash entries
+
+  repo bisect good [<version>] [flags]
+    Mark version as good
+
+  repo bisect bad [<version>] [flags]
+    Mark version as bad
+
+  repo bisect next [flags]
+    Check out midpoint version
+
+  repo bisect skip [<version>] [flags]
+    Skip current version
+
+  repo bisect reset [flags]
+    Clear bisect state
+
+  repo bisect ls [flags]
+    Show bisect path
+
+  repo bisect status [flags]
+    Show bisect state
+
+  repo annotate <file> [flags]
+    Annotate file lines with version history
+
+  repo blame <file> [flags]
+    Alias for annotate
+
+  repo branch ls [flags]
+    List branches
+
+  repo branch new <name> [flags]
+    Create new branch
+
+  repo branch close <name> [flags]
+    Close a branch
+
+  repo uv ls
+    List unversioned files
+
+  repo uv put <name> <file>
+    Add or update an unversioned file
+
+  repo uv get <name> [flags]
+    Retrieve an unversioned file
+
+  repo uv delete <name>
+    Delete an unversioned file (creates tombstone)
+
+  repo schema add --columns=STRING <name> [flags]
+    Register a new synced table
+
+  repo schema list
+    List registered synced tables
+
+  repo schema show <name>
+    Show table schema details
+
+  repo schema remove <name>
+    Remove a synced table registration
+
+  repo user add --cap=STRING <login>
+    Create a new user
+
+  repo user list
+    List all users
+
+  repo user update --cap=STRING <login>
+    Update user capabilities
+
+  repo user rm <login>
+    Delete a user
+
+  repo user passwd <login>
+    Reset user password
+
+  repo invite --cap=STRING <login> [flags]
+    Generate invite token for a user
+
+Sync & messaging
+  sync start [flags]
+    Start leaf agent daemon
+
+  sync now <pid>
+    Trigger immediate sync
+
+  bridge serve --fossil-url=STRING --project=STRING [flags]
+    Start NATS-to-Fossil bridge
+
+  notify init
+    Initialize the notify repo
+
+  notify send --project=STRING <body> [flags]
+    Send a notification message
+
+  notify ask --project=STRING <body> [flags]
+    Send a message and wait for a reply
+
+  notify watch --project=STRING [flags]
+    Watch for incoming messages
+
+  notify threads --project=STRING
+    List active threads
+
+  notify log --project=STRING <thread>
+    Show thread message history
+
+  notify status
+    Show connection state and unread counts
+
+  notify pair --name=STRING [flags]
+    Generate a one-time pairing token and QR code
+
+  notify unpair <name>
+    Revoke a paired device
+
+  notify devices
+    List paired devices
+
+  doctor [flags]
+    Check development environment health
+
+Tooling
+  validate-plan <path> [flags]
+    Validate plan
+
+  plan finalize [flags]
+    Materialize hub artifacts to the host tree (ADR 0044)
+
+  peek [flags]
+    Browse hub via fossil ui
+
+  telemetry status
+    Print current telemetry state
+
+  telemetry disable
+    Opt out of telemetry (writes ~/.bones/no-telemetry)
+
+  telemetry enable
+    Re-enable telemetry (removes the opt-out marker)
+
+Plumbing
+  init [flags]
+    Create a workspace
+
+  join [flags]
+    Locate an existing workspace
+
+  hub start [flags]
+    Start the embedded Fossil hub + NATS server
+
+  hub stop [flags]
+    Stop the embedded Fossil hub + NATS server
+
+  hub user add <login> [flags]
+    Add (or noop-if-exists) a user to the hub repo
+
+  hub user list
+    List users in the hub repo
+
+  hub reap [flags]
+    Terminate orphan hub processes (ADR 0043)
+
+Run "bones <command> --help" for more information on a command.
