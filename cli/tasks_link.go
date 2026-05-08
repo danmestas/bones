@@ -9,15 +9,17 @@ import (
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
 	"github.com/danmestas/bones/cli/schemas"
+	"github.com/danmestas/bones/cli/uxprint"
 	"github.com/danmestas/bones/internal/coord"
 )
 
 // TasksLinkCmd links two tasks with a typed edge.
 type TasksLinkCmd struct {
-	From string `arg:"" help:"from task id"`
-	To   string `arg:"" help:"to task id"`
-	Type string `name:"type" help:"edge type: blocks|supersedes|duplicates|discovered-from"`
-	JSON bool   `name:"json" help:"emit JSON"`
+	From  string `arg:"" help:"from task id"`
+	To    string `arg:"" help:"to task id"`
+	Type  string `name:"type" help:"edge type: blocks|supersedes|duplicates|discovered-from"`
+	JSON  bool   `name:"json" help:"emit JSON"`
+	Quiet bool   `name:"quiet" help:"suppress success output"`
 }
 
 func (c *TasksLinkCmd) Run(g *repocli.Globals) error {
@@ -65,6 +67,13 @@ func (c *TasksLinkCmd) Run(g *repocli.Globals) error {
 				To:   string(to),
 				Type: string(edgeType),
 			})
+		}
+		if !c.Quiet {
+			uxprint.Linked(os.Stdout,
+				truncateID(string(from), 8),
+				truncateID(string(to), 8),
+				string(edgeType),
+			)
 		}
 		return nil
 	}))

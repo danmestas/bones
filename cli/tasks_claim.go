@@ -8,13 +8,15 @@ import (
 
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
+	"github.com/danmestas/bones/cli/uxprint"
 	"github.com/danmestas/bones/internal/tasks"
 )
 
 // TasksClaimCmd claims a task as the current agent.
 type TasksClaimCmd struct {
-	ID   string `arg:"" help:"task id"`
-	JSON bool   `name:"json" help:"emit JSON"`
+	ID    string `arg:"" help:"task id"`
+	JSON  bool   `name:"json" help:"emit JSON"`
+	Quiet bool   `name:"quiet" help:"suppress success output"`
 }
 
 // errClaimConflict is returned when a task is held by another agent.
@@ -73,6 +75,12 @@ func (c *TasksClaimCmd) Run(g *repocli.Globals) error {
 		}
 		if c.JSON {
 			return emitEnvelope(os.Stdout, "tasks.claim", taskToSchema(updated))
+		}
+		if !c.Quiet {
+			uxprint.Claimed(os.Stdout,
+				truncateID(updated.ID, 8),
+				truncateID(updated.ClaimedBy, 8),
+			)
 		}
 		return nil
 	}))

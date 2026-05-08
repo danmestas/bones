@@ -12,6 +12,7 @@ import (
 
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
+	"github.com/danmestas/bones/cli/uxprint"
 	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/tasks"
 	"github.com/danmestas/bones/internal/workspace"
@@ -34,6 +35,7 @@ type TasksCloseCmd struct {
 	Reason   string `name:"reason" help:"close reason (optional)"`
 	KeepSlot bool   `name:"keep-slot" help:"close the task; leave the swarm slot intact"`
 	JSON     bool   `name:"json" help:"emit JSON"`
+	Quiet    bool   `name:"quiet" help:"suppress success output"`
 }
 
 func (c *TasksCloseCmd) Run(g *repocli.Globals) error {
@@ -125,6 +127,9 @@ func (c *TasksCloseCmd) legacyClose(
 	if c.JSON {
 		return emitEnvelope(os.Stdout, "tasks.close", taskToSchema(updated))
 	}
+	if !c.Quiet {
+		uxprint.Closed(os.Stdout, truncateID(updated.ID, 8))
+	}
 	return nil
 }
 
@@ -154,8 +159,6 @@ func (c *TasksCloseCmd) autoReleaseAndClose(
 	}
 	closeErr := lease.Close(ctx, swarm.CloseOpts{CloseTaskOnSuccess: true})
 	if closeErr == nil {
-		fmt.Fprintf(os.Stderr,
-			"tasks close: closed task %s and released slot %s\n", c.ID, slot)
 		if c.JSON {
 			// Re-read the task so the JSON shape includes the close
 			// fields the lease/coord layer just wrote.
@@ -164,6 +167,15 @@ func (c *TasksCloseCmd) autoReleaseAndClose(
 				return err
 			}
 			return emitEnvelope(os.Stdout, "tasks.close", taskToSchema(updated))
+		}
+		if !c.Quiet {
+			// Auto-release path: emit one closed signature plus the
+			// released-slot signature so a vertical scan reads both
+			// effects of the verb. Both helpers come from cli/uxprint
+			// — the convention's source of truth for wording.
+			short := truncateID(c.ID, 8)
+			uxprint.Closed(os.Stdout, short)
+			uxprint.SlotReleased(os.Stdout, slot, short)
 		}
 		return nil
 	}

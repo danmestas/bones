@@ -2,12 +2,14 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
 
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
+	"github.com/danmestas/bones/cli/uxprint"
 	"github.com/danmestas/bones/internal/tasks"
 )
 
@@ -24,6 +26,7 @@ type TasksUpdateCmd struct {
 	Context    []string `name:"context" help:"key=value (repeatable; merges)" sep:"none"`
 	ClaimedBy  *string  `name:"claimed-by" help:"agent id to claim as"`
 	JSON       bool     `name:"json" help:"emit JSON"`
+	Quiet      bool     `name:"quiet" help:"suppress success output"`
 }
 
 func (c *TasksUpdateCmd) Run(g *repocli.Globals) error {
@@ -63,43 +66,96 @@ func (c *TasksUpdateCmd) Run(g *repocli.Globals) error {
 			return err
 		}
 
-		// Pre-read so we can author real (field, old, new) tuples for
-		// the updated event payload. The CAS retry loop inside Tx
-		// handles racing writers; the tuples we emit reflect the
-		// pre-image we observed plus the mutator's intent.
-		before, _, err := mgr.Get(ctx, c.ID)
-		if err != nil {
-			return err
-		}
-		var updated tasks.Task
-		mutate := buildUpdateMutator(c, statusUpdate, parsedDeferUntil, &updated)
-		// Run the mutator against a copy to derive the post-image for
-		// the event payload. The same closure runs again inside Tx's
-		// CAS loop; both invocations are idempotent.
-		afterPreview, mErr := mutate(before)
-		if mErr != nil {
-			return mErr
-		}
-		changes := diffTaskFields(before, afterPreview)
-		if len(changes) == 0 {
-			// Nothing changed — short-circuit so we do not emit an
-			// empty event. Idempotent on the CLI side.
-			updated = before
-			if c.JSON {
-				return emitEnvelope(os.Stdout, "tasks.update", taskToSchema(updated))
-			}
-			return nil
-		}
-		if err := mgr.Tx(ctx, c.ID, func(tx *tasks.Tx) error {
-			return tx.Update(mutate, changes...)
-		}); err != nil {
-			return err
-		}
+		return c.applyAndEmit(ctx, mgr, statusUpdate, parsedDeferUntil)
+	}))
+}
+
+// applyAndEmit runs the read-modify-write update sequence and emits
+// the per-mode output (JSON envelope, uxprint.Updated signature, or
+// silent --quiet). Pulled out of Run so the orchestration body fits
+// the funlen budget; the CAS-retry loop and idempotent short-circuit
+// stay grouped here where they're easiest to reason about together.
+func (c *TasksUpdateCmd) applyAndEmit(
+	ctx context.Context,
+	mgr *tasks.Manager,
+	statusUpdate tasks.Status,
+	parsedDeferUntil *time.Time,
+) error {
+	// Pre-read so we can author real (field, old, new) tuples for
+	// the updated event payload. The CAS retry loop inside Tx
+	// handles racing writers; the tuples we emit reflect the
+	// pre-image we observed plus the mutator's intent.
+	before, _, err := mgr.Get(ctx, c.ID)
+	if err != nil {
+		return err
+	}
+	var updated tasks.Task
+	mutate := buildUpdateMutator(c, statusUpdate, parsedDeferUntil, &updated)
+	// Run the mutator against a copy to derive the post-image for
+	// the event payload. The same closure runs again inside Tx's
+	// CAS loop; both invocations are idempotent.
+	afterPreview, mErr := mutate(before)
+	if mErr != nil {
+		return mErr
+	}
+	changes := diffTaskFields(before, afterPreview)
+	if len(changes) == 0 {
+		// Nothing changed — short-circuit so we do not emit an
+		// empty event. Idempotent on the CLI side.
+		updated = before
 		if c.JSON {
 			return emitEnvelope(os.Stdout, "tasks.update", taskToSchema(updated))
 		}
+		if !c.Quiet {
+			uxprint.Updated(os.Stdout, truncateID(updated.ID, 8), nil)
+		}
 		return nil
-	}))
+	}
+	if err := mgr.Tx(ctx, c.ID, func(tx *tasks.Tx) error {
+		return tx.Update(mutate, changes...)
+	}); err != nil {
+		return err
+	}
+	if c.JSON {
+		return emitEnvelope(os.Stdout, "tasks.update", taskToSchema(updated))
+	}
+	if !c.Quiet {
+		fields := changeFieldsMap(changes)
+		uxprint.Updated(os.Stdout, truncateID(updated.ID, 8), fields)
+	}
+	return nil
+}
+
+// changeFieldsMap converts a slice of tasks.FieldChange into the
+// flat map[string]any shape uxprint.Updated consumes. Each change's
+// New JSON is decoded into a Go value (string for primitives, the
+// raw JSON shape for arrays/objects) so the rendered signature reads
+// naturally — a title of "X" prints as title=X, a slot of "beta"
+// prints as slot=beta, and a structural change (files, context)
+// prints with the JSON literal for context.
+func changeFieldsMap(changes []tasks.FieldChange) map[string]any {
+	out := make(map[string]any, len(changes))
+	for _, ch := range changes {
+		// Try to decode into a generic any so strings render as
+		// strings, numbers as numbers, etc. Failing that, fall back
+		// to the raw JSON literal.
+		var v any
+		if err := json.Unmarshal(ch.New, &v); err == nil {
+			switch typed := v.(type) {
+			case string:
+				out[ch.Field] = typed
+			case float64:
+				// json.Unmarshal into any uses float64 for all
+				// numbers; render as %v which trims trailing zeros.
+				out[ch.Field] = typed
+			default:
+				out[ch.Field] = string(ch.New)
+			}
+			continue
+		}
+		out[ch.Field] = string(ch.New)
+	}
+	return out
 }
 
 // diffTaskFields returns the FieldChange tuples describing the

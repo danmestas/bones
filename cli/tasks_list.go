@@ -9,6 +9,7 @@ import (
 
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
+	"github.com/danmestas/bones/cli/uxprint"
 	"github.com/danmestas/bones/internal/coord"
 	"github.com/danmestas/bones/internal/tasks"
 	"github.com/danmestas/bones/internal/workspace"
@@ -103,18 +104,54 @@ func (c *TasksListCmd) Run(g *repocli.Globals) error {
 			out = filterOrphans(out, liveAgentSet(peers))
 		}
 
-		// --by-slot replaces the per-task rendering with the per-slot
-		// summary (issue #214). Composes with the other filters: e.g.
-		// `--by-slot --claimed-by=-` shows hot slots among unclaimed
-		// open work. groupBySlot drops closed tasks even when --all is
-		// set — closed tasks free the slot, so counting them would
-		// misrepresent the serialization depth.
-		if c.BySlot {
-			return emitBySlot(os.Stdout, groupBySlot(out), c.JSON)
-		}
-
-		return emitTasks(out, c.JSON)
+		return c.render(out, allTasks)
 	}))
+}
+
+// render handles the final per-mode emission for `tasks list`:
+// --by-slot, the filter-emptiness hint, and the legacy plain/JSON
+// rendering. Pulled out of Run so the orchestration body stays under
+// the funlen budget while the rendering logic remains adjacent to
+// the filter pipeline that produced its inputs.
+func (c *TasksListCmd) render(out, allTasks []tasks.Task) error {
+	// --by-slot replaces the per-task rendering with the per-slot
+	// summary (issue #214). Composes with the other filters: e.g.
+	// `--by-slot --claimed-by=-` shows hot slots among unclaimed
+	// open work. groupBySlot drops closed tasks even when --all is
+	// set — closed tasks free the slot, so counting them would
+	// misrepresent the serialization depth.
+	if c.BySlot {
+		return emitBySlot(os.Stdout, groupBySlot(out), c.JSON)
+	}
+
+	// Filter-emptiness hint: when the human-mode result is empty
+	// but closed tasks exist, point the operator at --all so they
+	// can tell "the filter hid closed rows" from "there is nothing
+	// to list at all". JSON output skips the hint — JSON consumers
+	// see the empty array; the hint is human-only by design (issue
+	// #323's read-verb rule).
+	if !c.JSON && len(out) == 0 && !c.All {
+		closedCount := countClosed(allTasks)
+		if closedCount > 0 {
+			uxprint.NoOpenTasks(os.Stdout, closedCount)
+			return nil
+		}
+	}
+
+	return emitTasks(out, c.JSON)
+}
+
+// countClosed returns the number of closed tasks in in. Used by the
+// filter-emptiness hint logic in tasks_list.go to decide whether to
+// emit the (no open tasks; N closed — pass --all) line.
+func countClosed(in []tasks.Task) int {
+	n := 0
+	for _, t := range in {
+		if t.Status == tasks.StatusClosed {
+			n++
+		}
+	}
+	return n
 }
 
 // filterTasks applies the always-on list filters (closed-vs-all, status,
