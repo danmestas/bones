@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "claimed_by": {
+      "type": "string"
+    },
+    "files": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "parent": {
+      "type": "string"
+    },
+    "edges": {
+      "items": {
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "target"
+        ]
+      },
+      "type": "array"
+    },
+    "context": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "defer_until": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "closed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "closed_by": {
+      "type": "string"
+    },
+    "closed_reason": {
+      "type": "string"
+    },
+    "claim_epoch": {
+      "type": "integer"
+    },
+    "original_size": {
+      "type": "integer"
+    },
+    "compact_level": {
+      "type": "integer"
+    },
+    "compacted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "schema_version": {
+      "type": "integer"
+    },
+    "last_event_seq": {
+      "type": "integer"
+    }
+  },
+  "type": "object",
+  "required": [
+    "id",
+    "title",
+    "status",
+    "files",
+    "created_at",
+    "updated_at",
+    "schema_version"
+  ],
+  "title": "TasksClosePayload",
+  "description": "Payload (`data` field) for `bones tasks close --json` envelope, version v1."
+}

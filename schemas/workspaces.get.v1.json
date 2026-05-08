@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "hub_status": {
+      "type": "string"
+    },
+    "last_touched": {
+      "type": "string"
+    },
+    "agent_id": {
+      "type": "string"
+    },
+    "nats_url": {
+      "type": "string"
+    },
+    "hub_url": {
+      "type": "string"
+    }
+  },
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "cwd",
+    "hub_status",
+    "last_touched",
+    "agent_id",
+    "nats_url",
+    "hub_url"
+  ],
+  "title": "WorkspacesGetPayload",
+  "description": "Payload (`data` field) for `bones workspaces get --json` envelope, version v1."
+}

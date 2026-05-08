@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "since": {
+      "type": "string"
+    },
+    "total_tasks": {
+      "type": "integer"
+    },
+    "total_slots": {
+      "type": "integer"
+    },
+    "active_slots": {
+      "type": "integer"
+    },
+    "slots": {
+      "items": {
+        "properties": {
+          "slot_id": {
+            "type": "string"
+          },
+          "tasks": {
+            "type": "integer"
+          },
+          "files": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slot_id",
+          "tasks",
+          "files",
+          "status"
+        ]
+      },
+      "type": "array"
+    }
+  },
+  "type": "object",
+  "required": [
+    "since",
+    "total_tasks",
+    "total_slots",
+    "active_slots",
+    "slots"
+  ],
+  "title": "TasksAggregatePayload",
+  "description": "Payload (`data` field) for `bones tasks aggregate --json` envelope, version v1."
+}

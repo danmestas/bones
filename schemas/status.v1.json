@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "workspaces": {
+      "items": {
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "hub_url": {
+            "type": "string"
+          },
+          "sessions": {
+            "type": "integer"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cwd",
+          "name",
+          "hub_url",
+          "sessions",
+          "started_at"
+        ]
+      },
+      "type": "array"
+    }
+  },
+  "type": "object",
+  "required": [
+    "workspaces"
+  ],
+  "title": "StatusAllPayload",
+  "description": "Payload (`data` field) for `bones status --json` envelope, version v1."
+}

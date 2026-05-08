@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "manifest_path": {
+      "type": "string"
+    },
+    "task_count": {
+      "type": "integer"
+    },
+    "plan_sha256": {
+      "type": "string"
+    }
+  },
+  "type": "object",
+  "required": [
+    "manifest_path",
+    "task_count",
+    "plan_sha256"
+  ],
+  "title": "SwarmDispatchPayload",
+  "description": "Payload (`data` field) for `bones swarm dispatch --json` envelope, version v1."
+}

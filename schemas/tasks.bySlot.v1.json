@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "slots": {
+      "items": {
+        "properties": {
+          "slot": {
+            "type": "string"
+          },
+          "open_count": {
+            "type": "integer"
+          },
+          "hot": {
+            "type": "boolean"
+          },
+          "task_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slot",
+          "open_count",
+          "hot",
+          "task_ids"
+        ]
+      },
+      "type": "array"
+    },
+    "hot_threshold": {
+      "type": "integer"
+    }
+  },
+  "type": "object",
+  "required": [
+    "slots",
+    "hot_threshold"
+  ],
+  "title": "TasksBySlotPayload",
+  "description": "Payload (`data` field) for `bones tasks bySlot --json` envelope, version v1."
+}
