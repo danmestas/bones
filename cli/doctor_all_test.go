@@ -147,6 +147,107 @@ func TestDoctorAllJSON(t *testing.T) {
 	}
 }
 
+// TestDoctorAll_DoesNotRewriteSettings pins the ADR 0051 contract
+// for --all mode: per-workspace auto-rewrite is off in the
+// multi-workspace path. A `bones doctor --all` invocation walks
+// every registered workspace on the host; rewriting all of them on
+// a single invocation is too high a blast radius. Stale entries
+// surface as WARN lines; the operator runs `bones doctor` (no
+// --all) inside the offending workspace to apply the migration.
+//
+// Fixture: two workspaces, each with a stale v0.12 `bones tasks
+// prime --json` entry under SessionStart. Run renderDoctorAll.
+// Assert: both settings.json files are byte-identical to before
+// (no auto-rewrite); WARN lines surface in the per-workspace
+// detail (so the operator sees the drift).
+func TestDoctorAll_DoesNotRewriteSettings(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	v012 := `{
+  "hooks": {
+    "SessionStart": [
+      {"matcher": "", "hooks": [
+        {"command": "bones tasks prime --json", "type": "command", "timeout": 10},
+        {"command": "bones hub start", "type": "command", "timeout": 10}
+      ]}
+    ],
+    "PreCompact": [
+      {"matcher": "", "hooks": [
+        {"command": "bones tasks prime --json", "type": "command", "timeout": 10}
+      ]}
+    ]
+  }
+}`
+	type wkFixture struct {
+		dir          string
+		settingsPath string
+		before       []byte
+	}
+	wks := make([]wkFixture, 0, 2)
+	for _, name := range []string{"alpha", "beta"} {
+		dir := makeFakeWorkspace(t, name)
+		settingsDir := filepath.Join(dir, ".claude")
+		if err := os.MkdirAll(settingsDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		settingsPath := filepath.Join(settingsDir, "settings.json")
+		if err := os.WriteFile(settingsPath, []byte(v012), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		before, err := os.ReadFile(settingsPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wks = append(wks, wkFixture{
+			dir:          dir,
+			settingsPath: settingsPath,
+			before:       before,
+		})
+
+		if err := registry.Write(registry.Entry{
+			Cwd: dir, Name: name, HubURL: srv.URL, NATSURL: "nats://x",
+			HubPID: os.Getpid(), StartedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+
+	var buf bytes.Buffer
+	// ShowOK so the per-workspace detail (including WARN lines) is
+	// rendered even on workspaces flagged as OK by hub-alive checks.
+	renderDoctorAll(&buf, doctorAllOpts{ShowOK: true})
+	out := buf.String()
+
+	for _, wk := range wks {
+		after, err := os.ReadFile(wk.settingsPath)
+		if err != nil {
+			t.Fatalf("read %s: %v", wk.settingsPath, err)
+		}
+		if !bytes.Equal(wk.before, after) {
+			t.Errorf("%s: --all rewrote settings.json; "+
+				"ADR 0051 says --all is report-only.\n"+
+				"--- before ---\n%s\n--- after ---\n%s",
+				wk.dir, wk.before, after)
+		}
+	}
+
+	// The ADR 0051 stale entries must surface as WARN lines in the
+	// rendered output so the operator knows there is drift to fix.
+	if !strings.Contains(out, "WARN") {
+		t.Errorf("--all output did not surface WARN lines for stale " +
+			"hook entries; operator would not know about the drift")
+	}
+	// FIX lines must NOT appear — those would imply auto-rewrite ran.
+	if strings.Contains(out, "FIX") {
+		t.Errorf("--all output contained FIX line; --all must not "+
+			"auto-rewrite (ADR 0051):\n%s", out)
+	}
+}
+
 func TestDoctorAllJSONEmpty(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	var buf bytes.Buffer

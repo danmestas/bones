@@ -389,45 +389,114 @@ func countHookCommand(settings map[string]any, event, cmd string) int {
 	return n
 }
 
+// matcherForCommand returns the matcher string of the hook group
+// containing cmd under settings.hooks[event]. Empty string if the
+// command is not found or its group has no matcher set. Used to pin
+// ADR 0051's matcher-aware placement.
+func matcherForCommand(settings map[string]any, event, cmd string) string {
+	hooks, _ := settings["hooks"].(map[string]any)
+	groups, _ := hooks[event].([]any)
+	for _, g := range groups {
+		gm, ok := g.(map[string]any)
+		if !ok {
+			continue
+		}
+		entries, _ := gm["hooks"].([]any)
+		for _, e := range entries {
+			em, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			if c, _ := em["command"].(string); c == cmd {
+				m, _ := gm["matcher"].(string)
+				return m
+			}
+		}
+	}
+	return ""
+}
+
 // TestScaffoldOrchestrator_SessionStartIncludesPrime asserts that the
-// scaffold injects `bones tasks prime --json` into SessionStart so a
-// fresh agent's context boots from the tasks substrate. Without this,
-// freeform specs written outside `bones tasks` survive session
-// boundaries on equal footing with filed tasks, which removes the
-// "tasks-as-survivor" pressure that keeps planners filing atomic work.
+// scaffold injects the envelope-emitting `bones tasks prime --hook=
+// session-start` into SessionStart so a fresh agent's context boots
+// from the tasks substrate. Without this, freeform specs written
+// outside `bones tasks` survive session boundaries on equal footing
+// with filed tasks, which removes the "tasks-as-survivor" pressure
+// that keeps planners filing atomic work.
+//
+// Per ADR 0051 the v0.12 `--json` form was a Claude-Code-protocol
+// no-op (it printed the bones-shape JSON Claude Code did not parse);
+// the canonical install now writes the envelope-emitting form.
 func TestScaffoldOrchestrator_SessionStartIncludesPrime(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 	cmds := hookCommandsFor(readSettings(t, dir), "SessionStart")
-	want := "bones tasks prime --json"
+	want := "bones tasks prime --hook=session-start"
 	if !slices.Contains(cmds, want) {
 		t.Fatalf("SessionStart hooks missing %q; got %v", want, cmds)
 	}
+	// The pre-ADR-0051 `--json` form must NOT be installed: it was
+	// the silently-broken v0.12 entry.
+	for _, c := range cmds {
+		if c == "bones tasks prime --json" {
+			t.Errorf("legacy v0.12 `bones tasks prime --json` "+
+				"still installed (ADR 0051 says drop it); got: %v", cmds)
+		}
+	}
 }
 
-// TestScaffoldOrchestrator_PreCompactIncludesPrime asserts the
-// PreCompact event runs `bones tasks prime --json`. Compaction is the
-// longer-horizon failure mode for narrative drift — wiring SessionStart
-// alone leaves a multi-hour window where freeform context can win.
-func TestScaffoldOrchestrator_PreCompactIncludesPrime(t *testing.T) {
+// TestScaffoldOrchestrator_PreCompactHasNoPrime asserts that ADR 0051's
+// "PreCompact is the wrong slot" decision is enforced at scaffold time:
+// no `bones tasks prime` entry of any form may be installed under
+// PreCompact, and the event group itself should be empty (or absent)
+// after a fresh scaffold. The Claude Code hook protocol does not
+// document an `additionalContext` mechanism for PreCompact, so any
+// such entry was a silent no-op in v0.12.
+//
+// Replaces the old TestScaffoldOrchestrator_PreCompactIncludesPrime
+// which pinned the broken-by-design v0.12 placement.
+func TestScaffoldOrchestrator_PreCompactHasNoPrime(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
 		t.Fatalf("scaffoldOrchestrator: %v", err)
 	}
 	cmds := hookCommandsFor(readSettings(t, dir), "PreCompact")
-	want := "bones tasks prime --json"
-	if !slices.Contains(cmds, want) {
-		t.Fatalf("PreCompact hooks missing %q; got %v", want, cmds)
+	for _, c := range cmds {
+		if strings.Contains(c, "bones tasks prime") {
+			t.Errorf("PreCompact must not carry any `bones tasks prime` "+
+				"entry per ADR 0051; got %q", c)
+		}
+	}
+}
+
+// TestScaffoldOrchestrator_SessionStartPrimeMatcher pins the
+// "startup|compact" matcher placement: ADR 0051 substitutes the
+// SessionStart `compact` matcher for the v0.12 PreCompact slot. A
+// single hook entry must cover both fresh sessions and post-compact
+// sessions, so the prime entry's group must carry the documented
+// pipe-alternation matcher rather than the default `""` matcher.
+func TestScaffoldOrchestrator_SessionStartPrimeMatcher(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
+		t.Fatalf("scaffoldOrchestrator: %v", err)
+	}
+	settings := readSettings(t, dir)
+	matcher := matcherForCommand(settings, "SessionStart",
+		"bones tasks prime --hook=session-start")
+	if matcher != "startup|compact" {
+		t.Errorf("SessionStart prime matcher = %q, want %q "+
+			"(ADR 0051 §PreCompact-is-not-the-right-slot)",
+			matcher, "startup|compact")
 	}
 }
 
 // TestScaffoldOrchestrator_PrimeHookIdempotent asserts that re-running
-// `bones up` does not duplicate the prime entries. Locks in the
-// addHook dedup contract — without it, a downstream user who runs
+// `bones up` does not duplicate the prime entry. Locks in the addHook
+// dedup contract — without it, a downstream user who runs
 // `bones up --reinstall-hooks` repeatedly would accumulate multiple
-// prime calls per event.
+// prime calls.
 func TestScaffoldOrchestrator_PrimeHookIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	for i := range 3 {
@@ -436,10 +505,66 @@ func TestScaffoldOrchestrator_PrimeHookIdempotent(t *testing.T) {
 		}
 	}
 	settings := readSettings(t, dir)
-	const cmd = "bones tasks prime --json"
-	for _, event := range []string{"SessionStart", "PreCompact"} {
-		if got := countHookCommand(settings, event, cmd); got != 1 {
-			t.Errorf("%s prime entry count = %d, want 1", event, got)
+	const cmd = "bones tasks prime --hook=session-start"
+	if got := countHookCommand(settings, "SessionStart", cmd); got != 1 {
+		t.Errorf("SessionStart prime entry count = %d, want 1", got)
+	}
+}
+
+// TestScaffoldOrchestrator_MigratesV012PrimeJSON pins ADR 0051's
+// auto-migration contract for `bones up` re-run: a workspace whose
+// settings.json has the v0.12 `bones tasks prime --json` entries
+// (one under SessionStart, one under PreCompact) must, after
+// scaffoldOrchestrator runs, contain only the new `--hook=session-
+// start` entry. The legacy entries are pruned, the new entry is
+// installed, and PreCompact is left without any prime entry.
+func TestScaffoldOrchestrator_MigratesV012PrimeJSON(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v012 := `{
+  "hooks": {
+    "SessionStart": [
+      {"matcher": "", "hooks": [
+        {"command": "bones tasks prime --json", "type": "command", "timeout": 10},
+        {"command": "bones hub start", "type": "command", "timeout": 10}
+      ]}
+    ],
+    "PreCompact": [
+      {"matcher": "", "hooks": [
+        {"command": "bones tasks prime --json", "type": "command", "timeout": 10}
+      ]}
+    ]
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(v012), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
+		t.Fatalf("scaffoldOrchestrator: %v", err)
+	}
+	settings := readSettings(t, dir)
+
+	// New form is installed.
+	ssCmds := hookCommandsFor(settings, "SessionStart")
+	if !slices.Contains(ssCmds, "bones tasks prime --hook=session-start") {
+		t.Errorf("envelope-emitting prime not installed; SessionStart=%v", ssCmds)
+	}
+	// Legacy form is pruned.
+	if slices.Contains(ssCmds, "bones tasks prime --json") {
+		t.Errorf("legacy SessionStart `bones tasks prime --json` not pruned; "+
+			"SessionStart=%v", ssCmds)
+	}
+	// PreCompact entries are gone (per ADR 0051: wrong slot, no
+	// `additionalContext` support).
+	pcCmds := hookCommandsFor(settings, "PreCompact")
+	for _, c := range pcCmds {
+		if strings.Contains(c, "bones tasks prime") {
+			t.Errorf("PreCompact `bones tasks prime` not pruned by ADR 0051 "+
+				"migration; got %q", c)
 		}
 	}
 }

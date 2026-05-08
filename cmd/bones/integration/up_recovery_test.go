@@ -63,7 +63,11 @@ func TestCLI_UpRecoversFromHalfInstall(t *testing.T) {
 		t.Fatalf("read settings.json: %v", err)
 	}
 	body := string(settingsData)
-	for _, want := range []string{"bones tasks prime --json", "bones hub start"} {
+	// Per ADR 0051 the canonical prime command is the envelope-emitting
+	// `--hook=session-start` form, not the legacy `--json` form.
+	for _, want := range []string{
+		"bones tasks prime --hook=session-start", "bones hub start",
+	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("settings.json missing %q after recovery:\n%s", want, body)
 		}

@@ -132,22 +132,25 @@ func TestWriteManifest_OmitsRollingFiles(t *testing.T) {
 // non-bones hook to settings.json does NOT change the recorded
 // SettingsHooksSHA256. The hash is computed over the bones-owned
 // subset only.
+//
+// Per ADR 0051 PreCompact is no longer a bones-owned slot — entries
+// there (whatever shape) must NOT influence the hash.
 func TestHashBonesOwnedHooks_IgnoresUserHooks(t *testing.T) {
 	bonesOnly := map[string]any{
 		"SessionStart": []any{
 			map[string]any{
-				"matcher": "",
+				"matcher": "startup|compact",
 				"hooks": []any{
-					map[string]any{"command": "bones tasks prime --json", "type": "command"},
-					map[string]any{"command": "bones hub start", "type": "command"},
+					map[string]any{
+						"command": "bones tasks prime --hook=session-start",
+						"type":    "command",
+					},
 				},
 			},
-		},
-		"PreCompact": []any{
 			map[string]any{
 				"matcher": "",
 				"hooks": []any{
-					map[string]any{"command": "bones tasks prime --json", "type": "command"},
+					map[string]any{"command": "bones hub start", "type": "command"},
 				},
 			},
 		},
@@ -155,19 +158,30 @@ func TestHashBonesOwnedHooks_IgnoresUserHooks(t *testing.T) {
 	bonesPlusUser := map[string]any{
 		"SessionStart": []any{
 			map[string]any{
+				"matcher": "startup|compact",
+				"hooks": []any{
+					map[string]any{
+						"command": "bones tasks prime --hook=session-start",
+						"type":    "command",
+					},
+				},
+			},
+			map[string]any{
 				"matcher": "",
 				"hooks": []any{
-					map[string]any{"command": "bones tasks prime --json", "type": "command"},
 					map[string]any{"command": "bones hub start", "type": "command"},
 					map[string]any{"command": "user-thing", "type": "command"},
 				},
 			},
 		},
+		// User-owned PreCompact entry — must be ignored by the
+		// bones-owned hash (PreCompact is not in
+		// bonesOwnedHookCommands per ADR 0051).
 		"PreCompact": []any{
 			map[string]any{
 				"matcher": "",
 				"hooks": []any{
-					map[string]any{"command": "bones tasks prime --json", "type": "command"},
+					map[string]any{"command": "user-precompact", "type": "command"},
 				},
 			},
 		},
@@ -198,18 +212,18 @@ func TestHashBonesOwnedHooks_DetectsMissingBonesHook(t *testing.T) {
 	full := map[string]any{
 		"SessionStart": []any{
 			map[string]any{
-				"matcher": "",
+				"matcher": "startup|compact",
 				"hooks": []any{
-					map[string]any{"command": "bones tasks prime --json", "type": "command"},
-					map[string]any{"command": "bones hub start", "type": "command"},
+					map[string]any{
+						"command": "bones tasks prime --hook=session-start",
+						"type":    "command",
+					},
 				},
 			},
-		},
-		"PreCompact": []any{
 			map[string]any{
 				"matcher": "",
 				"hooks": []any{
-					map[string]any{"command": "bones tasks prime --json", "type": "command"},
+					map[string]any{"command": "bones hub start", "type": "command"},
 				},
 			},
 		},
@@ -217,17 +231,12 @@ func TestHashBonesOwnedHooks_DetectsMissingBonesHook(t *testing.T) {
 	missingHubStart := map[string]any{
 		"SessionStart": []any{
 			map[string]any{
-				"matcher": "",
+				"matcher": "startup|compact",
 				"hooks": []any{
-					map[string]any{"command": "bones tasks prime --json", "type": "command"},
-				},
-			},
-		},
-		"PreCompact": []any{
-			map[string]any{
-				"matcher": "",
-				"hooks": []any{
-					map[string]any{"command": "bones tasks prime --json", "type": "command"},
+					map[string]any{
+						"command": "bones tasks prime --hook=session-start",
+						"type":    "command",
+					},
 				},
 			},
 		},

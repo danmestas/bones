@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/danmestas/bones/internal/clauderhooks"
 	"github.com/danmestas/bones/internal/scaffoldver"
 	"github.com/danmestas/bones/internal/version"
 )
@@ -145,15 +146,32 @@ func removeLegacyBonesSkills(root string) error {
 	return nil
 }
 
-// mergeSettings idempotently installs the SessionStart + PreCompact
-// hooks bones relies on into the consumer's .claude/settings.json.
-// Creates the file if absent. Preserves all existing top-level keys,
-// hook events, and entries.
+// mergeSettings idempotently installs the SessionStart hooks bones
+// relies on into the consumer's .claude/settings.json. Creates the
+// file if absent. Preserves all existing top-level keys, hook events,
+// and entries.
 //
 // Per ADR 0041 the SessionStart hub-startup entry is `bones hub start`
 // (not the legacy bash hub-bootstrap.sh shim). Pre-ADR-0041 entries are
 // pruned during scaffold so re-running over an existing workspace does
 // not leave the legacy command coexisting with the new one.
+//
+// Per ADR 0051 (Claude Code hook protocol contract) bones tasks prime
+// now emits the documented `hookSpecificOutput`/`additionalContext`
+// envelope via `--hook=session-start`. The pre-ADR-0051 invocation
+// `bones tasks prime --json` printed the bones-shape JSON Claude Code
+// did not understand and silently dropped — see the ADR for the
+// migration story. mergeSettings:
+//
+//   - prunes the v0.12 `bones tasks prime --json` entry from any
+//     SessionStart group it appears in (legacy);
+//   - prunes any `bones tasks prime` entry from PreCompact entirely
+//     (PreCompact has no `additionalContext` mechanism in the Claude
+//     Code hook protocol — it was the wrong slot from day one);
+//   - installs `bones tasks prime --hook=session-start` under
+//     SessionStart with matcher `startup|compact`, which fires on
+//     fresh sessions AND after manual / auto compaction, replacing
+//     the broken v0.12 PreCompact slot.
 //
 // Hub teardown is no longer wired into any session lifecycle hook. Per
 // ADR 0038 the hub is workspace-scoped and `bones down` is the explicit
@@ -190,19 +208,43 @@ func mergeSettings(path string, fp *scaffoldFootprint) error {
 	migrateStopToSessionEnd(hooks)
 	migrateSessionEndShutdown(hooks)
 
-	// Prime first so task context lands in the agent's window before any
-	// other hook output. coord.Prime is the only thing that survives
-	// session boundaries — specs written outside `bones tasks` evaporate
-	// at the next compaction, which keeps planners filing atomic work
-	// rather than bypassing the tracker with freeform docs.
-	if addHook(hooks, "SessionStart", "bones tasks prime --json") {
+	// ADR 0051 migration: the v0.12 SessionStart `bones tasks prime
+	// --json` entry was a Claude-Code-protocol no-op; replace it
+	// with the envelope-emitting form. pruneCommandFromEvent
+	// substring-matches, but the needle here is specific enough
+	// (`bones tasks prime --json`) that it only catches the v0.12
+	// command — user-added prime variants in other shapes survive.
+	pruneCommandFromEvent(hooks, "SessionStart", "bones tasks prime --json")
+
+	// ADR 0051 migration: PreCompact has no `additionalContext`
+	// mechanism documented in the Claude Code hook protocol. Any
+	// `bones tasks prime` entry there never injected context — drop
+	// every such entry. PreCompact is no longer a bones-owned slot
+	// per ADR 0051; the broader `bones tasks prime` substring needle
+	// is intentional here so --json, --hook=*, and bare forms are
+	// removed equally. User scripts that happen to invoke
+	// `bones tasks prime` from PreCompact are exceptional and would
+	// have been a v0.12-era workaround; they are not preserved.
+	pruneCommandFromEvent(hooks, "PreCompact", "bones tasks prime")
+
+	// Install the canonical envelope-emitting prime entry under
+	// SessionStart with matcher "startup|compact" so the same hook
+	// fires on fresh sessions AND after compaction. The matcher is
+	// the documented Claude Code "exact strings, pipe-separated"
+	// form (see ADR 0051 §"PreCompact is not the right slot" for
+	// why this replaces the v0.12 PreCompact placement).
+	primeCmd := clauderhooks.PrimeCommandFor(clauderhooks.EventSessionStart)
+	if addHookWithMatcher(hooks, "SessionStart",
+		clauderhooks.SessionStartMatcher, primeCmd) {
 		recordHook(fp, "SessionStart")
 	}
+
+	// `bones hub start` keeps its existing default-matcher placement
+	// (every session starts the hub if not already running). It is
+	// not subject to ADR 0051's envelope contract — it's a
+	// side-effecting daemon launcher, not a context-injection hook.
 	if addHook(hooks, "SessionStart", "bones hub start") {
 		recordHook(fp, "SessionStart")
-	}
-	if addHook(hooks, "PreCompact", "bones tasks prime --json") {
-		recordHook(fp, "PreCompact")
 	}
 
 	root["hooks"] = hooks
@@ -295,7 +337,22 @@ func pruneCommandFromEvent(hooks map[string]any, event, needle string) {
 // addHook returns true when a fresh entry was appended, false when the
 // hook was already present (idempotent no-op). The boolean lets the
 // caller report a precise "merged N hooks" count in the up summary.
+//
+// Default matcher is "" (fires on every occurrence of the event). For
+// matcher-scoped placement use addHookWithMatcher.
 func addHook(hooks map[string]any, event, cmd string) bool {
+	return addHookWithMatcher(hooks, event, "", cmd)
+}
+
+// addHookWithMatcher is the matcher-aware sibling of addHook. It
+// places cmd under the hook group whose `matcher` field equals the
+// requested matcher, creating that group if absent. Idempotent:
+// re-adding the same (event, matcher, cmd) tuple is a no-op.
+//
+// Per ADR 0051 bones uses matcher "startup|compact" on SessionStart
+// for the prime entry so a single command covers fresh sessions
+// AND post-compact sessions.
+func addHookWithMatcher(hooks map[string]any, event, matcher, cmd string) bool {
 	groups, _ := hooks[event].([]any)
 
 	grpIdx := -1
@@ -304,15 +361,15 @@ func addHook(hooks map[string]any, event, cmd string) bool {
 		if !ok {
 			continue
 		}
-		matcher, _ := gm["matcher"].(string)
-		if matcher == "" {
+		mv, _ := gm["matcher"].(string)
+		if mv == matcher {
 			grpIdx = i
 			break
 		}
 	}
 	if grpIdx == -1 {
 		groups = append(groups, map[string]any{
-			"matcher": "",
+			"matcher": matcher,
 			"hooks":   []any{},
 		})
 		grpIdx = len(groups) - 1

@@ -9,24 +9,53 @@ import (
 
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
+	"github.com/danmestas/bones/internal/clauderhooks"
 	"github.com/danmestas/bones/internal/coord"
 	"github.com/danmestas/bones/internal/version"
 )
 
 // SessionStartSentinelFile is the workspace-relative path of the
-// SessionStart hook sentinel. `bones tasks prime` (wired as both
-// SessionStart and PreCompact hooks by `bones up`) refreshes the file
-// on entry, and `bones doctor` reads it to detect "hooks configured
-// but never fire" failure modes (#172).
+// SessionStart hook sentinel. `bones tasks prime` (wired as a
+// SessionStart hook by `bones up`) refreshes the file on entry,
+// and `bones doctor` reads it to detect "hooks configured but never
+// fire" failure modes (#172).
 const SessionStartSentinelFile = ".bones/last-session-prime"
 
 // TasksPrimeCmd prints an agent context summary (open/ready/claimed tasks,
 // recent threads, peers online).
+//
+// Three output modes:
+//
+//   - default (no flags): human-readable markdown via formatPrime().
+//   - --json: raw bones JSON shape ({open_tasks, ready_tasks, ...}).
+//     Stable contract for operator scripts (separately governed by
+//     issue #321's schema-contract work).
+//   - --hook=session-start: Claude Code hook protocol envelope wrapping
+//     the formatPrime() markdown in `hookSpecificOutput.additionalContext`.
+//     This is the form `bones up` writes into .claude/settings.json
+//     so Claude Code's SessionStart hook reader actually injects bones
+//     context into the agent window. See ADR 0051.
+//
+// `--json` and `--hook=X` describe two distinct consumers and are
+// mutually exclusive: the operator-script surface (--json) and the
+// Claude Code protocol surface (--hook). Combining them is a CLI
+// error.
 type TasksPrimeCmd struct {
-	JSON bool `name:"json" help:"emit JSON"`
+	JSON bool `name:"json" help:"emit raw bones JSON shape (operator scripts)"`
+	// Hook selects an event whose Claude Code hook envelope should
+	// be emitted. Empty (default) means no envelope. See ADR 0051
+	// for the supported values and the protocol contract.
+	Hook string `name:"hook" enum:"session-start," default:"" help:"emit Claude Code hook envelope"`
 }
 
 func (c *TasksPrimeCmd) Run(g *repocli.Globals) error {
+	if c.JSON && c.Hook != "" {
+		return fmt.Errorf("--json and --hook=%s are mutually exclusive: "+
+			"--json is the bones-shape operator surface; "+
+			"--hook is the Claude Code protocol surface (ADR 0051)",
+			c.Hook)
+	}
+
 	ctx, stop, info, err := joinWorkspace()
 	if err != nil {
 		return err
@@ -51,7 +80,18 @@ func (c *TasksPrimeCmd) Run(g *repocli.Globals) error {
 		if err != nil {
 			return err
 		}
-		if c.JSON {
+		switch {
+		case c.Hook != "":
+			// ADR 0051: emit the Claude Code hook envelope so the
+			// SessionStart hook reader injects formatPrime()'s
+			// markdown into the agent's context window.
+			event, ok := clauderhooks.FlagToEvent(clauderhooks.FlagValue(c.Hook))
+			if !ok {
+				return fmt.Errorf("unknown --hook value %q (ADR 0051)", c.Hook)
+			}
+			env := clauderhooks.NewEnvelope(event, formatPrime(result))
+			return clauderhooks.Emit(os.Stdout, env)
+		case c.JSON:
 			// Always emit the envelope, even when the workspace
 			// has zero tasks/threads/peers. The SessionStart hook
 			// attaches stdout into agent context: an empty payload
@@ -59,9 +99,10 @@ func (c *TasksPrimeCmd) Run(g *repocli.Globals) error {
 			// while an empty-but-present envelope is the "bones is
 			// here, nothing claimed yet" signal (#170).
 			return emitJSON(os.Stdout, primeToJSON(result))
+		default:
+			fmt.Print(formatPrime(result))
+			return nil
 		}
-		fmt.Print(formatPrime(result))
-		return nil
 	}))
 }
 

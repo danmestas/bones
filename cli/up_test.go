@@ -185,8 +185,10 @@ func TestScaffoldOrchestrator_RecoversFromHalfInstall(t *testing.T) {
 		[]byte("test-agent"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Simulate a half-merged settings.json: bones SessionStart hook is
-	// in but PreCompact is not.
+	// Simulate a half-merged settings.json: bones SessionStart entry
+	// for the (legacy) prime hook is in, but `bones hub start` and
+	// the migration to ADR 0051's --hook=session-start form have not
+	// run.
 	settingsDir := filepath.Join(dir, ".claude")
 	if err := os.MkdirAll(settingsDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -207,19 +209,26 @@ func TestScaffoldOrchestrator_RecoversFromHalfInstall(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(bones, "scaffold_version")); err != nil {
 		t.Errorf("scaffold_version stamp not written after recovery: %v", err)
 	}
-	// settings.json now has the full hook set.
+	// settings.json now has the full ADR 0051 hook set: the new
+	// envelope-emitting prime form + bones hub start. Per ADR 0051,
+	// the legacy `--json` form is migrated away during recovery.
 	data, err := os.ReadFile(filepath.Join(settingsDir, "settings.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := string(data)
 	for _, want := range []string{
-		"bones tasks prime --json", // present in partial
-		"bones hub start",          // added by recovery
+		"bones tasks prime --hook=session-start", // ADR 0051 canonical form
+		"bones hub start",                        // added by recovery
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("settings.json missing %q after recovery:\n%s", want, body)
 		}
+	}
+	// Legacy form must have been migrated out.
+	if strings.Contains(body, "bones tasks prime --json") {
+		t.Errorf("legacy `bones tasks prime --json` survived "+
+			"ADR 0051 migration:\n%s", body)
 	}
 
 	// Idempotent: a third run produces a byte-identical settings.json.

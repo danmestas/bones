@@ -1,5 +1,7 @@
 # ADR 0036: Prime on session boundaries
 
+**Status:** Partially superseded by ADR 0051 (2026-05-08) — the SessionStart placement intent survives; the PreCompact placement does not. ADR 0051 replaces PreCompact with the SessionStart `compact` matcher and switches the command from `bones tasks prime --json` to `bones tasks prime --hook=session-start` (Claude Code hook protocol envelope).
+
 ## Context
 
 bones already has the primitives for tasks-as-survivor: `coord.Prime` returns a snapshot of the workspace's open/ready/claimed tasks plus chat threads and live peers (`internal/coord/prime.go`), and `bones tasks prime --json` serializes that snapshot stably (`cli/tasks_prime.go`, schema in `cli/tasks_format.go`). What was missing was the wiring: nothing in the `bones up` scaffold called Prime at session boundaries, so an agent's working context booted from whatever the harness happened to surface — including freeform spec files in the workspace.
