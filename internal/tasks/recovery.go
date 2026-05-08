@@ -16,20 +16,10 @@ import (
 // migrationMarkerKey is the KV key whose presence (in the bones-tasks
 // bucket) signals that the synthetic-event migration from pre-event-log
 // state has already run. The marker is set at the end of a successful
-// Migrate() call. Its value is a JSON object with the migration
-// timestamp; presence is what counts.
+// Migrate() call. Its value is a Task-shaped placeholder (see
+// setMigrated) only because the bucket is typed for JSON Task records;
+// presence is what counts.
 const migrationMarkerKey = "__bones_tasks_events_migrated"
-
-// migrationMarkerPayload is what gets written under migrationMarkerKey.
-// Stored as a Task-shaped envelope only because the bucket is typed for
-// JSON Task records and the alternative — a side bucket — would force
-// hub.Start to provision a second KV. The marker has SchemaVersion
-// stamped to the current value so future migrations can fan out off it.
-type migrationMarkerPayload struct {
-	Migrated      bool      `json:"migrated"`
-	MigratedAt    time.Time `json:"migrated_at"`
-	SchemaVersion int       `json:"schema_version"`
-}
 
 // Recover reconciles the KV projection with the event log on hub start.
 // For each unique task ID with at least one event on the stream, the

@@ -128,11 +128,13 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Manager, error) {
 		// Recover concurrently with live Tx writes is racy by design
 		// (the Tx writer and the recovery loop both want to bring KV
 		// to parity with the stream and they can clobber each other's
-		// CAS). Hub-start is the one place where Recovery is safe:
-		// the hub is single-process, no Tx is in flight yet, and the
-		// orphan-event reconciliation is the whole point of starting.
-		// Hub-start integration ships in a follow-up; for this PR,
-		// callers wanting recovery invoke tasks.Recover() explicitly.
+		// CAS). Hub start passes RecoverOnOpen=true via
+		// internal/hub.runTaskRecovery, which fires after NATS bind
+		// and BEFORE the registry-write that makes the hub
+		// discoverable to clients — Recover drains while the
+		// workspace lock + un-registered hub gate any competing CLI
+		// invocation, so no live Tx can race. Every other caller
+		// leaves RecoverOnOpen at false.
 		if cfg.RecoverOnOpen {
 			if _, err := Recover(ctx, mgr); err != nil {
 				return nil, fmt.Errorf("tasks.Open: recover: %w", err)
