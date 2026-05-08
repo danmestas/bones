@@ -106,8 +106,16 @@ func runDoctorPerWorkspace(entries []registry.Entry) []workspaceResult {
 
 // runDoctorOne runs the bypass report for one workspace, capturing output
 // and counting WARN findings. Hub liveness is checked via HTTP probe.
-// Issue count comes from runBypassReportTo's return value, not from
+// Issue count comes from runBypassReportToWith's return value, not from
 // scraping the rendered output.
+//
+// ADR 0051's auto-rewrite is FORCED off here regardless of the
+// caller's --no-fix flag. `bones doctor --all` walks every
+// registered workspace on the host; auto-rewriting all of them on a
+// single invocation is too high a blast radius — the operator may
+// not even be in any of those workspaces' shells. Stale entries
+// surface as WARN lines; the operator runs `bones doctor` (no
+// --all) inside the offending workspace to apply the migration.
 func runDoctorOne(e registry.Entry) workspaceResult {
 	r := workspaceResult{Entry: e}
 
@@ -119,7 +127,8 @@ func runDoctorOne(e registry.Entry) workspaceResult {
 		printFix(&buf, FixForHubDown())
 		r.Issues++
 	}
-	bypassWarns, _ := runBypassReportTo(&buf, e.Cwd)
+	// noFix=true: --all is report-only. See function doc above.
+	bypassWarns, _ := runBypassReportToWith(&buf, e.Cwd, true)
 	r.Issues += bypassWarns
 	r.Detail = buf.String()
 	return r

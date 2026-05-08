@@ -210,16 +210,21 @@ func mergeSettings(path string, fp *scaffoldFootprint) error {
 
 	// ADR 0051 migration: the v0.12 SessionStart `bones tasks prime
 	// --json` entry was a Claude-Code-protocol no-op; replace it
-	// with the envelope-emitting form. We prune by exact command
-	// string so user-added variants are left alone.
+	// with the envelope-emitting form. pruneCommandFromEvent
+	// substring-matches, but the needle here is specific enough
+	// (`bones tasks prime --json`) that it only catches the v0.12
+	// command — user-added prime variants in other shapes survive.
 	pruneCommandFromEvent(hooks, "SessionStart", "bones tasks prime --json")
 
 	// ADR 0051 migration: PreCompact has no `additionalContext`
 	// mechanism documented in the Claude Code hook protocol. Any
 	// `bones tasks prime` entry there never injected context — drop
-	// every such entry. We use a substring match so the prune
-	// covers --json, --hook=*, and bare `bones tasks prime` forms
-	// equally.
+	// every such entry. PreCompact is no longer a bones-owned slot
+	// per ADR 0051; the broader `bones tasks prime` substring needle
+	// is intentional here so --json, --hook=*, and bare forms are
+	// removed equally. User scripts that happen to invoke
+	// `bones tasks prime` from PreCompact are exceptional and would
+	// have been a v0.12-era workaround; they are not preserved.
 	pruneCommandFromEvent(hooks, "PreCompact", "bones tasks prime")
 
 	// Install the canonical envelope-emitting prime entry under
