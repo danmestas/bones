@@ -65,6 +65,19 @@ func TestSlotChanged(t *testing.T) {
 	}
 }
 
+// TestSlotReleased pins the auto-release secondary line emitted by
+// tasks_close.go's --auto-release path. The `was=<short>` tail
+// mirrors Claimed's `by=<agent>` shape so the convention's
+// "verb first, then key=value" pattern stays consistent.
+func TestSlotReleased(t *testing.T) {
+	var buf bytes.Buffer
+	SlotReleased(&buf, "alpha", "e075b52a")
+	want := "released alpha  was=e075b52a\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("SlotReleased: got %q want %q", got, want)
+	}
+}
+
 // TestUpdated covers the three shapes of the updated signature:
 // no-fields, single field, multi-field with sorted keys, and value
 // quoting for whitespace / quote-bearing strings.

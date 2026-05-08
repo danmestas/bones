@@ -169,14 +169,13 @@ func (c *TasksCloseCmd) autoReleaseAndClose(
 			return emitEnvelope(os.Stdout, "tasks.close", taskToSchema(updated))
 		}
 		if !c.Quiet {
-			// Auto-release path: emit one closed signature plus a
-			// summary line naming the released slot, so a vertical
-			// scan reads both effects of the verb. Per the brief,
-			// the legacy stderr advisory moves to stdout via these
-			// helpers.
+			// Auto-release path: emit one closed signature plus the
+			// released-slot signature so a vertical scan reads both
+			// effects of the verb. Both helpers come from cli/uxprint
+			// — the convention's source of truth for wording.
 			short := truncateID(c.ID, 8)
 			uxprint.Closed(os.Stdout, short)
-			_, _ = fmt.Fprintf(os.Stdout, "released slot %s (was bound to %s)\n", slot, short)
+			uxprint.SlotReleased(os.Stdout, slot, short)
 		}
 		return nil
 	}

@@ -75,6 +75,21 @@ func SlotChanged(w io.Writer, shortID, to string) {
 	_, _ = fmt.Fprintf(w, "slot     %s  to=%s\n", shortID, to)
 }
 
+// SlotReleased prints the one-line "released" signature emitted by
+// the `tasks close --auto-release` path when the swarm slot bound to
+// the closed task is released as part of the same operation.
+//
+//	released <slot>  was=<shortID>
+//
+// Shape mirrors Claimed's `by=<agent>` key=value tail so the
+// convention's "verb first, then key=value pairs" pattern stays
+// consistent across helpers. The slot name takes the verb-column
+// because the slot is the entity being released; the released-from
+// task short id is the attribution attached to it.
+func SlotReleased(w io.Writer, slot, shortID string) {
+	_, _ = fmt.Fprintf(w, "released %s  was=%s\n", slot, shortID)
+}
+
 // Updated prints the one-line "updated" signature, listing the
 // fields that changed as `key=value` pairs in stable (sorted) order.
 //
