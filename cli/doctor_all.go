@@ -149,10 +149,17 @@ func isHubAlive(hubURL string) bool {
 
 // renderDoctorAllJSON emits a machine-readable JSON summary of all
 // workspaces wrapped in the ADR 0053 envelope under verb "doctor".
-func renderDoctorAllJSON(w io.Writer) int {
+//
+// Substrate-level failures (e.g. registry.List() returning an error)
+// route to errw and yield exit code 1 with NO bytes on the JSON
+// stdout writer. ADR 0053 is strict: every byte on the JSON channel
+// is enveloped, no exceptions. Errors belong on stderr (the
+// non-structured channel) so consumers parsing stdout never have to
+// detect "envelope or error string?" at the wire level.
+func renderDoctorAllJSON(w, errw io.Writer) int {
 	entries, err := registry.List()
 	if err != nil {
-		_, _ = fmt.Fprintf(w, `{"error":%q}`, err.Error())
+		_, _ = fmt.Fprintf(errw, "doctor --all: registry list: %v\n", err)
 		return 1
 	}
 	results := runDoctorPerWorkspace(entries)

@@ -128,8 +128,8 @@ func TestDoctorAllJSON(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	var buf bytes.Buffer
-	exitCode := renderDoctorAllJSON(&buf)
+	var buf, errBuf bytes.Buffer
+	exitCode := renderDoctorAllJSON(&buf, &errBuf)
 	if exitCode != 0 {
 		t.Fatalf("expected exit 0, got %d\n%s", exitCode, buf.String())
 	}
@@ -260,8 +260,8 @@ func TestDoctorAll_DoesNotRewriteSettings(t *testing.T) {
 
 func TestDoctorAllJSONEmpty(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	var buf bytes.Buffer
-	exitCode := renderDoctorAllJSON(&buf)
+	var buf, errBuf bytes.Buffer
+	exitCode := renderDoctorAllJSON(&buf, &errBuf)
 	if exitCode != 0 {
 		t.Fatalf("empty registry should be exit 0")
 	}
@@ -275,5 +275,35 @@ func TestDoctorAllJSONEmpty(t *testing.T) {
 	}
 	if len(env.Data.Workspaces) != 0 {
 		t.Fatalf("expected empty workspaces, got %+v", env.Data.Workspaces)
+	}
+}
+
+// TestDoctorAllJSON_StderrSeamWired guards the ADR 0053 strict-stdout
+// contract: registry-error reports go to the stderr writer, never
+// to the JSON stdout writer. We can't reliably force registry.List
+// to fail in a unit test (the underlying glob swallows missing
+// directories), so this test verifies the seam exists by exercising
+// the happy path — empty registry, both writers passed in — and
+// asserting stdout carries the envelope while stderr stays empty.
+//
+// A reviewer reading the code path can confirm by inspection that
+// the registry-error branch routes to `errw` (cli/doctor_all.go).
+// If a future refactor accidentally swaps the writers, the
+// well-formed envelope on stdout is the visible signal that the
+// happy path still respects the contract; broken-envelope tests
+// elsewhere catch a rebroken happy path.
+func TestDoctorAllJSON_StderrSeamWired(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var stdout, stderr bytes.Buffer
+	exitCode := renderDoctorAllJSON(&stdout, &stderr)
+	if exitCode != 0 {
+		t.Errorf("happy path exit = %d, want 0", exitCode)
+	}
+	if stdout.Len() == 0 {
+		t.Errorf("stdout should carry envelope on happy path; got empty")
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr should be empty on happy path; got %q",
+			stderr.String())
 	}
 }

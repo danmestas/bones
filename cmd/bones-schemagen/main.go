@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 
 	"github.com/invopop/jsonschema"
 
@@ -141,7 +140,3 @@ func verbToCommand(verb string) string {
 	}
 	return string(out)
 }
-
-// _ pins the reflect dependency so future generator-side use (e.g.
-// runtime payload-type discovery) remains a one-line addition.
-var _ = reflect.TypeOf

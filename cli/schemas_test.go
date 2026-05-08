@@ -4,8 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -211,57 +216,90 @@ func zeroPayloadFor(t *testing.T, name string) any {
 }
 
 // TestEvery_JSONFlag_HasRegistryEntry guards the inverse of
-// TestEveryVerbHasSchemaFile: every `--json` flag in cli/ has a
-// corresponding registry entry in schemas.Verbs (modulo the
-// documented carve-out for `bones logs --json`, which passthrough-
-// emits substrate event-log NDJSON per ADR 0052).
+// TestEveryVerbHasSchemaFile: every `--json` flag declared via a
+// Kong tag in cli/ must map to a known emitter, and the registry
+// must cover every emitter.
 //
-// Implementation: walks the cli/ tree for `name:"json"` Kong tags
-// and resolves each to the verb name via the file path. Failure
-// surfaces both ways: a new emitter without a registry row, OR a
-// renamed verb whose registry entry got out of sync.
+// Implementation: AST-walks every cli/*.go (non-test) file, finds
+// every struct field whose tag contains `name:"json"`, and resolves
+// the file path to its expected dotted verb name via [fileToVerb].
+// Self-maintaining: a new --json emitter without a fileToVerb
+// mapping or registry entry trips this test.
+//
+// The single intentional exemption is `cli/logs.go` — `bones logs
+// --json` passthrough-emits substrate event-log NDJSON per ADR
+// 0052 and is the documented carve-out from the envelope.
 func TestEvery_JSONFlag_HasRegistryEntry(t *testing.T) {
-	// Map: source file → expected dotted verb name. logs is the
-	// documented carve-out and is intentionally absent.
-	wantVerbs := map[string]string{
-		"cli/doctor.go":          "doctor",
-		"cli/status.go":          "status",
-		"cli/swarm_dispatch.go":  "swarm.dispatch",
-		"cli/swarm_status.go":    "swarm.status",
-		"cli/swarm_tasks.go":     "swarm.tasks",
-		"cli/tasks_aggregate.go": "tasks.aggregate",
-		"cli/tasks_claim.go":     "tasks.claim",
-		"cli/tasks_close.go":     "tasks.close",
-		"cli/tasks_create.go":    "tasks.create",
-		"cli/tasks_link.go":      "tasks.link",
-		// tasks_list.go also drives tasks.bySlot via --by-slot
-		"cli/tasks_list.go":   "tasks.list",
-		"cli/tasks_prime.go":  "tasks.prime",
-		"cli/tasks_ready.go":  "tasks.ready",
-		"cli/tasks_show.go":   "tasks.show",
-		"cli/tasks_update.go": "tasks.update",
-		// also drives workspaces.get via WorkspacesShowCmd
-		"cli/workspaces.go": "workspaces.list",
+	cliDir := repoSubdir(t, "cli")
+	emitters := scanJSONFlagEmitters(t, cliDir)
+
+	if len(emitters) == 0 {
+		t.Fatalf("AST walk found zero --json emitters in %s — walker broken",
+			cliDir)
 	}
+
+	// Map every source file to the dotted verb its --json flag
+	// produces. Files not in the map either don't emit JSON
+	// (vacuously true) or are documented carve-outs (logs.go).
+	fileToVerb := map[string]string{
+		"doctor.go":          "doctor",
+		"status.go":          "status",
+		"swarm_dispatch.go":  "swarm.dispatch",
+		"swarm_status.go":    "swarm.status",
+		"swarm_tasks.go":     "swarm.tasks",
+		"tasks_aggregate.go": "tasks.aggregate",
+		"tasks_claim.go":     "tasks.claim",
+		"tasks_close.go":     "tasks.close",
+		"tasks_create.go":    "tasks.create",
+		"tasks_link.go":      "tasks.link",
+		// tasks_list.go also drives tasks.bySlot via --by-slot;
+		// the flag is shared so we map to the primary verb here.
+		"tasks_list.go":   "tasks.list",
+		"tasks_prime.go":  "tasks.prime",
+		"tasks_ready.go":  "tasks.ready",
+		"tasks_show.go":   "tasks.show",
+		"tasks_update.go": "tasks.update",
+		// workspaces.go also drives workspaces.get via WorkspacesShowCmd.
+		"workspaces.go": "workspaces.list",
+	}
+	exempt := map[string]bool{
+		"logs.go": true, // ADR 0053 / ADR 0052 carve-out
+	}
+
 	registered := make(map[string]struct{}, len(schemas.Verbs))
 	for _, v := range schemas.Verbs {
 		registered[v.Verb] = struct{}{}
 	}
-	for path, verb := range wantVerbs {
+
+	// Forward direction: every emitter site must resolve to a
+	// known verb that lives in the registry.
+	for _, file := range emitters {
+		if exempt[file] {
+			continue
+		}
+		verb, ok := fileToVerb[file]
+		if !ok {
+			t.Errorf("%s declares a --json flag but is not in the "+
+				"fileToVerb map; either map it to its dotted verb "+
+				"or add it to the exempt list with an ADR-cited reason",
+				file)
+			continue
+		}
 		if _, ok := registered[verb]; !ok {
 			t.Errorf("%s emits --json for verb %q but registry "+
 				"is missing it; add to cli/schemas/verbs.go",
-				path, verb)
+				file, verb)
 		}
 	}
-	// And every registered verb must have either a known emit site
-	// or be the pseudo-verb (tasks.bySlot, workspaces.get) backed
-	// by a flag combination on a parent command.
+
+	// Reverse direction: every registry entry must be covered by
+	// a known emitter (either a real --json flag or a documented
+	// pseudo-verb backed by a flag combination on a parent command).
 	knownVerbs := map[string]struct{}{
 		"tasks.bySlot":   {}, // tasks list --by-slot --json
 		"workspaces.get": {}, // workspaces show <name> --json
 	}
-	for _, verb := range wantVerbs {
+	for _, verb := range fileToVerb {
 		knownVerbs[verb] = struct{}{}
 	}
 	for v := range registered {
@@ -271,4 +309,86 @@ func TestEvery_JSONFlag_HasRegistryEntry(t *testing.T) {
 				"in TestEvery_JSONFlag_HasRegistryEntry", v)
 		}
 	}
+}
+
+// repoSubdir resolves <repo-root>/<sub> by walking up from the
+// test working directory to find go.mod. Mirrors [schemaPath] but
+// returns a directory instead of a file path.
+func repoSubdir(t *testing.T, sub string) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return filepath.Join(dir, sub)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("could not find repo root from %s", dir)
+		}
+		dir = parent
+	}
+}
+
+// scanJSONFlagEmitters parses every non-test Go file under dir and
+// returns the basenames whose top-level command struct declares a
+// field with `name:"json"` in its Kong tag. AST-walks rather than
+// greps so a future tag-syntax tweak (spaces, single quotes) keeps
+// matching accurately.
+func scanJSONFlagEmitters(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+	fset := token.NewFileSet()
+	var hits []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		file, parseErr := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		if parseErr != nil {
+			t.Fatalf("parse %s: %v", path, parseErr)
+		}
+		if hasJSONFlagField(file) {
+			hits = append(hits, name)
+		}
+	}
+	return hits
+}
+
+// hasJSONFlagField reports whether file contains any struct field
+// whose Kong tag has `name:"json"`. Walks every StructType node so
+// nested or sibling-command structs are caught.
+func hasJSONFlagField(file *ast.File) bool {
+	found := false
+	ast.Inspect(file, func(n ast.Node) bool {
+		st, ok := n.(*ast.StructType)
+		if !ok || st.Fields == nil {
+			return true
+		}
+		for _, f := range st.Fields.List {
+			if f.Tag == nil {
+				continue
+			}
+			// f.Tag.Value is the source-level back-tick literal
+			// including the surrounding quotes; trim them so
+			// reflect.StructTag parses it cleanly.
+			tag := reflect.StructTag(strings.Trim(f.Tag.Value, "`"))
+			if tag.Get("name") == "json" {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
 }
