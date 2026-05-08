@@ -21,7 +21,7 @@ import (
 func TestLogsCmd_ResolveSlotPath(t *testing.T) {
 	workspaceDir := t.TempDir()
 	slot := "auth"
-	got := resolveLogPath(workspaceDir, slot, false)
+	got := resolveLogPath(workspaceDir, slot, false, false)
 	want := filepath.Join(workspaceDir, ".bones", "swarm", "auth", "log")
 	if got != want {
 		t.Errorf("resolveLogPath slot: got %q, want %q", got, want)
@@ -32,11 +32,41 @@ func TestLogsCmd_ResolveSlotPath(t *testing.T) {
 // returns <workspace>/.bones/log.
 func TestLogsCmd_ResolveWorkspacePath(t *testing.T) {
 	workspaceDir := t.TempDir()
-	got := resolveLogPath(workspaceDir, "", true)
+	got := resolveLogPath(workspaceDir, "", true, false)
 	want := filepath.Join(workspaceDir, ".bones", "log")
 	if got != want {
 		t.Errorf("resolveLogPath workspace: got %q, want %q", got, want)
 	}
+}
+
+// TestLogsCmd_ResolveHubPath verifies #322's --hub mode points at
+// <workspace>/.bones/hub.log — the operator-facing RPC log.
+func TestLogsCmd_ResolveHubPath(t *testing.T) {
+	workspaceDir := t.TempDir()
+	got := resolveLogPath(workspaceDir, "", false, true)
+	want := filepath.Join(workspaceDir, ".bones", "hub.log")
+	if got != want {
+		t.Errorf("resolveLogPath hub: got %q, want %q", got, want)
+	}
+}
+
+// TestLogsCmd_HubMutuallyExclusive verifies --hub conflicts with
+// --slot and --workspace at the validation layer (no workspace dial).
+func TestLogsCmd_HubMutuallyExclusive(t *testing.T) {
+	t.Run("hub+slot rejected", func(t *testing.T) {
+		c := &LogsCmd{Slot: "auth", Hub: true}
+		err := c.Run(nil)
+		if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Errorf("expected mutually-exclusive error, got: %v", err)
+		}
+	})
+	t.Run("hub+workspace rejected", func(t *testing.T) {
+		c := &LogsCmd{Workspace: true, Hub: true}
+		err := c.Run(nil)
+		if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Errorf("expected mutually-exclusive error, got: %v", err)
+		}
+	})
 }
 
 // TestLogsCmd_BothFlagsError verifies mutual exclusion error message from Run
@@ -85,7 +115,7 @@ func seedLogFile(t *testing.T, logPath string, events []logwriter.Event) {
 func TestLogsCmd_OneShotRender(t *testing.T) {
 	workspaceDir := t.TempDir()
 	slot := "web"
-	logPath := resolveLogPath(workspaceDir, slot, false)
+	logPath := resolveLogPath(workspaceDir, slot, false, false)
 
 	now := time.Now().UTC()
 	events := []logwriter.Event{
@@ -123,7 +153,7 @@ func TestLogsCmd_OneShotRender(t *testing.T) {
 func TestLogsCmd_OneShotJSON(t *testing.T) {
 	workspaceDir := t.TempDir()
 	slot := "api"
-	logPath := resolveLogPath(workspaceDir, slot, false)
+	logPath := resolveLogPath(workspaceDir, slot, false, false)
 
 	now := time.Now().UTC()
 	events := []logwriter.Event{
@@ -157,7 +187,7 @@ func TestLogsCmd_OneShotJSON(t *testing.T) {
 func TestLogsCmd_Tail_SeesNewEvents(t *testing.T) {
 	workspaceDir := t.TempDir()
 	slot := "tail-slot"
-	logPath := resolveLogPath(workspaceDir, slot, false)
+	logPath := resolveLogPath(workspaceDir, slot, false, false)
 
 	// Pre-create the directory so the writer can append.
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
@@ -253,7 +283,7 @@ func TestLogsCmd_Tail_SeesNewEvents(t *testing.T) {
 func TestLogsCmd_FilterSince(t *testing.T) {
 	workspaceDir := t.TempDir()
 	slot := "since-slot"
-	logPath := resolveLogPath(workspaceDir, slot, false)
+	logPath := resolveLogPath(workspaceDir, slot, false, false)
 
 	base := time.Now().UTC().Add(-10 * time.Minute)
 	events := []logwriter.Event{
@@ -281,7 +311,7 @@ func TestLogsCmd_FilterSince(t *testing.T) {
 func TestLogsCmd_FilterLast(t *testing.T) {
 	workspaceDir := t.TempDir()
 	slot := "last-slot"
-	logPath := resolveLogPath(workspaceDir, slot, false)
+	logPath := resolveLogPath(workspaceDir, slot, false, false)
 
 	now := time.Now().UTC()
 	events := []logwriter.Event{
@@ -313,7 +343,7 @@ func TestLogsCmd_FilterLast(t *testing.T) {
 func TestLogsCmd_FullTime(t *testing.T) {
 	workspaceDir := t.TempDir()
 	slot := "fulltime-slot"
-	logPath := resolveLogPath(workspaceDir, slot, false)
+	logPath := resolveLogPath(workspaceDir, slot, false, false)
 
 	now := time.Now().UTC()
 	seedLogFile(t, logPath, []logwriter.Event{
@@ -365,7 +395,7 @@ func TestLogsCmd_ParseSince_RFC3339(t *testing.T) {
 // TestLogsCmd_NonExistentLog verifies that a missing log file is not an error.
 func TestLogsCmd_NonExistentLog(t *testing.T) {
 	workspaceDir := t.TempDir()
-	logPath := resolveLogPath(workspaceDir, "ghost", false)
+	logPath := resolveLogPath(workspaceDir, "ghost", false, false)
 
 	var buf bytes.Buffer
 	c := &LogsCmd{Slot: "ghost"}

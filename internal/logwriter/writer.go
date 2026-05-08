@@ -97,10 +97,40 @@ func (w *Writer) Append(e Event) error {
 // Atomicity: opens with O_APPEND|O_CREATE|O_WRONLY and writes a single
 // newline-terminated line. POSIX guarantees writes ≤PIPE_BUF are atomic.
 func AppendOnce(path string, e Event) error {
+	return AppendJSONOnce(path, e)
+}
+
+// AppendJSON writes one JSON-marshalable value as a newline-terminated
+// line to the Writer's file. Used by the hub-log path (#322), which
+// carries a typed LogEntry rather than a logwriter.Event — the
+// reserved-key conventions in Event.MarshalJSON would clash with the
+// hub.log shape, so the hub side defines its own struct and writes it
+// through this thinner door.
+//
+// Rotation policy is identical to Append: maxSize > 0 triggers
+// rotateIfNeeded before the write.
+func (w *Writer) AppendJSON(v interface{ MarshalJSON() ([]byte, error) }) error {
+	if w.maxSize > 0 {
+		if err := os.MkdirAll(filepath.Dir(w.path), 0o755); err != nil {
+			return fmt.Errorf("logwriter: mkdir %s: %w", filepath.Dir(w.path), err)
+		}
+		if err := w.rotateIfNeeded(); err != nil {
+			return err
+		}
+	}
+	return AppendJSONOnce(w.path, v)
+}
+
+// AppendJSONOnce is the no-rotation variant of AppendJSON. Mirrors
+// AppendOnce: same O_APPEND|O_CREATE|O_WRONLY contract, same parent-
+// dir auto-create. Pulled out so the marshal/write split lives in
+// one place — both Append (logwriter.Event) and AppendJSON
+// (json.Marshaler) route through here.
+func AppendJSONOnce(path string, v interface{ MarshalJSON() ([]byte, error) }) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("logwriter: mkdir %s: %w", filepath.Dir(path), err)
 	}
-	b, err := json.Marshal(e)
+	b, err := json.Marshal(v)
 	if err != nil {
 		return fmt.Errorf("logwriter: marshal event: %w", err)
 	}

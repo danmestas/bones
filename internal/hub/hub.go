@@ -219,7 +219,9 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 	// Open the lifecycle log first so `hub: starting` is the first
 	// thing we write — diagnosing a crashed-hub workspace begins with
 	// hub.log, and every event after this point lands here too (#247).
-	hl := openHubLog(p)
+	// Per #322 the level floor is sourced from --log-level (flag) or
+	// BONES_HUB_LOG_LEVEL (env var); flag wins.
+	hl := openHubLogWithLevel(p, chooseLogLevel(o.logLevel))
 	defer hl.Close()
 	hl.Infof("hub: starting (pid=%d, repo-port=%d, coord-port=%d)",
 		os.Getpid(), o.repoPort, o.coordPort)
@@ -296,6 +298,13 @@ func runForeground(ctx context.Context, p paths, o opts) error {
 		fmt.Fprintf(os.Stderr, "hub: registry write failed (non-fatal): %v\n", err)
 	}
 	hl.Infof("hub: ready")
+
+	// Per #322 the hub-side RPC log middleware. Subscribes to
+	// `tasks.events.>` and projects observed mutations into hub.log
+	// as event="rpc" entries. Best-effort; failures are warned and
+	// hub start proceeds.
+	stopProjector := startRPCProjector(ctx, h.NATSURL(), hl)
+	defer stopProjector()
 
 	stopWatcher := startLeaseWatcherHook(ctx, o, p, h.NATSURL(), hl)
 	defer stopWatcher()
@@ -469,11 +478,15 @@ func spawnDetachedChild(p paths, o opts) error {
 	}
 	defer func() { _ = hubLog.Close() }()
 
-	cmd := exec.Command(exe, "hub", "start",
+	args := []string{"hub", "start",
 		"--repo-port", strconv.Itoa(o.repoPort),
 		"--coord-port", strconv.Itoa(o.coordPort),
 		"--drain-timeout", effectiveDrainTimeout(o.drainTimeout).String(),
-	)
+	}
+	if o.logLevel != "" {
+		args = append(args, "--log-level", o.logLevel)
+	}
+	cmd := exec.Command(exe, args...)
 	cmd.Dir = p.root
 	cmd.Stdout = hubLog
 	cmd.Stderr = hubLog
