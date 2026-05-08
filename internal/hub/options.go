@@ -74,6 +74,11 @@ type opts struct {
 	detach            bool
 	drainTimeout      time.Duration
 	startLeaseWatcher LeaseWatcherStartFunc
+	// logLevel pins hub.log's minimum entry level (#322). The empty
+	// string means "consult BONES_HUB_LOG_LEVEL or fall back to INFO";
+	// a non-empty string is the explicit --log-level value. The flag
+	// wins over the env var per #322's policy.
+	logLevel string
 }
 
 // defaults returns the production defaults: ports left zero so
@@ -113,6 +118,18 @@ func WithDetach(d bool) Option { return func(o *opts) { o.detach = d } }
 // value falls back to defaultDrainTimeout.
 func WithDrainTimeout(d time.Duration) Option {
 	return func(o *opts) { o.drainTimeout = d }
+}
+
+// WithLogLevel pins hub.log's minimum entry level for this hub start.
+// Per #322 the four standard severities are accepted: debug, info,
+// warn, error (case-insensitive). Errors always log regardless of
+// the floor. The empty string defers to BONES_HUB_LOG_LEVEL, which
+// in turn defaults to INFO.
+//
+// Flag wins over env var: when both --log-level and
+// BONES_HUB_LOG_LEVEL are set, the flag value takes precedence.
+func WithLogLevel(level string) Option {
+	return func(o *opts) { o.logLevel = level }
 }
 
 // WithLeaseWatcher installs the lease-TTL watcher hook. The hub

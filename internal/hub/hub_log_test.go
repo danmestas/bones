@@ -13,11 +13,12 @@ import (
 	"time"
 )
 
-// TestHubLog_StartingLineFormat asserts the starting line shape. The
-// log file accumulates a timestamped INFO line naming pid, repo-port,
-// and coord-port — so an operator opening hub.log in a crashed
-// workspace can pin the exact ports the hub tried to bind. Uses
-// operator vocabulary (hub:, repo-port=, coord-port=) per #247.
+// TestHubLog_StartingLineFormat asserts the starting line shape per
+// #322. hub.log is NDJSON: each line is one LogEntry. The starting
+// line carries the lifecycle event with pid, repo-port, and coord-
+// port in the msg field — so an operator opening hub.log in a
+// crashed workspace can pin the exact ports the hub tried to bind.
+// Uses operator vocabulary (hub:, repo-port=, coord-port=) per #247.
 func TestHubLog_StartingLineFormat(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skip in -short: spawns subprocess servers, port-bind sensitive")
@@ -60,16 +61,31 @@ func TestHubLog_StartingLineFormat(t *testing.T) {
 	}
 	got := string(data)
 
-	// Pin the starting line: ISO-8601 timestamp + INFO + structured
-	// fields. Regex is permissive on the exact timestamp shape but
-	// strict on the operator-facing token order.
+	// Pin the starting line: NDJSON per #322. The line is one
+	// LogEntry with level=INFO, event=lifecycle, and msg containing
+	// the pid + ports tokens an operator looks for.
 	re := regexp.MustCompile(
-		`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z INFO\s+hub: starting ` +
-			`\(pid=\d+, repo-port=` + strconv.Itoa(fossilPort) +
-			`, coord-port=` + strconv.Itoa(natsPort) + `\)`,
-	)
+		`"ts":"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"`)
 	if !re.MatchString(got) {
-		t.Errorf("hub.log missing well-formed starting line.\nlog:\n%s", got)
+		t.Errorf("hub.log missing UTC RFC3339 timestamp.\nlog:\n%s", got)
+	}
+	if !strings.Contains(got, `"level":"INFO"`) {
+		t.Errorf("hub.log missing INFO entry.\nlog:\n%s", got)
+	}
+	if !strings.Contains(got, `"event":"lifecycle"`) {
+		t.Errorf("hub.log missing lifecycle event.\nlog:\n%s", got)
+	}
+	wantMsg := "hub: starting (pid="
+	if !strings.Contains(got, wantMsg) {
+		t.Errorf("hub.log missing starting msg %q.\nlog:\n%s", wantMsg, got)
+	}
+	wantRepo := "repo-port=" + strconv.Itoa(fossilPort)
+	if !strings.Contains(got, wantRepo) {
+		t.Errorf("hub.log missing %q.\nlog:\n%s", wantRepo, got)
+	}
+	wantCoord := "coord-port=" + strconv.Itoa(natsPort)
+	if !strings.Contains(got, wantCoord) {
+		t.Errorf("hub.log missing %q.\nlog:\n%s", wantCoord, got)
 	}
 	if !strings.Contains(got, "hub: ready") {
 		t.Errorf("hub.log missing ready line.\nlog:\n%s", got)
