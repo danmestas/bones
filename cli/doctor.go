@@ -16,6 +16,7 @@ import (
 	edgecli "github.com/danmestas/EdgeSync/cli"
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
+	"github.com/danmestas/bones/internal/clauderhooks"
 	"github.com/danmestas/bones/internal/githook"
 	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/registry"
@@ -44,6 +45,11 @@ type DoctorCmd struct {
 	Quiet  bool `name:"quiet" short:"q" help:"only show workspaces with issues (with --all)"`
 	ShowOK bool `name:"show-ok" help:"include OK workspaces in --all output (verbose mode)"`
 	JSON   bool `name:"json" help:"emit machine-readable JSON"`
+	// NoFix flips bones doctor into report-only mode for the ADR
+	// 0051 hook-protocol auto-rewrite. Default behavior auto-heals
+	// stale .claude/settings.json hook entries; --no-fix surfaces
+	// drift as WARN lines without rewriting the file.
+	NoFix bool `name:"no-fix" help:"report-only: do not auto-rewrite stale hook entries"`
 }
 
 // Run invokes the EdgeSync doctor first; on completion (regardless
@@ -139,13 +145,16 @@ func (c *DoctorCmd) runTelemetryReport() {
 // runBypassReport calls runBypassReportTo with stdout. Kept for the
 // existing call site in DoctorCmd.Run; the warn count is unused in
 // single-workspace mode (the per-line WARN prefix is the signal).
+//
+// Threads c.NoFix into the bypass report so ADR 0051's hook-protocol
+// auto-rewrite is opt-out via `bones doctor --no-fix`.
 func (c *DoctorCmd) runBypassReport() {
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Printf("  WARN  cwd: %v\n", err)
 		return
 	}
-	_, _ = runBypassReportTo(os.Stdout, cwd)
+	_, _ = runBypassReportToWith(os.Stdout, cwd, c.NoFix)
 }
 
 // runBypassReportTo is the writer-injection variant of runBypassReport.
@@ -156,7 +165,17 @@ func (c *DoctorCmd) runBypassReport() {
 //
 // The warn count is the source of truth — callers must not scrape it from
 // the output buffer (display format is not a stable interface).
+//
+// Default is auto-rewrite mode (noFix=false). Tests and report-only
+// callers should use runBypassReportToWith directly.
 func runBypassReportTo(w io.Writer, cwd string) (warns int, err error) {
+	return runBypassReportToWith(w, cwd, false)
+}
+
+// runBypassReportToWith is the noFix-aware variant. ADR 0051's
+// auto-rewrite respects the noFix flag; everything else stays
+// unchanged.
+func runBypassReportToWith(w io.Writer, cwd string, noFix bool) (warns int, err error) {
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "=== bones substrate gates (ADR 0034) ===")
 
@@ -205,7 +224,7 @@ func runBypassReportTo(w io.Writer, cwd string) (warns int, err error) {
 		_, _ = fmt.Fprintf(w, "  OK    scaffold version v%s matches binary\n", stamp)
 	}
 
-	warns += checkScaffoldGates(w, cwd)
+	warns += checkScaffoldGates(w, cwd, noFix)
 	warns += checkManifestIntegrity(w, cwd)
 	warns += checkOrphanHubs(w)
 	warns += checkStaleSlotDirs(w, cwd)
@@ -230,13 +249,43 @@ func runBypassReportTo(w io.Writer, cwd string) (warns int, err error) {
 	return warns, nil
 }
 
-// checkBonesScaffoldedHooks verifies the Claude-format hooks bones up
-// installs (`bones hub start`, `bones tasks prime --json` x2). When
-// .claude/ exists at all, all three entries must be present in
-// settings.json. When .claude/ is absent, the check is silent — bones
-// supports harnesses with no .claude/ directory via AGENTS.md.
-// Returns true if a WARN was emitted.
+// checkBonesScaffoldedHooks verifies the Claude-format hooks bones
+// up installs (`bones hub start`, `bones tasks prime --hook=session-
+// start`). When .claude/ exists at all, all bones-owned entries must
+// be present in settings.json. When .claude/ is absent, the check is
+// silent — bones supports harnesses with no .claude/ directory.
+//
+// Per ADR 0051 this check is also the auto-rewrite surface for the
+// hook protocol migration. Three concrete patches are applied (when
+// noFix is false; report-only when true):
+//
+//   - stale `bones tasks prime --json` under SessionStart →
+//     rewrite to `bones tasks prime --hook=session-start` with
+//     matcher "startup|compact" so the SessionStart compact
+//     matcher fires on post-compact sessions.
+//   - any `bones tasks prime` entry under PreCompact → remove
+//     entirely. PreCompact has no `additionalContext` mechanism in
+//     the Claude Code hook protocol; the v0.12 placement was a
+//     silent no-op.
+//   - missing SessionStart `bones tasks prime --hook=session-start`
+//     → install it. Covers the case where doctor runs against a
+//     post-binary-upgrade workspace without re-running `bones up`.
+//
+// Each patch prints one FIX line per applied change so the operator
+// sees what doctor migrated. With --no-fix, the same conditions
+// surface as WARN lines without rewriting the file.
+//
+// Returns true if a WARN was emitted (NOT true on FIX-class output:
+// a successful auto-rewrite is healing, not a finding).
 func checkBonesScaffoldedHooks(w io.Writer, cwd string) bool {
+	return checkBonesScaffoldedHooksWith(w, cwd, false)
+}
+
+// checkBonesScaffoldedHooksWith is the noFix-aware sibling. Doctor's
+// Run path threads --no-fix through; the legacy entry point above
+// preserves the false default for callers that don't care about the
+// new flag.
+func checkBonesScaffoldedHooksWith(w io.Writer, cwd string, noFix bool) bool {
 	claudeDir := filepath.Join(cwd, ".claude")
 	if info, err := os.Stat(claudeDir); err != nil || !info.IsDir() {
 		return false
@@ -254,28 +303,178 @@ func checkBonesScaffoldedHooks(w io.Writer, cwd string) bool {
 		return true
 	}
 	hooks, _ := root["hooks"].(map[string]any)
-	want := []struct {
-		event string
-		cmd   string
-	}{
-		{"SessionStart", "bones hub start"},
-		{"SessionStart", "bones tasks prime --json"},
-		{"PreCompact", "bones tasks prime --json"},
+	if hooks == nil {
+		hooks = map[string]any{}
 	}
-	var missing []string
-	for _, h := range want {
-		if !hookCommandPresent(hooks, h.event, h.cmd) {
-			missing = append(missing, h.event+":"+h.cmd)
+
+	rewrites, warns := migrateHookProtocolEntries(w, hooks, noFix)
+	if len(rewrites) > 0 && !noFix {
+		root["hooks"] = hooks
+		out, err := json.MarshalIndent(root, "", "  ")
+		if err != nil {
+			_, _ = fmt.Fprintf(w, "  WARN  serialize settings.json: %v\n", err)
+			return true
+		}
+		if err := os.WriteFile(settingsPath, append(out, '\n'), 0o644); err != nil {
+			_, _ = fmt.Fprintf(w, "  WARN  rewrite settings.json: %v\n", err)
+			return true
 		}
 	}
+
+	// Per-entry status — list every bones-owned hook surface so
+	// operators see the picture, not just an aggregate.
+	reportHookEntries(w, hooks)
+
+	missing := missingBonesOwnedHooks(hooks)
 	if len(missing) > 0 {
 		_, _ = fmt.Fprintf(w,
 			"  WARN  .claude/settings.json missing bones hooks: %s — run `bones up` to refresh\n",
 			strings.Join(missing, ", "))
 		return true
 	}
-	_, _ = fmt.Fprintln(w, "  OK    .claude/settings.json has bones-owned hook entries")
+	if warns > 0 {
+		return true
+	}
 	return false
+}
+
+// migrateHookProtocolEntries applies the ADR 0051 migration in
+// place on hooks. Returns the list of human-readable rewrite
+// summaries (for the FIX/WARN log lines) and the WARN count when
+// noFix mode just reports.
+//
+// Operations performed:
+//
+//   - SessionStart: `bones tasks prime --json` → replace command
+//     in-place with `bones tasks prime --hook=session-start`. Move
+//     the entry into a group whose matcher is "startup|compact" so
+//     post-compact sessions also fire the prime.
+//   - PreCompact: any `bones tasks prime *` entry is removed. The
+//     event group is cleaned up if it ends up empty.
+//   - SessionStart: install the canonical prime entry if absent.
+//
+// The function never rewrites a file directly — it mutates the
+// in-memory hooks map; the caller is responsible for marshaling and
+// writing settings.json.
+func migrateHookProtocolEntries(w io.Writer, hooks map[string]any,
+	noFix bool) (rewrites []string, warns int) {
+	primeCmd := clauderhooks.PrimeCommandFor(clauderhooks.EventSessionStart)
+
+	// Rewrite stale SessionStart `bones tasks prime --json` to the
+	// envelope-emitting form, parking the entry under the
+	// "startup|compact" matcher group.
+	if hookCommandPresent(hooks, "SessionStart", "bones tasks prime --json") {
+		summary := "rewrote SessionStart bones tasks prime --json " +
+			"→ --hook=session-start (matcher \"startup|compact\")"
+		if noFix {
+			_, _ = fmt.Fprintf(w,
+				"  WARN  .claude/settings.json: %s — run without --no-fix to apply\n",
+				summary)
+			warns++
+		} else {
+			pruneCommandFromEvent(hooks, "SessionStart", "bones tasks prime --json")
+			addHookWithMatcher(hooks, "SessionStart",
+				clauderhooks.SessionStartMatcher, primeCmd)
+			_, _ = fmt.Fprintf(w,
+				"  FIX   .claude/settings.json: %s\n", summary)
+			rewrites = append(rewrites, summary)
+		}
+	}
+
+	// Remove any `bones tasks prime` entry from PreCompact. Per ADR
+	// 0051 PreCompact has no `additionalContext` mechanism in the
+	// Claude Code hook protocol, so the v0.12 placement was a silent
+	// no-op. Substring match covers --json, --hook=*, and bare forms.
+	if hasPrimeUnderPreCompact(hooks) {
+		summary := "removed PreCompact `bones tasks prime` entry " +
+			"(slot has no additionalContext support; ADR 0051)"
+		if noFix {
+			_, _ = fmt.Fprintf(w,
+				"  WARN  .claude/settings.json: %s — run without --no-fix to apply\n",
+				summary)
+			warns++
+		} else {
+			pruneCommandFromEvent(hooks, "PreCompact", "bones tasks prime")
+			_, _ = fmt.Fprintf(w,
+				"  FIX   .claude/settings.json: %s\n", summary)
+			rewrites = append(rewrites, summary)
+		}
+	}
+
+	// Install the canonical prime entry if it's still missing after
+	// rewrite/migration. Covers a workspace whose v0.12 entries were
+	// hand-pruned but the new form was never installed.
+	if !hookCommandPresent(hooks, "SessionStart", primeCmd) {
+		summary := fmt.Sprintf(
+			"installed SessionStart %s (matcher %q)",
+			primeCmd, clauderhooks.SessionStartMatcher)
+		if noFix {
+			_, _ = fmt.Fprintf(w,
+				"  WARN  .claude/settings.json: %s — run without --no-fix to apply\n",
+				summary)
+			warns++
+		} else {
+			addHookWithMatcher(hooks, "SessionStart",
+				clauderhooks.SessionStartMatcher, primeCmd)
+			_, _ = fmt.Fprintf(w,
+				"  FIX   .claude/settings.json: %s\n", summary)
+			rewrites = append(rewrites, summary)
+		}
+	}
+	return rewrites, warns
+}
+
+// hasPrimeUnderPreCompact reports whether any hook entry under the
+// PreCompact event has a command containing `bones tasks prime`.
+// Used to drive the ADR 0051 PreCompact-prune migration.
+func hasPrimeUnderPreCompact(hooks map[string]any) bool {
+	groups, _ := hooks["PreCompact"].([]any)
+	for _, g := range groups {
+		gm, ok := g.(map[string]any)
+		if !ok {
+			continue
+		}
+		entries, _ := gm["hooks"].([]any)
+		for _, e := range entries {
+			em, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			cmd, _ := em["command"].(string)
+			if strings.Contains(cmd, "bones tasks prime") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// missingBonesOwnedHooks returns the (event, cmd) pairs from
+// bonesOwnedHookCommands that are not present in hooks. Used by
+// checkBonesScaffoldedHooksWith to decide if a WARN should fire.
+func missingBonesOwnedHooks(hooks map[string]any) []string {
+	var missing []string
+	for _, h := range bonesOwnedHookCommands {
+		if !hookCommandPresent(hooks, h.Event, h.Command) {
+			missing = append(missing, h.Event+":"+h.Command)
+		}
+	}
+	return missing
+}
+
+// reportHookEntries prints one line per bones-relevant hook entry so
+// the operator sees per-entry status, not just an aggregate. Mirrors
+// the per-finding line style used elsewhere in doctor.
+func reportHookEntries(w io.Writer, hooks map[string]any) {
+	_, _ = fmt.Fprintln(w, "  hooks:")
+	for _, h := range bonesOwnedHookCommands {
+		status := "OK"
+		if !hookCommandPresent(hooks, h.Event, h.Command) {
+			status = "MISS"
+		}
+		_, _ = fmt.Fprintf(w, "    %-32s %-44s %s\n",
+			h.Event+":", h.Command, status)
+	}
 }
 
 // checkScaffoldGates runs the hooks-presence and SessionStart-sentinel
@@ -285,9 +484,13 @@ func checkBonesScaffoldedHooks(w io.Writer, cwd string) bool {
 //
 // Per issue #252, AGENTS.md is no longer scaffolded by `bones up` and
 // is therefore not checked here.
-func checkScaffoldGates(w io.Writer, cwd string) int {
+//
+// Per ADR 0051 the hook-presence check is also where doctor's
+// auto-rewrite of the Claude Code hook protocol entries lives;
+// noFix=true switches it to report-only.
+func checkScaffoldGates(w io.Writer, cwd string, noFix bool) int {
 	var warns int
-	if checkBonesScaffoldedHooks(w, cwd) {
+	if checkBonesScaffoldedHooksWith(w, cwd, noFix) {
 		warns++
 	}
 	if checkSessionStartSentinel(w, cwd) {

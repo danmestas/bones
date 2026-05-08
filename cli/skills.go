@@ -122,10 +122,18 @@ type skillManifest struct {
 // entries — not the whole settings.json, because the user is free to
 // add their own hooks alongside bones's, and the manifest must not
 // false-positive on those.
+//
+// Per ADR 0051 the canonical prime command is the envelope-emitting
+// `--hook=session-start` form, placed under SessionStart only with
+// matcher "startup|compact" (a single entry covers fresh sessions
+// AND post-compact sessions). PreCompact is no longer a bones-owned
+// slot: that event has no `additionalContext` mechanism in the
+// Claude Code hook protocol so the v0.12 PreCompact `bones tasks
+// prime --json` entry was a silent no-op. doctor's auto-rewrite
+// migrates legacy installs forward.
 var bonesOwnedHookCommands = []struct{ Event, Command string }{
-	{"SessionStart", "bones tasks prime --json"},
+	{"SessionStart", "bones tasks prime --hook=session-start"},
 	{"SessionStart", "bones hub start"},
-	{"PreCompact", "bones tasks prime --json"},
 }
 
 // writeBonesSkills materializes the embedded skill bundle into

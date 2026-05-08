@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -225,6 +226,297 @@ func TestRunSwarmReport_DoesNotAutoStartHub(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, ".bones", "hub.pid")); err == nil {
 		t.Errorf("runSwarmReport created .bones/hub.pid; #228 says it must not write hub state")
+	}
+}
+
+// TestCheckBonesScaffoldedHooks_RewritesV012Prime pins ADR 0051's
+// auto-rewrite for the SessionStart slot: a stale `bones tasks
+// prime --json` entry must be rewritten to the envelope-emitting
+// `bones tasks prime --hook=session-start` form, parked under a
+// "startup|compact" matcher group, when doctor runs in default
+// (auto-fix) mode. The rewrite must surface a single FIX line.
+func TestCheckBonesScaffoldedHooks_RewritesV012Prime(t *testing.T) {
+	dir := t.TempDir()
+	claude := filepath.Join(dir, ".claude")
+	if err := os.MkdirAll(claude, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v012 := `{
+  "hooks": {
+    "SessionStart": [
+      {"matcher": "", "hooks": [
+        {"command": "bones tasks prime --json", "type": "command", "timeout": 10},
+        {"command": "bones hub start", "type": "command", "timeout": 10}
+      ]}
+    ]
+  }
+}`
+	settingsPath := filepath.Join(claude, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(v012), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	checkBonesScaffoldedHooks(&buf, dir)
+	out := buf.String()
+
+	if !strings.Contains(out, "FIX") {
+		t.Errorf("expected FIX line for ADR 0051 rewrite, got:\n%s", out)
+	}
+	if !strings.Contains(out, "--hook=session-start") {
+		t.Errorf("expected FIX message naming new envelope flag, got:\n%s", out)
+	}
+
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(got)
+	if strings.Contains(body, "bones tasks prime --json") {
+		t.Errorf("v0.12 `--json` form not pruned by auto-rewrite:\n%s", body)
+	}
+	if !strings.Contains(body, "bones tasks prime --hook=session-start") {
+		t.Errorf("envelope-emitting form not installed by auto-rewrite:\n%s", body)
+	}
+	if !strings.Contains(body, `"matcher": "startup|compact"`) {
+		t.Errorf("startup|compact matcher not installed:\n%s", body)
+	}
+}
+
+// TestCheckBonesScaffoldedHooks_RemovesPreCompactPrime pins ADR 0051's
+// PreCompact-prune: any `bones tasks prime` entry under PreCompact
+// must be removed entirely (PreCompact has no `additionalContext`
+// mechanism in the Claude Code hook protocol; the v0.12 placement
+// was a silent no-op). Removal must surface a single FIX line.
+func TestCheckBonesScaffoldedHooks_RemovesPreCompactPrime(t *testing.T) {
+	dir := t.TempDir()
+	claude := filepath.Join(dir, ".claude")
+	if err := os.MkdirAll(claude, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v012 := `{
+  "hooks": {
+    "SessionStart": [
+      {"matcher": "startup|compact", "hooks": [
+        {"command": "bones tasks prime --hook=session-start", "type": "command", "timeout": 10}
+      ]},
+      {"matcher": "", "hooks": [
+        {"command": "bones hub start", "type": "command", "timeout": 10}
+      ]}
+    ],
+    "PreCompact": [
+      {"matcher": "", "hooks": [
+        {"command": "bones tasks prime --json", "type": "command", "timeout": 10}
+      ]}
+    ]
+  }
+}`
+	settingsPath := filepath.Join(claude, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(v012), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	checkBonesScaffoldedHooks(&buf, dir)
+	out := buf.String()
+
+	if !strings.Contains(out, "removed PreCompact") {
+		t.Errorf("expected FIX line about PreCompact removal, got:\n%s", out)
+	}
+
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(got)
+	var parsed map[string]any
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("parse rewritten settings: %v", err)
+	}
+	hooks, _ := parsed["hooks"].(map[string]any)
+	pcGroups, _ := hooks["PreCompact"].([]any)
+	for _, g := range pcGroups {
+		gm := g.(map[string]any)
+		entries, _ := gm["hooks"].([]any)
+		for _, e := range entries {
+			em := e.(map[string]any)
+			if cmd, _ := em["command"].(string); strings.Contains(cmd, "bones tasks prime") {
+				t.Errorf("PreCompact still has `%s` after auto-rewrite:\n%s",
+					cmd, body)
+			}
+		}
+	}
+}
+
+// TestCheckBonesScaffoldedHooks_PreservesNonBonesEntries pins that
+// the auto-rewrite does NOT touch user-owned hook entries — only the
+// bones-owned migrations land. A user's PreCompact hook for an
+// unrelated tool must survive intact.
+func TestCheckBonesScaffoldedHooks_PreservesNonBonesEntries(t *testing.T) {
+	dir := t.TempDir()
+	claude := filepath.Join(dir, ".claude")
+	if err := os.MkdirAll(claude, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mixed := `{
+  "hooks": {
+    "SessionStart": [
+      {"matcher": "", "hooks": [
+        {"command": "bones tasks prime --json", "type": "command", "timeout": 10},
+        {"command": "bones hub start", "type": "command", "timeout": 10},
+        {"command": "user-thing", "type": "command", "timeout": 10}
+      ]}
+    ],
+    "PreCompact": [
+      {"matcher": "", "hooks": [
+        {"command": "bones tasks prime --json", "type": "command", "timeout": 10},
+        {"command": "user-precompact-tool", "type": "command", "timeout": 10}
+      ]}
+    ]
+  }
+}`
+	settingsPath := filepath.Join(claude, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(mixed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	checkBonesScaffoldedHooks(&buf, dir)
+
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(got)
+	if !strings.Contains(body, "user-thing") {
+		t.Errorf("user-owned SessionStart hook stripped by auto-rewrite:\n%s", body)
+	}
+	if !strings.Contains(body, "user-precompact-tool") {
+		t.Errorf("user-owned PreCompact hook stripped by auto-rewrite "+
+			"(only `bones tasks prime` entries should be removed):\n%s", body)
+	}
+}
+
+// TestCheckBonesScaffoldedHooks_IdempotentOnFreshScaffold pins that
+// running doctor against an already-correct settings.json produces
+// no rewrites. This is the hot path — every doctor run on a healthy
+// workspace must be a no-op on settings.json.
+func TestCheckBonesScaffoldedHooks_IdempotentOnFreshScaffold(t *testing.T) {
+	dir := t.TempDir()
+	claude := filepath.Join(dir, ".claude")
+	if err := os.MkdirAll(claude, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	canonical := `{
+  "hooks": {
+    "SessionStart": [
+      {"matcher": "startup|compact", "hooks": [
+        {"command": "bones tasks prime --hook=session-start", "type": "command", "timeout": 10}
+      ]},
+      {"matcher": "", "hooks": [
+        {"command": "bones hub start", "type": "command", "timeout": 10}
+      ]}
+    ]
+  }
+}`
+	settingsPath := filepath.Join(claude, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(canonical), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if checkBonesScaffoldedHooks(&buf, dir) {
+		t.Errorf("idempotent run reported a WARN; output:\n%s", buf.String())
+	}
+	out := buf.String()
+	if strings.Contains(out, "FIX") {
+		t.Errorf("idempotent run emitted FIX line; output:\n%s", out)
+	}
+
+	after, err := os.Stat(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Errorf("idempotent doctor run rewrote settings.json " +
+			"(mtime changed); auto-rewrite must no-op on canonical state")
+	}
+}
+
+// TestCheckBonesScaffoldedHooks_NoFixReportsOnly pins that
+// `bones doctor --no-fix` surfaces stale entries as WARN lines but
+// does NOT modify settings.json.
+func TestCheckBonesScaffoldedHooks_NoFixReportsOnly(t *testing.T) {
+	dir := t.TempDir()
+	claude := filepath.Join(dir, ".claude")
+	if err := os.MkdirAll(claude, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v012 := `{
+  "hooks": {
+    "SessionStart": [
+      {"matcher": "", "hooks": [
+        {"command": "bones tasks prime --json", "type": "command", "timeout": 10},
+        {"command": "bones hub start", "type": "command", "timeout": 10}
+      ]}
+    ],
+    "PreCompact": [
+      {"matcher": "", "hooks": [
+        {"command": "bones tasks prime --json", "type": "command", "timeout": 10}
+      ]}
+    ]
+  }
+}`
+	settingsPath := filepath.Join(claude, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(v012), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if !checkBonesScaffoldedHooksWith(&buf, dir, true /* noFix */) {
+		t.Errorf("--no-fix run on stale settings should emit WARN; output:\n%s",
+			buf.String())
+	}
+	out := buf.String()
+	if strings.Contains(out, "FIX") {
+		t.Errorf("--no-fix run emitted FIX line; output:\n%s", out)
+	}
+	if !strings.Contains(out, "WARN") {
+		t.Errorf("--no-fix run on stale settings did not WARN; output:\n%s", out)
+	}
+
+	after, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Errorf("--no-fix run modified settings.json; auto-rewrite " +
+			"must respect --no-fix")
+	}
+}
+
+// TestDoctorCmd_AcceptsNoFixFlag verifies Kong wires up the new
+// flag. Existence of the flag is the contract — the actual
+// auto-rewrite behavior is tested via the unit tests above.
+func TestDoctorCmd_AcceptsNoFixFlag(t *testing.T) {
+	var c DoctorCmd
+	parser, err := kong.New(&c)
+	if err != nil {
+		t.Fatalf("kong.New: %v", err)
+	}
+	if _, err := parser.Parse([]string{"--no-fix"}); err != nil {
+		t.Fatalf("parse --no-fix: %v", err)
+	}
+	if !c.NoFix {
+		t.Fatalf("NoFix flag not set")
 	}
 }
 
