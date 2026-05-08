@@ -583,15 +583,25 @@ func TestStatusAllJSON(t *testing.T) {
 	if err := renderStatusAllJSON(&buf); err != nil {
 		t.Fatalf("renderStatusAllJSON: %v", err)
 	}
-	var got struct {
-		Workspaces []struct {
-			Name string `json:"name"`
-			Cwd  string `json:"cwd"`
-		} `json:"workspaces"`
+	var env struct {
+		Schema struct {
+			Verb    string `json:"verb"`
+			Version string `json:"version"`
+		} `json:"schema"`
+		Data struct {
+			Workspaces []struct {
+				Name string `json:"name"`
+				Cwd  string `json:"cwd"`
+			} `json:"workspaces"`
+		} `json:"data"`
 	}
-	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+	if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
+	if env.Schema.Verb != "status" || env.Schema.Version != "v1" {
+		t.Errorf("schema = %+v, want {status v1}", env.Schema)
+	}
+	got := env.Data
 	if len(got.Workspaces) != 1 {
 		t.Fatalf("workspaces len = %d, want 1", len(got.Workspaces))
 	}

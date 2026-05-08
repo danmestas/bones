@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "items": {
+    "properties": {
+      "slot": {
+        "type": "string"
+      },
+      "task_id": {
+        "type": "string"
+      },
+      "agent_id": {
+        "type": "string"
+      },
+      "host": {
+        "type": "string"
+      },
+      "leaf_pid": {
+        "type": "integer"
+      },
+      "started_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "last_renewed": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "state": {
+        "type": "string"
+      },
+      "stale_seconds": {
+        "type": "integer"
+      }
+    },
+    "type": "object",
+    "required": [
+      "slot",
+      "task_id",
+      "agent_id",
+      "host",
+      "leaf_pid",
+      "started_at",
+      "last_renewed",
+      "state",
+      "stale_seconds"
+    ]
+  },
+  "type": "array",
+  "title": "SwarmStatusPayload",
+  "description": "Payload (`data` field) for `bones swarm status --json` envelope, version v1."
+}

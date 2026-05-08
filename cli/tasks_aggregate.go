@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -11,6 +10,7 @@ import (
 
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
+	"github.com/danmestas/bones/cli/schemas"
 	"github.com/danmestas/bones/internal/tasks"
 )
 
@@ -20,21 +20,15 @@ type TasksAggregateCmd struct {
 	JSON  bool          `name:"json" help:"emit JSON"`
 }
 
-// aggregateSlot holds the per-slot summary computed by the aggregate verb.
+// aggregateSlot holds the per-slot summary computed by the aggregate
+// verb. JSON tags mirror the schemas.TasksAggregateSlot wire shape;
+// the fields are name-equal so the struct round-trips cleanly into
+// the envelope payload below.
 type aggregateSlot struct {
 	SlotID string   `json:"slot_id"`
 	Tasks  int      `json:"tasks"`
 	Files  []string `json:"files"`
 	Status string   `json:"status"`
-}
-
-// aggregateResult is the JSON output shape for --json.
-type aggregateResult struct {
-	Since       string          `json:"since"`
-	TotalTasks  int             `json:"total_tasks"`
-	TotalSlots  int             `json:"total_slots"`
-	ActiveSlots int             `json:"active_slots"`
-	Slots       []aggregateSlot `json:"slots"`
 }
 
 func (c *TasksAggregateCmd) Run(g *repocli.Globals) error {
@@ -110,20 +104,23 @@ func emitAggregateOutput(
 	asJSON bool,
 ) error {
 	if asJSON {
-		res := aggregateResult{
+		schemaSlots := make([]schemas.TasksAggregateSlot, len(slots))
+		for i, s := range slots {
+			schemaSlots[i] = schemas.TasksAggregateSlot{
+				SlotID: s.SlotID,
+				Tasks:  s.Tasks,
+				Files:  s.Files,
+				Status: s.Status,
+			}
+		}
+		payload := schemas.TasksAggregatePayload{
 			Since:       since.String(),
 			TotalTasks:  totalTasks,
 			TotalSlots:  len(slots),
 			ActiveSlots: activeSlots,
-			Slots:       slots,
+			Slots:       schemaSlots,
 		}
-		data, err := json.Marshal(res)
-		if err != nil {
-			return fmt.Errorf("aggregate: marshal: %w", err)
-		}
-		data = append(data, '\n')
-		_, err = os.Stdout.Write(data)
-		return err
+		return emitEnvelope(os.Stdout, "tasks.aggregate", payload)
 	}
 	return printAggregateSummary(since, slots, totalTasks, activeSlots)
 }

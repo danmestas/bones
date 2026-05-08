@@ -11,11 +11,11 @@ SHELL := /usr/bin/env bash
 # bare tree (Phase 1 currently has no .go files); callers must tolerate that.
 GO_PACKAGES := $(shell go list ./... 2>/dev/null)
 
-.PHONY: check fmt fmt-check vet lint test race todo-check install-tools help bones bin
+.PHONY: check fmt fmt-check vet lint test race todo-check install-tools help bones bin schemas schemas-check
 
 help:
 	@echo "Targets:"
-	@echo "  check          — full discipline suite (fmt-check, vet, lint, race, todo-check)"
+	@echo "  check          — full discipline suite (fmt-check, vet, lint, race, todo-check, schemas-check)"
 	@echo "  fmt            — gofmt -w . (writes changes)"
 	@echo "  fmt-check      — gofmt -l . (read-only; exits 1 on drift)"
 	@echo "  vet            — go vet ./..."
@@ -23,9 +23,11 @@ help:
 	@echo "  test           — go test ./..."
 	@echo "  race           — go test -race ./..."
 	@echo "  todo-check     — forbid TODO in non-test .go files"
+	@echo "  schemas        — regenerate schemas/*.json from cli/schemas/*.go (writes)"
+	@echo "  schemas-check  — verify schemas/*.json matches cli/schemas/*.go (read-only; exits 1 on drift)"
 	@echo "  install-tools  — install staticcheck + errcheck for local dev"
 
-check: fmt-check vet lint race todo-check
+check: fmt-check vet lint race todo-check schemas-check
 	@echo "check: OK"
 
 fmt:
@@ -95,6 +97,31 @@ bin:
 
 bones: bin
 	go build -o bin/bones ./cmd/bones
+
+# Regenerate the JSON Schema files under schemas/ from the typed
+# payload structs in cli/schemas/. ADR 0053 makes the Go types the
+# source of truth; this target writes the derived artifacts.
+schemas:
+	go run ./cmd/bones-schemagen -out ./schemas
+
+# CI gate for schema drift. Runs the generator into a tmp directory
+# and diffs against the checked-in schemas/. Same posture as
+# fmt-check: read-only, non-zero exit on any difference. Fails fast
+# with a clear "run make schemas" message so the operator knows the
+# fix path. ADR 0053 forbids hand-edits — every change must round-
+# trip through the generator.
+schemas-check:
+	@tmp=$$(mktemp -d); \
+	go run ./cmd/bones-schemagen -out $$tmp >/dev/null 2>&1 || { \
+		rm -rf $$tmp; echo "schemas-check: generator failed" >&2; exit 1; }; \
+	if ! diff -ru schemas $$tmp >/dev/null 2>&1; then \
+		echo "schemas-check: generated output drifts from checked-in schemas/" >&2; \
+		echo "  run \`make schemas\` to regenerate" >&2; \
+		diff -ru schemas $$tmp >&2 || true; \
+		rm -rf $$tmp; \
+		exit 1; \
+	fi; \
+	rm -rf $$tmp
 
 # CI mirror — runs make check + otel lanes from .github/workflows/ci.yml.
 # Cross-repo leaf-binary integration is CI-only.

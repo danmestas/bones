@@ -102,7 +102,7 @@ func (c *DoctorCmd) Run(g *repocli.Globals) (err error) {
 func (c *DoctorCmd) runAll(_ *repocli.Globals) error {
 	var exitCode int
 	if c.JSON {
-		exitCode = renderDoctorAllJSON(os.Stdout)
+		exitCode = renderDoctorAllJSON(os.Stdout, os.Stderr)
 	} else {
 		exitCode = renderDoctorAll(os.Stdout, doctorAllOpts{
 			Quiet:  c.Quiet,

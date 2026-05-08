@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "open_tasks": {
+      "items": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "files": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "claimed_by": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "type": "array"
+    },
+    "ready_tasks": {
+      "items": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "files": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "claimed_by": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "type": "array"
+    },
+    "claimed_tasks": {
+      "items": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "files": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "claimed_by": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "type": "array"
+    },
+    "threads": {
+      "items": {
+        "properties": {
+          "thread_short": {
+            "type": "string"
+          },
+          "last_activity": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "message_count": {
+            "type": "integer"
+          },
+          "last_body": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "thread_short",
+          "last_activity",
+          "message_count",
+          "last_body"
+        ]
+      },
+      "type": "array"
+    },
+    "peers": {
+      "items": {
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_seen": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "project",
+          "started_at",
+          "last_seen"
+        ]
+      },
+      "type": "array"
+    }
+  },
+  "type": "object",
+  "required": [
+    "open_tasks",
+    "ready_tasks",
+    "claimed_tasks",
+    "threads",
+    "peers"
+  ],
+  "title": "TasksPrimePayload",
+  "description": "Payload (`data` field) for `bones tasks prime --json` envelope, version v1."
+}

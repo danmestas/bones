@@ -98,7 +98,7 @@ func (c *TasksPrimeCmd) Run(g *repocli.Globals) error {
 			// gives the agent zero signal that bones is active,
 			// while an empty-but-present envelope is the "bones is
 			// here, nothing claimed yet" signal (#170).
-			return emitJSON(os.Stdout, primeToJSON(result))
+			return emitEnvelope(os.Stdout, "tasks.prime", primeToSchema(result))
 		default:
 			fmt.Print(formatPrime(result))
 			return nil

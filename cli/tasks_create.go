@@ -84,7 +84,7 @@ func (c *TasksCreateCmd) Run(g *repocli.Globals) error {
 			}
 		}
 		if c.JSON {
-			return emitJSON(os.Stdout, t)
+			return emitEnvelope(os.Stdout, "tasks.create", taskToSchema(t))
 		}
 		fmt.Println(t.ID)
 		return nil

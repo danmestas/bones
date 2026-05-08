@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danmestas/bones/cli/schemas"
 	"github.com/danmestas/bones/internal/coord"
 	"github.com/danmestas/bones/internal/tasks"
 )
@@ -84,6 +85,11 @@ func formatTime(ts time.Time) string {
 }
 
 // emitJSON marshals v as JSON to w with trailing newline.
+//
+// Pre-ADR-0053 fallback used by tests and the by-slot emitter that
+// already builds its own typed payload. New emit sites should use
+// [emitEnvelope] instead so the ADR 0053 envelope wraps every CLI
+// JSON output.
 func emitJSON(w io.Writer, v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -96,41 +102,78 @@ func emitJSON(w io.Writer, v any) error {
 	return nil
 }
 
+// emitEnvelope wraps payload under the ADR 0053 schema envelope and
+// writes it to w as compact JSON with a trailing newline. Centralized
+// so every verb's emit path goes through one helper — consumers can
+// rely on a uniform wire shape across all bones `--json` output.
+//
+// The verb's current version is looked up via [schemas.VersionFor]
+// so the call site does not repeat the version literal — bumping a
+// verb to v2 is a one-line change in cli/schemas/verbs.go.
+func emitEnvelope[T any](w io.Writer, verb string, payload T) error {
+	env := schemas.New(verb, schemas.VersionFor(verb), payload)
+	return schemas.Emit(w, env)
+}
+
+// emitEnvelopeIndent is the indented sibling of emitEnvelope. Used
+// by verbs whose pre-envelope shape was indented (`swarm.status`,
+// `workspaces.list`, `workspaces.get`); v1 preserves their two-space
+// indent so byte-for-byte snapshot tests can pin the shape.
+func emitEnvelopeIndent[T any](w io.Writer, verb string, payload T) error {
+	env := schemas.New(verb, schemas.VersionFor(verb), payload)
+	return schemas.EmitIndent(w, env)
+}
+
+// taskToSchema converts an internal tasks.Task to the cli/schemas
+// wire shape. The two structs are field-for-field identical today;
+// the conversion exists so internal types can evolve without
+// mutating the external contract.
+func taskToSchema(t tasks.Task) schemas.Task {
+	out := schemas.Task{
+		ID:            t.ID,
+		Title:         t.Title,
+		Status:        string(t.Status),
+		ClaimedBy:     t.ClaimedBy,
+		Files:         t.Files,
+		Parent:        t.Parent,
+		Context:       t.Context,
+		CreatedAt:     t.CreatedAt,
+		UpdatedAt:     t.UpdatedAt,
+		DeferUntil:    t.DeferUntil,
+		ClosedAt:      t.ClosedAt,
+		ClosedBy:      t.ClosedBy,
+		ClosedReason:  t.ClosedReason,
+		ClaimEpoch:    t.ClaimEpoch,
+		OriginalSize:  t.OriginalSize,
+		CompactLevel:  t.CompactLevel,
+		CompactedAt:   t.CompactedAt,
+		SchemaVersion: t.SchemaVersion,
+		LastEventSeq:  t.LastEventSeq,
+	}
+	if len(t.Edges) > 0 {
+		out.Edges = make([]schemas.Edge, len(t.Edges))
+		for i, e := range t.Edges {
+			out.Edges[i] = schemas.Edge{Type: string(e.Type), Target: e.Target}
+		}
+	}
+	return out
+}
+
+// tasksToSchema converts a slice of internal tasks.Task into the
+// cli/schemas slice shape. Used by the list/ready/swarm-tasks emit
+// paths.
+func tasksToSchema(in []tasks.Task) []schemas.Task {
+	out := make([]schemas.Task, len(in))
+	for i, t := range in {
+		out[i] = taskToSchema(t)
+	}
+	return out
+}
+
 // --- coord JSON conversions (for ready, prime) ---
 
-type coordTaskJSON struct {
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	Files     []string  `json:"files,omitempty"`
-	ClaimedBy string    `json:"claimed_by,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-type chatThreadJSON struct {
-	ThreadShort  string    `json:"thread_short"`
-	LastActivity time.Time `json:"last_activity"`
-	MessageCount int       `json:"message_count"`
-	LastBody     string    `json:"last_body"`
-}
-
-type presenceJSON struct {
-	AgentID   string    `json:"agent_id"`
-	Project   string    `json:"project"`
-	StartedAt time.Time `json:"started_at"`
-	LastSeen  time.Time `json:"last_seen"`
-}
-
-type primeResultJSON struct {
-	OpenTasks    []coordTaskJSON  `json:"open_tasks"`
-	ReadyTasks   []coordTaskJSON  `json:"ready_tasks"`
-	ClaimedTasks []coordTaskJSON  `json:"claimed_tasks"`
-	Threads      []chatThreadJSON `json:"threads"`
-	Peers        []presenceJSON   `json:"peers"`
-}
-
-func coordTaskToJSON(t coord.Task) coordTaskJSON {
-	return coordTaskJSON{
+func coordTaskToSchema(t coord.Task) schemas.TasksPrimeTask {
+	return schemas.TasksPrimeTask{
 		ID:        string(t.ID()),
 		Title:     t.Title(),
 		Files:     t.Files(),
@@ -140,24 +183,27 @@ func coordTaskToJSON(t coord.Task) coordTaskJSON {
 	}
 }
 
-func coordTasksToJSON(ts []coord.Task) []coordTaskJSON {
-	out := make([]coordTaskJSON, 0, len(ts))
+func coordTasksToSchema(ts []coord.Task) []schemas.TasksPrimeTask {
+	out := make([]schemas.TasksPrimeTask, 0, len(ts))
 	for _, t := range ts {
-		out = append(out, coordTaskToJSON(t))
+		out = append(out, coordTaskToSchema(t))
 	}
 	return out
 }
 
-func primeToJSON(r coord.PrimeResult) primeResultJSON {
-	out := primeResultJSON{
-		OpenTasks:    coordTasksToJSON(r.OpenTasks),
-		ReadyTasks:   coordTasksToJSON(r.ReadyTasks),
-		ClaimedTasks: coordTasksToJSON(r.ClaimedTasks),
-		Threads:      make([]chatThreadJSON, 0, len(r.Threads)),
-		Peers:        make([]presenceJSON, 0, len(r.Peers)),
+// primeToSchema converts the coord-layer PrimeResult into the
+// `tasks.prime` payload shape. Mirrors today's primeResultJSON
+// shape field-for-field; v1 captures it as the external contract.
+func primeToSchema(r coord.PrimeResult) schemas.TasksPrimePayload {
+	out := schemas.TasksPrimePayload{
+		OpenTasks:    coordTasksToSchema(r.OpenTasks),
+		ReadyTasks:   coordTasksToSchema(r.ReadyTasks),
+		ClaimedTasks: coordTasksToSchema(r.ClaimedTasks),
+		Threads:      make([]schemas.TasksPrimeThread, 0, len(r.Threads)),
+		Peers:        make([]schemas.TasksPrimePresence, 0, len(r.Peers)),
 	}
 	for _, t := range r.Threads {
-		out.Threads = append(out.Threads, chatThreadJSON{
+		out.Threads = append(out.Threads, schemas.TasksPrimeThread{
 			ThreadShort:  t.ThreadShort(),
 			LastActivity: t.LastActivity(),
 			MessageCount: t.MessageCount(),
@@ -165,7 +211,7 @@ func primeToJSON(r coord.PrimeResult) primeResultJSON {
 		})
 	}
 	for _, p := range r.Peers {
-		out.Peers = append(out.Peers, presenceJSON{
+		out.Peers = append(out.Peers, schemas.TasksPrimePresence{
 			AgentID:   p.AgentID(),
 			Project:   p.Project(),
 			StartedAt: p.StartedAt(),

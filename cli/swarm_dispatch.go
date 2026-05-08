@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +13,7 @@ import (
 
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
+	"github.com/danmestas/bones/cli/schemas"
 	"github.com/danmestas/bones/internal/dispatch"
 	"github.com/danmestas/bones/internal/tasks"
 	"github.com/danmestas/bones/internal/workspace"
@@ -68,12 +68,10 @@ func (c *SwarmDispatchCmd) Run(g *repocli.Globals) error {
 	}
 }
 
-// dispatchSummaryJSON is the --json output shape for runDispatch.
-type dispatchSummaryJSON struct {
-	ManifestPath string `json:"manifest_path"`
-	TaskCount    int    `json:"task_count"`
-	PlanSHA256   string `json:"plan_sha256"`
-}
+// dispatchSummaryJSON was the pre-ADR-0053 --json output shape; the
+// emitter now constructs schemas.SwarmDispatchPayload directly so
+// the typed struct lives in one place. Kept removed deliberately —
+// reintroducing it would re-fork the contract.
 
 // planSHA256 computes the hex-encoded SHA-256 of a plan file's bytes.
 // Matches the hash BuildManifest stores so re-dispatch detection is consistent.
@@ -199,12 +197,12 @@ func (c *SwarmDispatchCmd) printDispatchResult(
 ) error {
 	manifestPath := dispatch.Path(workspaceDir)
 	if c.JSON {
-		out := dispatchSummaryJSON{
-			ManifestPath: manifestPath,
-			TaskCount:    len(taskIDs),
-			PlanSHA256:   m.PlanSHA256,
-		}
-		return json.NewEncoder(os.Stdout).Encode(out)
+		return emitEnvelope(os.Stdout, "swarm.dispatch",
+			schemas.SwarmDispatchPayload{
+				ManifestPath: manifestPath,
+				TaskCount:    len(taskIDs),
+				PlanSHA256:   m.PlanSHA256,
+			})
 	}
 	fmt.Printf("dispatch: created %d task(s) from %q\n", len(taskIDs), planPath)
 	fmt.Printf("dispatch: manifest written to %s\n", manifestPath)

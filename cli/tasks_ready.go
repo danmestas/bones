@@ -135,7 +135,7 @@ func emitReady(out io.Writer, ready []tasks.Task, asJSON bool) error {
 		if ready == nil {
 			ready = []tasks.Task{}
 		}
-		return emitJSON(out, ready)
+		return emitEnvelope(out, "tasks.ready", tasksToSchema(ready))
 	}
 	if len(ready) == 0 {
 		_, err := fmt.Fprintln(out, "(no ready tasks)")

@@ -77,7 +77,7 @@ func (c *SwarmTasksCmd) run(ctx context.Context, info workspace.Info) error {
 		out = append(out, t)
 	}
 	if c.JSON {
-		return emitJSON(os.Stdout, out)
+		return emitEnvelope(os.Stdout, "swarm.tasks", tasksToSchema(out))
 	}
 	for _, t := range out {
 		fmt.Println(formatListLine(t))

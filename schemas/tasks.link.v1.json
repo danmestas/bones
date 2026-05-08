@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "from": {
+      "type": "string"
+    },
+    "to": {
+      "type": "string"
+    },
+    "type": {
+      "type": "string"
+    }
+  },
+  "type": "object",
+  "required": [
+    "from",
+    "to",
+    "type"
+  ],
+  "title": "TasksLinkPayload",
+  "description": "Payload (`data` field) for `bones tasks link --json` envelope, version v1."
+}

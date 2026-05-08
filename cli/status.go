@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +14,7 @@ import (
 
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
+	"github.com/danmestas/bones/cli/schemas"
 	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/registry"
 	"github.com/danmestas/bones/internal/scaffoldver"
@@ -677,7 +677,8 @@ func renderPausedWorkspacesSection(w io.Writer, paused []registry.Entry) error {
 }
 
 // renderStatusAllJSON emits a JSON object with a "workspaces" array
-// covering every live registry entry.
+// covering every live registry entry. Wrapped in the ADR 0053
+// envelope under verb "status".
 func renderStatusAllJSON(w io.Writer) error {
 	entries, err := registry.List()
 	if err != nil {
@@ -691,20 +692,17 @@ func renderStatusAllJSON(w io.Writer) error {
 			_ = registry.Remove(e.Cwd)
 		}
 	}
-	type row struct {
-		Cwd       string    `json:"cwd"`
-		Name      string    `json:"name"`
-		HubURL    string    `json:"hub_url"`
-		Sessions  int       `json:"sessions"`
-		StartedAt time.Time `json:"started_at"`
-	}
-	rows := make([]row, len(live))
+	rows := make([]schemas.StatusWorkspaceRow, len(live))
 	for i, e := range live {
-		rows[i] = row{e.Cwd, e.Name, e.HubURL, sessions.CountByWorkspace(e.Cwd), e.StartedAt}
+		rows[i] = schemas.StatusWorkspaceRow{
+			Cwd:       e.Cwd,
+			Name:      e.Name,
+			HubURL:    e.HubURL,
+			Sessions:  sessions.CountByWorkspace(e.Cwd),
+			StartedAt: e.StartedAt,
+		}
 	}
-	return json.NewEncoder(w).Encode(struct {
-		Workspaces []row `json:"workspaces"`
-	}{rows})
+	return emitEnvelope(w, "status", schemas.StatusAllPayload{Workspaces: rows})
 }
 
 // shortenHome replaces the user's $HOME prefix with ~ for table display.
