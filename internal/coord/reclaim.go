@@ -44,16 +44,19 @@ func (c *Coord) Reclaim(
 	c.assertOpen("Reclaim")
 	c.assertReclaimPreconditions(ctx, taskID, ttl)
 
-	prev, files, err := c.prepareReclaim(ctx, taskID)
+	prev, prevEpoch, files, err := c.prepareReclaim(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
 	var newEpoch uint64
 	mutate := c.reclaimMutator(&newEpoch)
 	if err := c.sub.tasks.Tx(ctx, string(taskID), func(tx *tasks.Tx) error {
-		return tx.Mutate(mutate,
-			tasks.MustFieldChange("claimed_by", prev, c.cfg.AgentID),
-		)
+		return tx.Claim(tasks.ClaimArgs{
+			AgentID:    c.cfg.AgentID,
+			ClaimEpoch: prevEpoch + 1,
+			PrevAgent:  prev,
+			Mutate:     mutate,
+		})
 	}); err != nil {
 		return nil, translateReclaimCASErr(err)
 	}
@@ -92,27 +95,30 @@ func (c *Coord) assertReclaimPreconditions(
 
 // prepareReclaim reads the task record, enforces the three precondition
 // gates (claimed status, not self, claimer offline), and returns the
-// previous claimed_by plus the file list for hold acquisition.
+// previous claimed_by plus the file list for hold acquisition. The
+// previous claim epoch is also returned so the post-Tx event payload
+// can carry the best-effort new epoch (mutator authoritatively writes
+// the projection's value inside the CAS loop).
 func (c *Coord) prepareReclaim(
 	ctx context.Context, taskID TaskID,
-) (prev string, files []string, err error) {
+) (prev string, prevEpoch uint64, files []string, err error) {
 	rec, _, err := c.sub.tasks.Get(ctx, string(taskID))
 	if err != nil {
 		if errors.Is(err, tasks.ErrNotFound) {
-			return "", nil, fmt.Errorf("coord.Reclaim: %w", ErrTaskNotFound)
+			return "", 0, nil, fmt.Errorf("coord.Reclaim: %w", ErrTaskNotFound)
 		}
-		return "", nil, fmt.Errorf("coord.Reclaim: %w", err)
+		return "", 0, nil, fmt.Errorf("coord.Reclaim: %w", err)
 	}
 	if rec.Status != tasks.StatusClaimed {
-		return "", nil, fmt.Errorf("coord.Reclaim: %w", ErrTaskNotClaimed)
+		return "", 0, nil, fmt.Errorf("coord.Reclaim: %w", ErrTaskNotClaimed)
 	}
 	if rec.ClaimedBy == c.cfg.AgentID {
-		return "", nil, fmt.Errorf("coord.Reclaim: %w", ErrAlreadyClaimer)
+		return "", 0, nil, fmt.Errorf("coord.Reclaim: %w", ErrAlreadyClaimer)
 	}
 	if err := c.assertClaimerOffline(ctx, rec.ClaimedBy); err != nil {
-		return "", nil, err
+		return "", 0, nil, err
 	}
-	return rec.ClaimedBy, append([]string(nil), rec.Files...), nil
+	return rec.ClaimedBy, rec.ClaimEpoch, append([]string(nil), rec.Files...), nil
 }
 
 // assertClaimerOffline returns ErrClaimerLive if agent is present in

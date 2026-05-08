@@ -136,26 +136,54 @@ func (tx *Tx) Create(t Task) error {
 	return nil
 }
 
-// Claim publishes a claimed event and updates the KV record's status
-// and ClaimedBy fields. The mutator closure stays the same shape used
-// by the legacy Update API; tx.Claim wraps it so the caller does not
-// hand-author one. The claimEpoch is the new epoch the caller wants
-// stamped on the record (typically prior + 1, computed by coord).
+// ClaimArgs configures a tx.Claim call. AgentID and Mutate are
+// required; Slot, PrevAgent, and ClaimEpoch are optional. The mutator
+// runs inside the CAS loop and is responsible for the conditional
+// rejection (already-claimed, epoch-stale) plus stamping ClaimedBy
+// and any other fields. tx.Claim wraps it so callers do not have to
+// remember to update LastEventSeq or UpdatedAt.
 //
-// The optional mutate callback runs inside the CAS loop AFTER the
-// status/agent fields are stamped, so callers (coord) can apply
-// extra fields like ClaimEpoch in the same revision.
-func (tx *Tx) Claim(agentID string, slot string, claimEpoch uint64) error {
+// The Mutate callback IS the CAS body. It receives the current Task
+// and returns the desired post-claim Task value or an error. Returning
+// an error short-circuits the CAS loop and the Tx call returns the
+// error unwrapped so coord can switch on its own sentinels.
+type ClaimArgs struct {
+	AgentID    string
+	Slot       string
+	ClaimEpoch uint64
+	PrevAgent  string
+	Mutate     func(Task) (Task, error)
+}
+
+// Claim publishes a claimed event and applies the supplied mutator
+// inside a CAS loop. The mutator owns the conditional rejection
+// semantics — coord.Claim's claimMutator, coord.Reclaim's
+// reclaimMutator, and coord.HandoffClaim's handoffMutator all plug
+// in here unchanged.
+//
+// The publish-then-CAS order means: a mutator that rejects after
+// publish leaves a "spurious claimed" event in the log. Recovery's
+// LastEventSeq guard prevents replay from clobbering a later
+// projection; the audit-trail correctness is what the closed-set
+// event types and (field, old, new) tuples guarantee for replay
+// (see ADR 0052 §"Recovery").
+func (tx *Tx) Claim(args ClaimArgs) error {
 	tx.markDirty()
-	if agentID == "" {
-		err := errors.New("tasks.Tx.Claim: agentID is empty")
+	if args.AgentID == "" {
+		err := errors.New("tasks.Tx.Claim: AgentID is empty")
+		tx.recordErr(err)
+		return err
+	}
+	if args.Mutate == nil {
+		err := errors.New("tasks.Tx.Claim: Mutate is nil")
 		tx.recordErr(err)
 		return err
 	}
 	payload := ClaimedPayload{
-		AgentID:    agentID,
-		Slot:       slot,
-		ClaimEpoch: claimEpoch,
+		AgentID:    args.AgentID,
+		Slot:       args.Slot,
+		ClaimEpoch: args.ClaimEpoch,
+		PrevAgent:  args.PrevAgent,
 	}
 	env, err := EncodeEnvelope(EventTypeClaimed, tx.taskID, payload)
 	if err != nil {
@@ -167,26 +195,31 @@ func (tx *Tx) Claim(agentID string, slot string, claimEpoch uint64) error {
 		tx.recordErr(err)
 		return err
 	}
-	mutate := func(t Task) (Task, error) {
-		t.Status = StatusClaimed
-		t.ClaimedBy = agentID
-		t.ClaimEpoch = claimEpoch
-		t.UpdatedAt = time.Now().UTC()
-		t.LastEventSeq = seq
-		return t, nil
+	wrapped := func(t Task) (Task, error) {
+		next, err := args.Mutate(t)
+		if err != nil {
+			return t, err
+		}
+		next.UpdatedAt = time.Now().UTC()
+		next.LastEventSeq = seq
+		return next, nil
 	}
-	if err := tx.mgr.update(tx.ctx, tx.taskID, mutate); err != nil {
+	if err := tx.mgr.update(tx.ctx, tx.taskID, wrapped); err != nil {
 		tx.recordErr(err)
 		return err
 	}
 	return nil
 }
 
-// Unclaim publishes an unclaimed event and updates the KV record's
-// status to open and clears ClaimedBy. The free-form reason is
-// recorded on the event but not stamped on the KV — operators recover
-// it from the log.
-func (tx *Tx) Unclaim(reason string) error {
+// Unclaim publishes an unclaimed event and applies the supplied
+// mutator inside a CAS loop. The mutator owns the conditional
+// rejection semantics (e.g. coord's "is the claim still ours" check
+// surfacing as errClaimCASNoOp); a nil mutator falls back to the
+// default "set status=open, clear claimed_by" projection.
+//
+// reason is the free-form audit string recorded on the event but
+// NOT stamped on the KV — operators recover it from the log.
+func (tx *Tx) Unclaim(reason string, mutate func(Task) (Task, error)) error {
 	tx.markDirty()
 	payload := UnclaimedPayload{Reason: reason}
 	env, err := EncodeEnvelope(EventTypeUnclaimed, tx.taskID, payload)
@@ -199,14 +232,24 @@ func (tx *Tx) Unclaim(reason string) error {
 		tx.recordErr(err)
 		return err
 	}
-	mutate := func(t Task) (Task, error) {
-		t.Status = StatusOpen
-		t.ClaimedBy = ""
-		t.UpdatedAt = time.Now().UTC()
-		t.LastEventSeq = seq
-		return t, nil
+	wrapped := func(t Task) (Task, error) {
+		var next Task
+		var err error
+		if mutate != nil {
+			next, err = mutate(t)
+			if err != nil {
+				return t, err
+			}
+		} else {
+			next = t
+			next.Status = StatusOpen
+			next.ClaimedBy = ""
+		}
+		next.UpdatedAt = time.Now().UTC()
+		next.LastEventSeq = seq
+		return next, nil
 	}
-	if err := tx.mgr.update(tx.ctx, tx.taskID, mutate); err != nil {
+	if err := tx.mgr.update(tx.ctx, tx.taskID, wrapped); err != nil {
 		tx.recordErr(err)
 		return err
 	}
@@ -363,22 +406,6 @@ func (tx *Tx) Close(agentID, reason string, mutate func(Task) (Task, error)) err
 		return err
 	}
 	return nil
-}
-
-// Mutate is a generic Tx-only escape hatch for mutators that do not
-// fit the named tx.X verbs. It still publishes an updated event
-// describing the changes so the log remains the source of truth. Used
-// internally by the migration shim and by coord paths that bundle
-// multiple field changes (e.g., Reclaim's claimed-by + claim-epoch
-// pair).
-//
-// changes describes the (field, old, new) tuples for the event;
-// mutate produces the new Task value. Both must agree.
-func (tx *Tx) Mutate(
-	mutate func(Task) (Task, error),
-	changes ...FieldChange,
-) error {
-	return tx.Update(mutate, changes...)
 }
 
 // publish sends env on the events stream and returns the assigned

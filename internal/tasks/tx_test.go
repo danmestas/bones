@@ -396,7 +396,16 @@ func TestReplayCorrectness(t *testing.T) {
 			}
 		case "claim":
 			if err := m.Tx(ctx, op.id, func(tx *tasks.Tx) error {
-				return tx.Claim("agent-x", "", 1)
+				return tx.Claim(tasks.ClaimArgs{
+					AgentID:    "agent-x",
+					ClaimEpoch: 1,
+					Mutate: func(t tasks.Task) (tasks.Task, error) {
+						t.Status = tasks.StatusClaimed
+						t.ClaimedBy = "agent-x"
+						t.ClaimEpoch = 1
+						return t, nil
+					},
+				})
 			}); err != nil {
 				t.Fatalf("step %d claim %s: %v", i, op.id, err)
 			}

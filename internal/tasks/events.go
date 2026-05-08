@@ -116,10 +116,15 @@ type CreatedPayload struct {
 }
 
 // ClaimedPayload carries the agent that claimed and the optional slot.
+// PrevAgent is non-empty for handoff/reclaim transitions where the
+// claim moves from one agent to another without an intervening
+// unclaimed event; replay in recovery uses it to reconstruct the
+// audit trail correctly.
 type ClaimedPayload struct {
 	AgentID    string `json:"agent_id"`
 	Slot       string `json:"slot,omitempty"`
 	ClaimEpoch uint64 `json:"claim_epoch"`
+	PrevAgent  string `json:"prev_agent,omitempty"`
 }
 
 // UnclaimedPayload carries the un-claim reason. The previously-claiming

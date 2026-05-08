@@ -380,23 +380,27 @@ func (c *Coord) acquireTaskCAS(
 	files := append([]string(nil), rec.Files...)
 	var newEpoch uint64
 
-	// We pass the legacy mutator into tx.Update with a single
-	// status-edge FieldChange; the mutator does the conditional
-	// rejection (status==open, claimed_by==""), tx publishes a
-	// `claimed` event before invoking the CAS write. A racing claimer
-	// between the pre-check above and the CAS surfaces as
-	// ErrTaskAlreadyClaimed from the mutator, leaving a "spurious
-	// claimed" event in the log; recovery short-circuits replay when
-	// the projection has moved past the event's sequence per ADR 0052.
+	// tx.Claim publishes a `claimed` event then runs claimMutator
+	// inside the CAS loop. The mutator does the conditional rejection
+	// (status==open, claimed_by==""); a racing claimer between the
+	// pre-check above and the CAS surfaces as ErrTaskAlreadyClaimed
+	// from the mutator, leaving a "spurious claimed" event in the
+	// log. Recovery's LastEventSeq guard prevents replay from
+	// clobbering a later projection (ADR 0052 §"Recovery").
 	mutate := c.claimMutator(&newEpoch)
 	err = c.sub.tasks.Tx(ctx, string(taskID), func(tx *tasks.Tx) error {
-		// Use Tx.Mutate for compound mutations (status + claimed_by +
-		// claim_epoch) — the typed Claim helper would not surface the
-		// epoch-bumping race the mutator handles.
-		return tx.Mutate(mutate,
-			tasks.MustFieldChange("status", tasks.StatusOpen, tasks.StatusClaimed),
-			tasks.MustFieldChange("claimed_by", "", c.cfg.AgentID),
-		)
+		return tx.Claim(tasks.ClaimArgs{
+			AgentID: c.cfg.AgentID,
+			// ClaimEpoch is set inside the mutator (cur.ClaimEpoch++)
+			// because we cannot know the new epoch without the CAS
+			// read; the event payload's ClaimEpoch field is filled
+			// from the post-mutate state via Tx — but Tx.Claim takes
+			// the args up front. To keep the typed payload accurate
+			// we pass rec.ClaimEpoch+1 (best-effort guess; mutator
+			// authoritatively sets the projection's value).
+			ClaimEpoch: rec.ClaimEpoch + 1,
+			Mutate:     mutate,
+		})
 	})
 	if err != nil {
 		return nil, translateClaimCASErr(err)
@@ -492,15 +496,12 @@ func (c *Coord) undoTaskCAS(ctx context.Context, taskID TaskID) {
 		cur.UpdatedAt = time.Now().UTC()
 		return cur, nil
 	}
-	// One Tx that runs the legacy mutator: the mutator's
-	// errClaimCASNoOp short-circuits when the claim no longer belongs
-	// to us, leaving the record alone but still emitting an
-	// `unclaimed` event (the audit trail for the rollback attempt).
+	// tx.Unclaim publishes the unclaimed event then runs the mutator
+	// inside the CAS loop. The mutator's errClaimCASNoOp short-
+	// circuits when the claim no longer belongs to us, leaving the
+	// record alone (the event still ships as the audit trail).
 	_ = c.sub.tasks.Tx(ctx, string(taskID), func(tx *tasks.Tx) error {
-		return tx.Mutate(mutate,
-			tasks.MustFieldChange("status", tasks.StatusClaimed, tasks.StatusOpen),
-			tasks.MustFieldChange("claimed_by", agent, ""),
-		)
+		return tx.Unclaim("claim rollback after hold failure", mutate)
 	})
 	c.activeEpochs.Delete(taskID)
 }
@@ -581,10 +582,7 @@ func (c *Coord) releaseTaskCAS(
 		return cur, nil
 	}
 	err := c.sub.tasks.Tx(ctx, string(taskID), func(tx *tasks.Tx) error {
-		return tx.Mutate(mutate,
-			tasks.MustFieldChange("status", tasks.StatusClaimed, tasks.StatusOpen),
-			tasks.MustFieldChange("claimed_by", agent, ""),
-		)
+		return tx.Unclaim("release", mutate)
 	})
 	switch {
 	case err == nil:
@@ -790,22 +788,20 @@ func (c *Coord) listTasks(ctx context.Context) ([]tasks.Task, error) {
 // Used by Leaf.Compact to stamp compaction metadata on a closed
 // record; unexported so substrate remains opaque to Leaf code.
 //
-// Routed through tasks.Tx so the canonical "no mutation outside Tx"
-// rule (ADR 0052) holds. The compaction edit emits an `updated` event
-// describing the (compact_level, original_size, compacted_at) deltas;
-// callers do not have to author the FieldChange tuples themselves
-// because the mutator is run twice — once in dry-run mode against the
-// pre-image to derive deltas, then for real inside Tx.
+// Compaction metadata writes (compact_level, original_size,
+// compacted_at) are bookkeeping internal to the leaf-side compaction
+// pipeline — not user-driven mutations and not interesting in the
+// task event log. Routing them through Tx would emit `updated` events
+// for every compaction tick, polluting the audit trail with noise
+// that has no correspondence to a user-visible state change. ADR 0052
+// permits AdminWrite for hub-side bookkeeping; compaction metadata is
+// the same shape and uses the same escape hatch.
 func (c *Coord) updateTask(
 	ctx context.Context,
 	id string,
 	mutate func(tasks.Task) (tasks.Task, error),
 ) error {
-	return c.sub.tasks.Tx(ctx, id, func(tx *tasks.Tx) error {
-		return tx.Mutate(mutate,
-			tasks.MustFieldChange("compaction", "before", "after"),
-		)
-	})
+	return tasks.NewAdminWrite(c.sub.tasks).Update(ctx, id, mutate)
 }
 
 // getAndArchiveTask reads the hot task record for id, writes it into

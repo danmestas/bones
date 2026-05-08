@@ -63,10 +63,10 @@ func (c *TasksClaimCmd) Run(g *repocli.Globals) error {
 			return t, nil
 		}
 		err = mgr.Tx(ctx, c.ID, func(tx *tasks.Tx) error {
-			return tx.Mutate(mutate,
-				tasks.MustFieldChange("status", tasks.StatusOpen, tasks.StatusClaimed),
-				tasks.MustFieldChange("claimed_by", "", info.AgentID),
-			)
+			return tx.Claim(tasks.ClaimArgs{
+				AgentID: info.AgentID,
+				Mutate:  mutate,
+			})
 		})
 		if err != nil {
 			return err

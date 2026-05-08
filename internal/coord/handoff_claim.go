@@ -34,16 +34,19 @@ func (c *Coord) HandoffClaim(
 	c.assertOpen("HandoffClaim")
 	c.assertHandoffClaimPreconditions(ctx, taskID, fromAgent, ttl)
 
-	files, err := c.prepareHandoff(ctx, taskID, fromAgent)
+	prevEpoch, files, err := c.prepareHandoff(ctx, taskID, fromAgent)
 	if err != nil {
 		return nil, err
 	}
 	var newEpoch uint64
 	mutate := c.handoffMutator(fromAgent, &newEpoch)
 	if err := c.sub.tasks.Tx(ctx, string(taskID), func(tx *tasks.Tx) error {
-		return tx.Mutate(mutate,
-			tasks.MustFieldChange("claimed_by", fromAgent, c.cfg.AgentID),
-		)
+		return tx.Claim(tasks.ClaimArgs{
+			AgentID:    c.cfg.AgentID,
+			ClaimEpoch: prevEpoch + 1,
+			PrevAgent:  fromAgent,
+			Mutate:     mutate,
+		})
 	}); err != nil {
 		return nil, translateHandoffCASErr(err)
 	}
@@ -81,24 +84,24 @@ func (c *Coord) assertHandoffClaimPreconditions(
 
 func (c *Coord) prepareHandoff(
 	ctx context.Context, taskID TaskID, fromAgent string,
-) ([]string, error) {
+) (prevEpoch uint64, files []string, err error) {
 	rec, _, err := c.sub.tasks.Get(ctx, string(taskID))
 	if err != nil {
 		if errors.Is(err, tasks.ErrNotFound) {
-			return nil, fmt.Errorf("coord.HandoffClaim: %w", ErrTaskNotFound)
+			return 0, nil, fmt.Errorf("coord.HandoffClaim: %w", ErrTaskNotFound)
 		}
-		return nil, fmt.Errorf("coord.HandoffClaim: %w", err)
+		return 0, nil, fmt.Errorf("coord.HandoffClaim: %w", err)
 	}
 	if rec.Status != tasks.StatusClaimed {
-		return nil, fmt.Errorf("coord.HandoffClaim: %w", ErrTaskNotClaimed)
+		return 0, nil, fmt.Errorf("coord.HandoffClaim: %w", ErrTaskNotClaimed)
 	}
 	if rec.ClaimedBy == c.cfg.AgentID {
-		return nil, fmt.Errorf("coord.HandoffClaim: %w", ErrAlreadyClaimer)
+		return 0, nil, fmt.Errorf("coord.HandoffClaim: %w", ErrAlreadyClaimer)
 	}
 	if rec.ClaimedBy != fromAgent {
-		return nil, fmt.Errorf("coord.HandoffClaim: %w", ErrAgentMismatch)
+		return 0, nil, fmt.Errorf("coord.HandoffClaim: %w", ErrAgentMismatch)
 	}
-	return append([]string(nil), rec.Files...), nil
+	return rec.ClaimEpoch, append([]string(nil), rec.Files...), nil
 }
 
 func (c *Coord) handoffMutator(
