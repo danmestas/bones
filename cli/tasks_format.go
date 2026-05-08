@@ -103,7 +103,7 @@ func emitJSON(w io.Writer, v any) error {
 }
 
 // emitEnvelope wraps payload under the ADR 0053 schema envelope and
-// writes it to w as compact JSON with a trailing newline. Centralised
+// writes it to w as compact JSON with a trailing newline. Centralized
 // so every verb's emit path goes through one helper — consumers can
 // rely on a uniform wire shape across all bones `--json` output.
 //

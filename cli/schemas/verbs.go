@@ -125,11 +125,11 @@ type SwarmTasksPayload []Task
 // TasksAggregatePayload is the payload for `bones tasks aggregate --json`.
 // Mirrors `aggregateResult`: window summary + per-slot breakdown.
 type TasksAggregatePayload struct {
-	Since       string                `json:"since"`
-	TotalTasks  int                   `json:"total_tasks"`
-	TotalSlots  int                   `json:"total_slots"`
-	ActiveSlots int                   `json:"active_slots"`
-	Slots       []TasksAggregateSlot  `json:"slots"`
+	Since       string               `json:"since"`
+	TotalTasks  int                  `json:"total_tasks"`
+	TotalSlots  int                  `json:"total_slots"`
+	ActiveSlots int                  `json:"active_slots"`
+	Slots       []TasksAggregateSlot `json:"slots"`
 }
 
 // TasksAggregateSlot is the per-slot summary row inside a tasks.aggregate payload.
