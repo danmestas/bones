@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +11,7 @@ import (
 
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
+	"github.com/danmestas/bones/cli/schemas"
 	"github.com/danmestas/bones/internal/dispatch"
 	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/workspace"
@@ -144,9 +144,21 @@ func classifyState(s swarm.Session, host string, staleSec int64) string {
 }
 
 func emitStatusJSON(rows []statusRow) error {
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(rows)
+	payload := make(schemas.SwarmStatusPayload, len(rows))
+	for i, r := range rows {
+		payload[i] = schemas.SwarmStatusRow{
+			Slot:         r.Slot,
+			TaskID:       r.TaskID,
+			AgentID:      r.AgentID,
+			Host:         r.Host,
+			LeafPID:      r.LeafPID,
+			StartedAt:    r.StartedAt,
+			LastRenewed:  r.LastRenewed,
+			State:        r.State,
+			StaleSeconds: r.StaleSeconds,
+		}
+	}
+	return emitEnvelopeIndent(os.Stdout, "swarm.status", payload)
 }
 
 func emitStatusTable(rows []statusRow) error {

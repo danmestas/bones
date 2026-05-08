@@ -216,7 +216,7 @@ func filterOrphans(in []tasks.Task, liveAgents map[string]struct{}) []tasks.Task
 // formatListLine per task. The legacy plain-text format is preserved.
 func emitTasks(out []tasks.Task, asJSON bool) error {
 	if asJSON {
-		return emitJSON(os.Stdout, out)
+		return emitEnvelope(os.Stdout, "tasks.list", tasksToSchema(out))
 	}
 	for _, t := range out {
 		fmt.Println(formatListLine(t))

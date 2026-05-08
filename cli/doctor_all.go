@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +9,7 @@ import (
 	"sync"
 	"text/tabwriter"
 
+	"github.com/danmestas/bones/cli/schemas"
 	"github.com/danmestas/bones/internal/registry"
 )
 
@@ -147,7 +147,8 @@ func isHubAlive(hubURL string) bool {
 	return resp.StatusCode < 500
 }
 
-// renderDoctorAllJSON emits a machine-readable JSON summary of all workspaces.
+// renderDoctorAllJSON emits a machine-readable JSON summary of all
+// workspaces wrapped in the ADR 0053 envelope under verb "doctor".
 func renderDoctorAllJSON(w io.Writer) int {
 	entries, err := registry.List()
 	if err != nil {
@@ -155,24 +156,21 @@ func renderDoctorAllJSON(w io.Writer) int {
 		return 1
 	}
 	results := runDoctorPerWorkspace(entries)
-	type row struct {
-		Name     string `json:"name"`
-		Cwd      string `json:"cwd"`
-		HubAlive bool   `json:"hub_alive"`
-		Issues   int    `json:"issues"`
-	}
-	rows := make([]row, len(results))
+	rows := make([]schemas.DoctorWorkspaceRow, len(results))
 	anyIssue := false
 	for i, r := range results {
-		rows[i] = row{r.Entry.Name, r.Entry.Cwd, r.HubAlive, r.Issues}
+		rows[i] = schemas.DoctorWorkspaceRow{
+			Name:     r.Entry.Name,
+			Cwd:      r.Entry.Cwd,
+			HubAlive: r.HubAlive,
+			Issues:   r.Issues,
+		}
 		if r.Issues > 0 {
 			anyIssue = true
 		}
 	}
-	enc := json.NewEncoder(w)
-	if err := enc.Encode(struct {
-		Workspaces []row `json:"workspaces"`
-	}{rows}); err != nil {
+	if err := emitEnvelope(w, "doctor",
+		schemas.DoctorAllPayload{Workspaces: rows}); err != nil {
 		return 1
 	}
 	if anyIssue {

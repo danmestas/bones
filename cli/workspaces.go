@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +10,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/danmestas/bones/cli/schemas"
 	"github.com/danmestas/bones/internal/registry"
 )
 
@@ -183,22 +183,11 @@ func ambiguousNameError(q string, matches []registry.Info) error {
 	return fmt.Errorf("%s", b.String())
 }
 
-// jsonRow is the per-entry shape of `bones workspaces ls --json`. The
-// schema lives in the spec attached to issue #174; please bump the
-// fixture file under cli/testdata/ if you change it.
-type jsonRow struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Cwd         string `json:"cwd"`
-	HubStatus   string `json:"hub_status"`
-	LastTouched string `json:"last_touched"`
-	AgentID     string `json:"agent_id"`
-	NATSURL     string `json:"nats_url"`
-	HubURL      string `json:"hub_url"`
-}
-
-func toJSONRow(i registry.Info) jsonRow {
-	return jsonRow{
+// toJSONRow maps a registry.Info into the schemas.WorkspacesRow
+// wire shape. The schemas package owns the external contract; the
+// internal Info type may evolve behind it.
+func toJSONRow(i registry.Info) schemas.WorkspacesRow {
+	return schemas.WorkspacesRow{
 		ID:          i.ID,
 		Name:        i.Name,
 		Cwd:         i.Cwd,
@@ -211,13 +200,11 @@ func toJSONRow(i registry.Info) jsonRow {
 }
 
 func writeWorkspacesJSON(w io.Writer, infos []registry.Info) error {
-	rows := make([]jsonRow, len(infos))
+	rows := make(schemas.WorkspacesListPayload, len(infos))
 	for i, info := range infos {
 		rows[i] = toJSONRow(info)
 	}
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	return enc.Encode(rows)
+	return emitEnvelopeIndent(w, "workspaces.list", rows)
 }
 
 // writeWorkspacesTable renders the human-readable form. now is injected
@@ -255,10 +242,10 @@ func writeWorkspacesTable(w io.Writer, infos []registry.Info, now time.Time) err
 // avoid pulling yaml.v3 forward as a direct dependency. The flag is
 // kept on the command so scripts can opt in explicitly and so a future
 // switch to YAML-by-default is non-breaking for `--json` callers.
+//
+// Wrapped in the ADR 0053 envelope under verb "workspaces.get".
 func writeWorkspaceOne(w io.Writer, i registry.Info, _ bool) error {
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	return enc.Encode(toJSONRow(i))
+	return emitEnvelopeIndent(w, "workspaces.get", toJSONRow(i))
 }
 
 const emDash = "—"

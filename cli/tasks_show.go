@@ -34,7 +34,7 @@ func (c *TasksShowCmd) Run(g *repocli.Globals) error {
 			return err
 		}
 		if c.JSON {
-			return emitJSON(os.Stdout, t)
+			return emitEnvelope(os.Stdout, "tasks.show", taskToSchema(t))
 		}
 		fmt.Print(formatShowBlock(t))
 		return nil

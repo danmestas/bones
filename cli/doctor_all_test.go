@@ -133,15 +133,25 @@ func TestDoctorAllJSON(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("expected exit 0, got %d\n%s", exitCode, buf.String())
 	}
-	var got struct {
-		Workspaces []struct {
-			Name   string `json:"name"`
-			Issues int    `json:"issues"`
-		} `json:"workspaces"`
+	var env struct {
+		Schema struct {
+			Verb    string `json:"verb"`
+			Version string `json:"version"`
+		} `json:"schema"`
+		Data struct {
+			Workspaces []struct {
+				Name   string `json:"name"`
+				Issues int    `json:"issues"`
+			} `json:"workspaces"`
+		} `json:"data"`
 	}
-	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+	if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
 		t.Fatalf("unmarshal: %v\n%s", err, buf.String())
 	}
+	if env.Schema.Verb != "doctor" || env.Schema.Version != "v1" {
+		t.Errorf("schema = %+v, want {doctor v1}", env.Schema)
+	}
+	got := env.Data
 	if len(got.Workspaces) != 1 || got.Workspaces[0].Name != "x" {
 		t.Fatalf("unexpected workspaces: %+v", got.Workspaces)
 	}
@@ -255,13 +265,15 @@ func TestDoctorAllJSONEmpty(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("empty registry should be exit 0")
 	}
-	var got struct {
-		Workspaces []interface{} `json:"workspaces"`
+	var env struct {
+		Data struct {
+			Workspaces []interface{} `json:"workspaces"`
+		} `json:"data"`
 	}
-	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+	if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
 		t.Fatalf("unmarshal: %v\n%s", err, buf.String())
 	}
-	if len(got.Workspaces) != 0 {
-		t.Fatalf("expected empty workspaces, got %+v", got.Workspaces)
+	if len(env.Data.Workspaces) != 0 {
+		t.Fatalf("expected empty workspaces, got %+v", env.Data.Workspaces)
 	}
 }

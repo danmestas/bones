@@ -114,10 +114,20 @@ func TestWorkspacesLsJSON(t *testing.T) {
 		t.Fatalf("writeWorkspacesJSON: %v", err)
 	}
 
-	var rows []map[string]any
-	if err := json.Unmarshal(buf.Bytes(), &rows); err != nil {
+	var env struct {
+		Schema struct {
+			Verb    string `json:"verb"`
+			Version string `json:"version"`
+		} `json:"schema"`
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
 		t.Fatalf("decode: %v\n%s", err, buf.String())
 	}
+	if env.Schema.Verb != "workspaces.list" || env.Schema.Version != "v1" {
+		t.Errorf("schema = %+v, want {workspaces.list v1}", env.Schema)
+	}
+	rows := env.Data
 	if len(rows) != 2 {
 		t.Fatalf("rows = %d, want 2", len(rows))
 	}
@@ -160,12 +170,21 @@ func TestWorkspacesShowByName(t *testing.T) {
 	if err := writeWorkspaceOne(&buf, matches[0], true); err != nil {
 		t.Fatal(err)
 	}
-	var got map[string]any
-	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+	var env struct {
+		Schema struct {
+			Verb    string `json:"verb"`
+			Version string `json:"version"`
+		} `json:"schema"`
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if got["name"] != "beta" {
-		t.Errorf("name = %v, want beta", got["name"])
+	if env.Schema.Verb != "workspaces.get" || env.Schema.Version != "v1" {
+		t.Errorf("schema = %+v, want {workspaces.get v1}", env.Schema)
+	}
+	if env.Data["name"] != "beta" {
+		t.Errorf("name = %v, want beta", env.Data["name"])
 	}
 }
 

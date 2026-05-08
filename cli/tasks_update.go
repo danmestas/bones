@@ -86,7 +86,7 @@ func (c *TasksUpdateCmd) Run(g *repocli.Globals) error {
 			// empty event. Idempotent on the CLI side.
 			updated = before
 			if c.JSON {
-				return emitJSON(os.Stdout, updated)
+				return emitEnvelope(os.Stdout, "tasks.update", taskToSchema(updated))
 			}
 			return nil
 		}
@@ -96,7 +96,7 @@ func (c *TasksUpdateCmd) Run(g *repocli.Globals) error {
 			return err
 		}
 		if c.JSON {
-			return emitJSON(os.Stdout, updated)
+			return emitEnvelope(os.Stdout, "tasks.update", taskToSchema(updated))
 		}
 		return nil
 	}))

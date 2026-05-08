@@ -170,7 +170,8 @@ func TestTasksReady_FIFOWithinPriority(t *testing.T) {
 	}
 }
 
-// TestTasksReady_JSON asserts --json produces a valid JSON array.
+// TestTasksReady_JSON asserts --json produces a valid envelope
+// containing a JSON array under data.
 func TestTasksReady_JSON(t *testing.T) {
 	now := time.Now().UTC()
 	a := readyFixture("a", "alpha", withPriority("P0"))
@@ -182,10 +183,20 @@ func TestTasksReady_JSON(t *testing.T) {
 		t.Fatalf("emitReady: %v", err)
 	}
 
-	var decoded []tasks.Task
-	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
+	var env struct {
+		Schema struct {
+			Verb    string `json:"verb"`
+			Version string `json:"version"`
+		} `json:"schema"`
+		Data []tasks.Task `json:"data"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
 		t.Fatalf("unmarshal: %v\noutput=%s", err, buf.String())
 	}
+	if env.Schema.Verb != "tasks.ready" || env.Schema.Version != "v1" {
+		t.Errorf("schema = %+v, want {tasks.ready v1}", env.Schema)
+	}
+	decoded := env.Data
 	if len(decoded) != 2 {
 		t.Fatalf("got %d items want 2; output=%s", len(decoded), buf.String())
 	}
@@ -211,21 +222,24 @@ func TestTasksReady_EmptyEmits(t *testing.T) {
 		t.Fatalf("expected sentinel line; got %q", buf.String())
 	}
 
-	// JSON mode on empty input emits "[]" so consumers see a parseable
-	// array rather than "null".
+	// JSON mode on empty input emits a `data: []` array under the
+	// envelope so consumers see a parseable list rather than "null"
+	// or a missing key.
 	buf.Reset()
 	if err := emitReady(&buf, got, true); err != nil {
 		t.Fatalf("emitReady JSON: %v", err)
 	}
-	if !strings.HasPrefix(strings.TrimSpace(buf.String()), "[") {
-		t.Fatalf("JSON empty must start with [; got %q", buf.String())
+	var env struct {
+		Data []tasks.Task `json:"data"`
 	}
-	var decoded []tasks.Task
-	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
+	if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
 		t.Fatalf("JSON empty unmarshal: %v\nout=%s", err, buf.String())
 	}
-	if len(decoded) != 0 {
-		t.Fatalf("JSON empty: got %d items want 0", len(decoded))
+	if env.Data == nil {
+		t.Fatalf("JSON empty: data must be present array, got nil")
+	}
+	if len(env.Data) != 0 {
+		t.Fatalf("JSON empty: got %d items want 0", len(env.Data))
 	}
 }
 

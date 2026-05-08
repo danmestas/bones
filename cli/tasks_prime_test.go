@@ -16,25 +16,42 @@ import (
 // must still emit a non-empty envelope so a downstream operator
 // script reading the bones-shape JSON sees the workspace is active.
 //
-// `--json` is the operator-script surface (separately governed by
-// issue #321) — it stays unchanged by ADR 0051's hook-protocol work.
-//
-// The envelope must round-trip with the documented top-level keys
-// — open_tasks, ready_tasks, claimed_tasks, threads, peers — and
-// each list must be a present empty array (not omitted, not null).
+// `--json` is the operator-script surface (governed by ADR 0053).
+// The wire shape is `{schema:{verb,version},data:{...}}` with the
+// payload under data carrying the documented keys (open_tasks,
+// ready_tasks, claimed_tasks, threads, peers), each as a present
+// empty array (not omitted, not null).
 func TestPrimeJSON_ZeroTasksEnvelope(t *testing.T) {
 	var buf bytes.Buffer
-	if err := emitJSON(&buf, primeToJSON(coord.PrimeResult{})); err != nil {
-		t.Fatalf("emitJSON: %v", err)
+	if err := emitEnvelope(&buf, "tasks.prime",
+		primeToSchema(coord.PrimeResult{})); err != nil {
+		t.Fatalf("emitEnvelope: %v", err)
 	}
 
 	if buf.Len() == 0 {
 		t.Fatalf("zero-tasks prime emitted empty stdout; want envelope")
 	}
 
-	var got map[string]json.RawMessage
-	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(buf.Bytes(), &top); err != nil {
 		t.Fatalf("unmarshal envelope: %v\npayload=%q", err, buf.String())
+	}
+
+	// Schema block sanity.
+	var sch struct {
+		Verb    string `json:"verb"`
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(top["schema"], &sch); err != nil {
+		t.Fatalf("unmarshal schema block: %v", err)
+	}
+	if sch.Verb != "tasks.prime" || sch.Version != "v1" {
+		t.Errorf("schema = %+v, want {tasks.prime v1}", sch)
+	}
+
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(top["data"], &got); err != nil {
+		t.Fatalf("unmarshal data block: %v", err)
 	}
 
 	for _, key := range []string{
@@ -42,30 +59,34 @@ func TestPrimeJSON_ZeroTasksEnvelope(t *testing.T) {
 	} {
 		raw, ok := got[key]
 		if !ok {
-			t.Errorf("envelope missing key %q; got=%q", key, buf.String())
+			t.Errorf("data missing key %q; got=%q", key, buf.String())
 			continue
 		}
 		// Each list must serialize as an array (not null) so a
 		// downstream consumer can `.length` without a guard.
 		if string(raw) != "[]" {
-			t.Errorf("envelope key %q = %s, want []", key, raw)
+			t.Errorf("data key %q = %s, want []", key, raw)
 		}
 	}
 }
 
 // TestPrimeJSON_PopulatedEnvelope guards the populated case so a
-// future refactor of primeToJSON keeps the documented keys.
+// future refactor of primeToSchema keeps the documented keys.
 func TestPrimeJSON_PopulatedEnvelope(t *testing.T) {
 	var buf bytes.Buffer
 	r := coord.PrimeResult{
 		OpenTasks: make([]coord.Task, 1),
 	}
-	if err := emitJSON(&buf, primeToJSON(r)); err != nil {
-		t.Fatalf("emitJSON: %v", err)
+	if err := emitEnvelope(&buf, "tasks.prime", primeToSchema(r)); err != nil {
+		t.Fatalf("emitEnvelope: %v", err)
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(buf.Bytes(), &top); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
 	}
 	var got map[string]json.RawMessage
-	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
-		t.Fatalf("unmarshal envelope: %v", err)
+	if err := json.Unmarshal(top["data"], &got); err != nil {
+		t.Fatalf("unmarshal data: %v", err)
 	}
 	if _, ok := got["open_tasks"]; !ok {
 		t.Errorf("populated envelope missing open_tasks; got=%q", buf.String())

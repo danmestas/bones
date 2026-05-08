@@ -123,7 +123,7 @@ func (c *TasksCloseCmd) legacyClose(
 		return err
 	}
 	if c.JSON {
-		return emitJSON(os.Stdout, updated)
+		return emitEnvelope(os.Stdout, "tasks.close", taskToSchema(updated))
 	}
 	return nil
 }
@@ -163,7 +163,7 @@ func (c *TasksCloseCmd) autoReleaseAndClose(
 			if err != nil {
 				return err
 			}
-			return emitJSON(os.Stdout, updated)
+			return emitEnvelope(os.Stdout, "tasks.close", taskToSchema(updated))
 		}
 		return nil
 	}

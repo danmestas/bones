@@ -8,6 +8,7 @@ import (
 
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
+	"github.com/danmestas/bones/cli/schemas"
 	"github.com/danmestas/bones/internal/coord"
 )
 
@@ -59,10 +60,10 @@ func (c *TasksLinkCmd) Run(g *repocli.Globals) error {
 			return err
 		}
 		if c.JSON {
-			return emitJSON(os.Stdout, map[string]string{
-				"from": string(from),
-				"to":   string(to),
-				"type": string(edgeType),
+			return emitEnvelope(os.Stdout, "tasks.link", schemas.TasksLinkPayload{
+				From: string(from),
+				To:   string(to),
+				Type: string(edgeType),
 			})
 		}
 		return nil

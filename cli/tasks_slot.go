@@ -1,11 +1,11 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
 
+	"github.com/danmestas/bones/cli/schemas"
 	"github.com/danmestas/bones/internal/tasks"
 )
 
@@ -93,20 +93,20 @@ func groupBySlot(in []tasks.Task) []slotGroup {
 // know ADR 0023/0028 to act on it.
 func emitBySlot(w io.Writer, groups []slotGroup, asJSON bool) error {
 	if asJSON {
-		payload := struct {
-			Slots     []slotGroup `json:"slots"`
-			Threshold int         `json:"hot_threshold"`
-		}{
-			Slots:     groups,
-			Threshold: HotSlotThreshold,
+		schemaSlots := make([]schemas.TasksSlotGroup, len(groups))
+		for i, g := range groups {
+			schemaSlots[i] = schemas.TasksSlotGroup{
+				Slot:      g.Slot,
+				OpenCount: g.OpenCount,
+				Hot:       g.Hot,
+				TaskIDs:   g.TaskIDs,
+			}
 		}
-		data, err := json.Marshal(payload)
-		if err != nil {
-			return fmt.Errorf("marshal by-slot: %w", err)
+		payload := schemas.TasksBySlotPayload{
+			Slots:        schemaSlots,
+			HotThreshold: HotSlotThreshold,
 		}
-		data = append(data, '\n')
-		_, err = w.Write(data)
-		return err
+		return emitEnvelope(w, "tasks.bySlot", payload)
 	}
 	// Plain-text rendering. The caption is the serialization rule
 	// surfaced inline — operators must not have to read ADRs to

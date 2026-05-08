@@ -72,7 +72,7 @@ func (c *TasksClaimCmd) Run(g *repocli.Globals) error {
 			return err
 		}
 		if c.JSON {
-			return emitJSON(os.Stdout, updated)
+			return emitEnvelope(os.Stdout, "tasks.claim", taskToSchema(updated))
 		}
 		return nil
 	}))
