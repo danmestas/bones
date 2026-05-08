@@ -52,6 +52,13 @@ type Config struct {
 	// archive Manager (compacted closed-task snapshots) opens false
 	// so that compaction-only writes do not flood the event log.
 	EnableEventLog bool
+
+	// RecoverOnOpen controls whether Open runs Recover() to reconcile
+	// orphan events. Recovery is safe at hub start (single process,
+	// no concurrent Tx in flight) but races against live Tx callers,
+	// so every-call Open should leave this false. Hub start passes
+	// true; coord callers, CLI verbs, and tests pass false.
+	RecoverOnOpen bool
 }
 
 // defaultChanBuffer is the Watch channel buffer used when Config leaves
@@ -109,6 +116,28 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Manager, error) {
 			return nil, fmt.Errorf("tasks.Open: events stream: %w", err)
 		}
 		mgr.stream = stream
+		// One-time migration of pre-event-log KV state. Idempotent via
+		// the migrationMarkerKey marker in the bucket. Migration is
+		// safe to run on every Open because the marker key short-
+		// circuits subsequent calls.
+		if _, err := Migrate(ctx, mgr); err != nil {
+			return nil, fmt.Errorf("tasks.Open: migrate: %w", err)
+		}
+		// Recovery is opt-in via RecoverOnOpen because tasks.Open is
+		// called by every CLI verb and every coord.OpenLeaf — running
+		// Recover concurrently with live Tx writes is racy by design
+		// (the Tx writer and the recovery loop both want to bring KV
+		// to parity with the stream and they can clobber each other's
+		// CAS). Hub-start is the one place where Recovery is safe:
+		// the hub is single-process, no Tx is in flight yet, and the
+		// orphan-event reconciliation is the whole point of starting.
+		// Hub-start integration ships in a follow-up; for this PR,
+		// callers wanting recovery invoke tasks.Recover() explicitly.
+		if cfg.RecoverOnOpen {
+			if _, err := Recover(ctx, mgr); err != nil {
+				return nil, fmt.Errorf("tasks.Open: recover: %w", err)
+			}
+		}
 	}
 	return mgr, nil
 }
@@ -322,9 +351,18 @@ func (m *Manager) Purge(ctx context.Context, id string) error {
 // delete markers or undecodable values so List can skip them quietly.
 // The separate return path for errors.Is(err, ErrNotFound) handles the
 // race where a key was listed and then deleted before we read it.
+//
+// The migration marker key (ADR 0052) is filtered here so List output
+// stays free of the bookkeeping entry. The marker is a Task-shaped
+// placeholder so the bucket's value-shape expectations hold; treating
+// it as a normal Task in List/Watch output would surface a synthetic
+// "task" to every consumer.
 func (m *Manager) readOne(
 	ctx context.Context, key string,
 ) (*Task, error) {
+	if key == migrationMarkerKey {
+		return nil, nil
+	}
 	entry, err := m.kv.Get(ctx, key)
 	if err != nil {
 		if errors.Is(err, jetstream.ErrKeyNotFound) {

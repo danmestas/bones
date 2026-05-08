@@ -404,7 +404,7 @@ func (tx *Tx) publish(env EventEnvelope) (uint64, error) {
 }
 
 // FieldChangeFromAny builds a FieldChange tuple from any-typed old/new
-// values, marshalling each to JSON. Convenient for Update callers that
+// values, marshaling each to JSON. Convenient for Update callers that
 // already have the typed values in hand.
 func FieldChangeFromAny(field string, oldV, newV any) (FieldChange, error) {
 	oldRaw, err := json.Marshal(oldV)

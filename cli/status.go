@@ -199,7 +199,13 @@ func gatherStatus(ctx context.Context, info workspace.Info) (statusReport, error
 		rep.Activity = append(rep.Activity, gatherFossilEvents(fossilBin, hubRepo, 15)...)
 	}
 
-	rep.Activity = append(rep.Activity, gatherTaskEvents(taskList)...)
+	// Recent activity sources from the task event log per ADR 0052;
+	// the prior gatherTaskEvents synthesizer (lifecycle-bookend only)
+	// is gone. The log carries every state-changing event including
+	// claim/unclaim/update/link/slot_changed transitions.
+	if logEvents, err := mgr.Recent(ctx, tasks.RecentActivityCount); err == nil {
+		rep.Activity = append(rep.Activity, taskEventsToActivity(logEvents, rep.TasksByID)...)
+	}
 	sort.Slice(rep.Activity, func(i, j int) bool {
 		return rep.Activity[i].Time.After(rep.Activity[j].Time)
 	})
@@ -207,6 +213,39 @@ func gatherStatus(ctx context.Context, info workspace.Info) (statusReport, error
 		rep.Activity = rep.Activity[:10]
 	}
 	return rep, nil
+}
+
+// taskEventsToActivity translates event-log envelopes into
+// activityEvent rows for the unified Recent activity feed. Title is
+// looked up from the projection so the renderer has a human-readable
+// label for each event; missing-from-projection cases (just-deleted
+// tasks) render with empty title.
+func taskEventsToActivity(
+	envs []tasks.EventEnvelope, byID map[string]tasks.Task,
+) []activityEvent {
+	out := make([]activityEvent, 0, len(envs))
+	for _, env := range envs {
+		title := ""
+		if t, ok := byID[env.TaskID]; ok {
+			title = t.Title
+		}
+		kind := actTaskCreate
+		switch env.Type {
+		case tasks.EventTypeCreated:
+			kind = actTaskCreate
+		case tasks.EventTypeClosed:
+			kind = actTaskClose
+		default:
+			continue
+		}
+		out = append(out, activityEvent{
+			Time:   env.Timestamp,
+			Kind:   kind,
+			TaskID: env.TaskID,
+			Title:  title,
+		})
+	}
+	return out
 }
 
 // gatherFossilEvents shells `fossil timeline` and parses up to n recent
@@ -246,28 +285,11 @@ func gatherFossilEvents(fossilBin, hubRepo string, n int) []activityEvent {
 	return events
 }
 
-// gatherTaskEvents synthesizes activity events from current task state.
-// Without an event log we can't reconstruct claim transitions, so we
-// emit just create + close — the lifecycle bookends. Good enough for
-// the unified feed to feel complete on a working workspace.
-func gatherTaskEvents(list []tasks.Task) []activityEvent {
-	out := make([]activityEvent, 0, len(list)*2)
-	for _, t := range list {
-		if !t.CreatedAt.IsZero() {
-			out = append(out, activityEvent{
-				Time: t.CreatedAt, Kind: actTaskCreate,
-				TaskID: t.ID, Title: t.Title,
-			})
-		}
-		if t.ClosedAt != nil && !t.ClosedAt.IsZero() {
-			out = append(out, activityEvent{
-				Time: *t.ClosedAt, Kind: actTaskClose,
-				TaskID: t.ID, Title: t.Title,
-			})
-		}
-	}
-	return out
-}
+// (Recent activity now sources from the task event log — the prior
+// gatherTaskEvents synthesizer was deleted per ADR 0052. The log
+// carries claim/unclaim/update/link/slot_changed transitions in
+// addition to the lifecycle bookends, so the feed is no longer
+// permanently incomplete.)
 
 // splitTimeAndRest extracts the leading "HH:MM:SS " timestamp fossil
 // emits even with custom -F formats, returning (time, rest, ok).
