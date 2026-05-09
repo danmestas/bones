@@ -393,7 +393,7 @@ func migrateHookProtocolEntries(w io.Writer, hooks map[string]any,
 				summary)
 			warns++
 		} else {
-			pruneCommandFromEvent(hooks, "SessionStart", "bones tasks prime --json")
+			pruneCommandFromEvent(hooks, "SessionStart", "bones tasks prime --json", nil)
 			addHookWithMatcher(hooks, "SessionStart",
 				clauderhooks.SessionStartMatcher, primeCmd)
 			_, _ = fmt.Fprintf(w,
@@ -415,7 +415,7 @@ func migrateHookProtocolEntries(w io.Writer, hooks map[string]any,
 				summary)
 			warns++
 		} else {
-			pruneCommandFromEvent(hooks, "PreCompact", "bones tasks prime")
+			pruneCommandFromEvent(hooks, "PreCompact", "bones tasks prime", nil)
 			_, _ = fmt.Fprintf(w,
 				"  FIX   .claude/settings.json: %s\n", summary)
 			rewrites = append(rewrites, summary)
@@ -974,7 +974,7 @@ func rewriteCanonicalHookEntry(hooks map[string]any) bool {
 	// drifted entry might be at a different matcher or have
 	// modified fields. Pruning resets the slate.
 	for _, h := range bonesOwnedHookCommands {
-		pruneCommandFromEvent(hooks, h.Event, h.Command)
+		pruneCommandFromEvent(hooks, h.Event, h.Command, nil)
 	}
 	// Re-install canonically. Prime gets the matcher; hub start is
 	// at default matcher.

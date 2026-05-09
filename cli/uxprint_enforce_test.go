@@ -29,6 +29,7 @@ var mutatingVerbs = []struct {
 	{"tasks.update", "tasks_update.go"},
 	{"tasks.link", "tasks_link.go"},
 	{"swarm.dispatch", "swarm_dispatch.go"},
+	{"up", "init.go"},
 }
 
 // TestEveryMutatingVerbCallsUxprint walks each entry in mutatingVerbs

@@ -121,6 +121,7 @@ func payloadInstances() map[string]any {
 		"TasksReadyPayload":     &schemas.TasksReadyPayload{},
 		"TasksShowPayload":      &schemas.TasksShowPayload{},
 		"TasksUpdatePayload":    &schemas.TasksUpdatePayload{},
+		"UpPayload":             &schemas.UpPayload{},
 		"WorkspacesGetPayload":  &schemas.WorkspacesGetPayload{},
 		"WorkspacesListPayload": &schemas.WorkspacesListPayload{},
 	}

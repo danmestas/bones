@@ -722,7 +722,7 @@ func TestPruneLegacyBootstrap_RemovesLegacyEntry(t *testing.T) {
 			},
 		},
 	}
-	pruneLegacyBootstrap(hooks)
+	pruneLegacyBootstrap(hooks, nil)
 	if _, ok := hooks["SessionStart"]; ok {
 		t.Errorf("SessionStart key should be removed; got %v", hooks)
 	}
@@ -749,7 +749,7 @@ func TestPruneLegacyBootstrap_PreservesUnrelatedEntries(t *testing.T) {
 			},
 		},
 	}
-	pruneLegacyBootstrap(hooks)
+	pruneLegacyBootstrap(hooks, nil)
 	groups, ok := hooks["SessionStart"].([]any)
 	if !ok || len(groups) != 1 {
 		t.Fatalf("expected 1 group remaining, got %v", hooks)
@@ -781,7 +781,7 @@ func TestPruneLegacyBootstrap_NoLegacyEntry(t *testing.T) {
 			},
 		},
 	}
-	pruneLegacyBootstrap(hooks)
+	pruneLegacyBootstrap(hooks, nil)
 	groups, ok := hooks["SessionStart"].([]any)
 	if !ok || len(groups) != 1 {
 		t.Fatalf("SessionStart group dropped unexpectedly: %v", hooks)

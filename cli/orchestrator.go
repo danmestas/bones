@@ -35,8 +35,9 @@ type scaffoldOpts struct {
 
 // scaffoldFootprint captures what scaffoldOrchestrator did during a
 // single invocation, for surfacing in the default-mode `bones up`
-// summary (issue #173). All counts and slices are zero-value safe; a
-// re-run on a fully-scaffolded workspace yields an empty footprint.
+// summary (issue #173, issue #314). All counts and slices are zero-
+// value safe; a re-run on a fully-scaffolded workspace yields an
+// empty footprint.
 type scaffoldFootprint struct {
 	// FilesWritten lists workspace-relative paths that were created or
 	// rewritten as bones-owned files (e.g. .bones/scaffold_version,
@@ -47,6 +48,20 @@ type scaffoldFootprint struct {
 	// keyed by event name (e.g. "SessionStart": 2, "PreCompact": 1).
 	// Existing duplicates are not counted.
 	HooksAddedByEvent map[string]int
+
+	// HookInstalls is the per-event list of fresh hook entries added
+	// to settings.json (issue #314). Each entry pairs (event, command);
+	// renderers turn these into `hooks installed <event> <cmd>` lines
+	// after pairing them with HookRewrites.
+	HookInstalls []hookInstall
+
+	// HookRemovals records hook entries pruned from settings.json by
+	// migration helpers (legacy `bones tasks prime --json`, the bash
+	// hub-bootstrap shim, the legacy hub-shutdown entry under Stop /
+	// SessionEnd). The per-call `runUp` pairs these with HookInstalls
+	// to produce `hooks rewrote <event> "<from>" → "<to>"` lines per
+	// #314 — silent rewrites are the bug being surfaced.
+	HookRemovals []hookInstall
 
 	// SkillsModified lists workspace-relative paths under
 	// .claude/skills/<bones-owned skill>/ that diverged from the
@@ -218,7 +233,7 @@ func mergeSettings(path string, fp *scaffoldFootprint) error {
 	// Drop the pre-ADR-0041 bash hub-bootstrap entry before adding the
 	// new `bones hub start` entry, so re-scaffold over a legacy workspace
 	// doesn't leave both commands wired.
-	pruneLegacyBootstrap(hooks)
+	pruneLegacyBootstrap(hooks, fp)
 
 	// The hub is a workspace-scoped daemon (per-workspace pid files +
 	// per-workspace ports). Tying its teardown to SessionEnd was a bug:
@@ -226,8 +241,8 @@ func mergeSettings(path string, fp *scaffoldFootprint) error {
 	// even another concurrent session in the same workspace, may still
 	// be using. `bones down` is the explicit teardown; SessionEnd no
 	// longer carries hub-shutdown.
-	migrateStopToSessionEnd(hooks)
-	migrateSessionEndShutdown(hooks)
+	migrateStopToSessionEnd(hooks, fp)
+	migrateSessionEndShutdown(hooks, fp)
 
 	// ADR 0051 migration: the v0.12 SessionStart `bones tasks prime
 	// --json` entry was a Claude-Code-protocol no-op; replace it
@@ -235,7 +250,7 @@ func mergeSettings(path string, fp *scaffoldFootprint) error {
 	// substring-matches, but the needle here is specific enough
 	// (`bones tasks prime --json`) that it only catches the v0.12
 	// command — user-added prime variants in other shapes survive.
-	pruneCommandFromEvent(hooks, "SessionStart", "bones tasks prime --json")
+	pruneCommandFromEvent(hooks, "SessionStart", "bones tasks prime --json", fp)
 
 	// ADR 0051 migration: PreCompact has no `additionalContext`
 	// mechanism documented in the Claude Code hook protocol. Any
@@ -246,7 +261,7 @@ func mergeSettings(path string, fp *scaffoldFootprint) error {
 	// removed equally. User scripts that happen to invoke
 	// `bones tasks prime` from PreCompact are exceptional and would
 	// have been a v0.12-era workaround; they are not preserved.
-	pruneCommandFromEvent(hooks, "PreCompact", "bones tasks prime")
+	pruneCommandFromEvent(hooks, "PreCompact", "bones tasks prime", fp)
 
 	// Install the canonical envelope-emitting prime entry under
 	// SessionStart with matcher "startup|compact" so the same hook
@@ -258,6 +273,7 @@ func mergeSettings(path string, fp *scaffoldFootprint) error {
 	if addHookWithMatcher(hooks, "SessionStart",
 		clauderhooks.SessionStartMatcher, primeCmd) {
 		recordHook(fp, "SessionStart")
+		recordHookInstall(fp, "SessionStart", primeCmd)
 	}
 
 	// `bones hub start` keeps its existing default-matcher placement
@@ -266,6 +282,7 @@ func mergeSettings(path string, fp *scaffoldFootprint) error {
 	// side-effecting daemon launcher, not a context-injection hook.
 	if addHook(hooks, "SessionStart", "bones hub start") {
 		recordHook(fp, "SessionStart")
+		recordHookInstall(fp, "SessionStart", "bones hub start")
 	}
 
 	root["hooks"] = hooks
@@ -286,38 +303,43 @@ func mergeSettings(path string, fp *scaffoldFootprint) error {
 // the migration now just prunes the legacy entry. The scan is
 // shim-specific (matches the hub-shutdown.sh command) so unrelated Stop
 // hooks the user has installed are preserved.
-func migrateStopToSessionEnd(hooks map[string]any) {
-	pruneHubShutdown(hooks, "Stop")
+func migrateStopToSessionEnd(hooks map[string]any, fp *scaffoldFootprint) {
+	pruneHubShutdown(hooks, "Stop", fp)
 }
 
 // migrateSessionEndShutdown drops the bones-managed hub-shutdown entry
 // from the SessionEnd event for workspaces scaffolded before ADR 0038.
 // The hub is workspace-scoped now and only torn down by `bones down`;
 // SessionEnd should not stop it.
-func migrateSessionEndShutdown(hooks map[string]any) {
-	pruneHubShutdown(hooks, "SessionEnd")
+func migrateSessionEndShutdown(hooks map[string]any, fp *scaffoldFootprint) {
+	pruneHubShutdown(hooks, "SessionEnd", fp)
 }
 
 // pruneLegacyBootstrap removes the pre-ADR-0041 SessionStart entry
 // invoking bash .orchestrator/scripts/hub-bootstrap.sh. Re-scaffolding
 // over an existing workspace replaces it with the `bones hub start`
 // invocation; pruning first prevents both entries from coexisting.
-func pruneLegacyBootstrap(hooks map[string]any) {
-	pruneCommandFromEvent(hooks, "SessionStart", "hub-bootstrap.sh")
+func pruneLegacyBootstrap(hooks map[string]any, fp *scaffoldFootprint) {
+	pruneCommandFromEvent(hooks, "SessionStart", "hub-bootstrap.sh", fp)
 }
 
 // pruneHubShutdown removes any hook entry under event whose command
 // references hub-shutdown.sh. Wraps pruneCommandFromEvent so the two
 // hub-shutdown migration helpers retain a self-documenting name.
-func pruneHubShutdown(hooks map[string]any, event string) {
-	pruneCommandFromEvent(hooks, event, "hub-shutdown.sh")
+func pruneHubShutdown(hooks map[string]any, event string, fp *scaffoldFootprint) {
+	pruneCommandFromEvent(hooks, event, "hub-shutdown.sh", fp)
 }
 
 // pruneCommandFromEvent removes any hook entry under the given event
 // whose command contains needle. Empty matcher groups and the event
 // key itself are cleaned up if no entries remain. Unrelated entries
 // are preserved verbatim.
-func pruneCommandFromEvent(hooks map[string]any, event, needle string) {
+//
+// Per #314 each removed entry is recorded into fp.HookRemovals so
+// `bones up` can pair it with a freshly-installed entry under the
+// same event and surface the migration as a `hooks rewrote` line.
+// fp is allowed to be nil for callers that do not care.
+func pruneCommandFromEvent(hooks map[string]any, event, needle string, fp *scaffoldFootprint) {
 	groups, _ := hooks[event].([]any)
 	if groups == nil {
 		return
@@ -340,7 +362,9 @@ func pruneCommandFromEvent(hooks map[string]any, event, needle string) {
 			cmd, _ := em["command"].(string)
 			if !strings.Contains(cmd, needle) {
 				keepEntries = append(keepEntries, e)
+				continue
 			}
+			recordHookRemoval(fp, event, cmd)
 		}
 		if len(keepEntries) == 0 {
 			continue
@@ -441,4 +465,33 @@ func recordHook(fp *scaffoldFootprint, event string) {
 		fp.HooksAddedByEvent = map[string]int{}
 	}
 	fp.HooksAddedByEvent[event]++
+}
+
+// recordHookInstall captures a freshly-installed hook entry into
+// fp.HookInstalls. runUp pairs the result with fp.HookRemovals to
+// emit `hooks rewrote` lines (when an event sees both a removal and
+// an addition) or `hooks installed` lines (additions with no
+// matching removal) per #314. nil fp is a no-op.
+func recordHookInstall(fp *scaffoldFootprint, event, cmd string) {
+	if fp == nil {
+		return
+	}
+	fp.HookInstalls = append(fp.HookInstalls, hookInstall{
+		Event:   event,
+		Command: cmd,
+	})
+}
+
+// recordHookRemoval captures a pruned hook entry into fp.HookRemovals.
+// Used by pruneCommandFromEvent so migration paths surface in the up
+// summary instead of silently rewriting the operator's settings.json.
+// nil fp is a no-op.
+func recordHookRemoval(fp *scaffoldFootprint, event, cmd string) {
+	if fp == nil {
+		return
+	}
+	fp.HookRemovals = append(fp.HookRemovals, hookInstall{
+		Event:   event,
+		Command: cmd,
+	})
 }

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "actions": {
+      "items": {
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "category",
+          "action",
+          "target"
+        ]
+      },
+      "type": "array"
+    },
+    "summary": {
+      "properties": {
+        "workspace": {
+          "type": "string"
+        },
+        "action_count": {
+          "type": "integer"
+        }
+      },
+      "type": "object",
+      "required": [
+        "workspace",
+        "action_count"
+      ]
+    }
+  },
+  "type": "object",
+  "required": [
+    "actions",
+    "summary"
+  ],
+  "title": "UpPayload",
+  "description": "Payload (`data` field) for `bones up --json` envelope, version v1."
+}

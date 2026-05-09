@@ -396,7 +396,7 @@ func TestCheckManifestIntegrity_MissingSettingsHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	hooks := settings["hooks"].(map[string]any)
-	pruneCommandFromEvent(hooks, "SessionStart", "bones hub start")
+	pruneCommandFromEvent(hooks, "SessionStart", "bones hub start", nil)
 	out, _ := json.MarshalIndent(settings, "", "  ")
 	if err := os.WriteFile(settingsPath, append(out, '\n'), 0o644); err != nil {
 		t.Fatal(err)

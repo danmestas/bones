@@ -206,6 +206,10 @@ func zeroPayloadFor(t *testing.T, name string) any {
 		return schemas.TasksShowPayload{Files: []string{}}
 	case "TasksUpdatePayload":
 		return schemas.TasksUpdatePayload{Files: []string{}}
+	case "UpPayload":
+		return schemas.UpPayload{
+			Actions: []schemas.UpAction{},
+		}
 	case "WorkspacesGetPayload":
 		return schemas.WorkspacesGetPayload{}
 	case "WorkspacesListPayload":
@@ -259,6 +263,9 @@ func TestEvery_JSONFlag_HasRegistryEntry(t *testing.T) {
 		"tasks_ready.go":  "tasks.ready",
 		"tasks_show.go":   "tasks.show",
 		"tasks_update.go": "tasks.update",
+		// init.go declares UpCmd; --json on `bones up` lives there
+		// per the existing struct layout (#314).
+		"init.go": "up",
 		// workspaces.go also drives workspaces.get via WorkspacesShowCmd.
 		"workspaces.go": "workspaces.list",
 	}
