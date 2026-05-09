@@ -13,6 +13,9 @@
           "hub_url": {
             "type": "string"
           },
+          "state": {
+            "type": "string"
+          },
           "sessions": {
             "type": "integer"
           },
@@ -26,6 +29,7 @@
           "cwd",
           "name",
           "hub_url",
+          "state",
           "sessions",
           "started_at"
         ]

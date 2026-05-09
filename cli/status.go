@@ -460,9 +460,9 @@ func truncateTitle(s string, n int) string {
 }
 
 // renderStatusAll iterates the workspace registry and prints up to
-// three sections (#264):
+// four sections (#264, #305):
 //
-//  1. Active workspaces with running hubs — the existing live-table.
+//  1. Active workspaces with running hubs — the live-table.
 //  2. Orphan hubs — `bones hub start` processes alive on this host but
 //     either with no registry entry, a registry entry pointing at a
 //     different PID, or whose cwd no longer exists. Surfaces hubs that
@@ -472,8 +472,13 @@ func truncateTitle(s string, n int) string {
 //     self-prune (#229) but whose hub HTTP probe failed (PID alive,
 //     port not bound). Useful for "bookmarked workspace where the hub
 //     stopped" without quietly deleting the registry entry on view.
+//  4. Idle workspaces — registered via `bones up` but no hub serving
+//     yet (PID=0 entries from #305). Lets operators see workspaces
+//     that exist on disk before any verb has triggered a hub start;
+//     pre-#305 a fresh `bones up` showed an empty registry with the
+//     misleading "use 'bones up' in a project" hint.
 //
-// Sections 2 and 3 are skipped entirely (header + body) when empty.
+// Sections 2-4 are skipped entirely (header + body) when empty.
 //
 // Headers use double-equal markers (`== Active workspaces ==`) so a
 // terminal-savvy operator can split sections visually without column
@@ -483,13 +488,32 @@ func renderStatusAll(w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	var active, paused []registry.Entry
+	var active, paused, idle []registry.Entry
 	for _, e := range entries {
-		if registry.IsAlive(e) {
+		switch {
+		case e.HubPID == 0:
+			idle = append(idle, e)
+		case registry.IsAlive(e):
 			active = append(active, e)
-		} else {
+		default:
 			paused = append(paused, e)
 		}
+	}
+
+	// Empty-registry short-circuit (#305): if the registry holds no
+	// entries, emit the friendly hint and skip the orphan walk
+	// entirely. Pre-#305 the orphan walk ran first and the "No
+	// workspaces" message was suppressed when ANY orphan `bones hub
+	// start` process existed on the host — making
+	// TestStatusAllEmptyRegistry flake on dev machines that happened
+	// to have a hub running for an unrelated workspace. The orphan
+	// section's value is "you have a registered workspace whose hub
+	// drifted from the registry"; with no registry entries at all,
+	// there's nothing to drift FROM, so suppressing the section is
+	// the right call.
+	if len(entries) == 0 {
+		_, err := io.WriteString(w, "No workspaces running. Use 'bones up' in a project.\n")
+		return err
 	}
 
 	// Orphans: walk the host process table for `bones hub start` and
@@ -497,11 +521,6 @@ func renderStatusAll(w io.Writer) error {
 	// PID. ps/lsof failures degrade the orphan section to empty rather
 	// than failing the whole command (#264 edge case).
 	orphans, _ := liveOrphanHubs(active)
-
-	if len(active) == 0 && len(orphans) == 0 && len(paused) == 0 {
-		_, err := io.WriteString(w, "No workspaces running. Use 'bones up' in a project.\n")
-		return err
-	}
 
 	if err := renderActiveWorkspacesSection(w, active); err != nil {
 		return err
@@ -522,6 +541,14 @@ func renderStatusAll(w io.Writer) error {
 			return err
 		}
 	}
+	if len(idle) > 0 {
+		if _, err := io.WriteString(w, "\n"); err != nil {
+			return err
+		}
+		if err := renderIdleWorkspacesSection(w, idle); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -529,6 +556,11 @@ func renderStatusAll(w io.Writer) error {
 // the active set is empty but other sections exist, we still print the
 // header + a "(none)" body so the operator can see "no live hubs but
 // here are orphans/paused" without ambiguity.
+//
+// STATE column carries the literal "active" so scripts that grep
+// across the active + idle (#305) tables can branch on a single
+// column. Section header is the human-facing signal; STATE is the
+// scripted one.
 func renderActiveWorkspacesSection(w io.Writer, active []registry.Entry) error {
 	if _, err := io.WriteString(w, "== Active workspaces ==\n"); err != nil {
 		return err
@@ -538,16 +570,45 @@ func renderActiveWorkspacesSection(w io.Writer, active []registry.Entry) error {
 		return err
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "WORKSPACE\tPATH\tHUB\tSESSIONS\tUPTIME"); err != nil {
+	if _, err := fmt.Fprintln(tw, "WORKSPACE\tPATH\tSTATE\tHUB\tSESSIONS\tUPTIME"); err != nil {
 		return err
 	}
 	for _, e := range active {
-		_, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n",
+		_, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n",
 			e.Name,
 			shortenHome(e.Cwd),
+			"active",
 			extractPort(e.HubURL),
 			sessions.CountByWorkspace(e.Cwd),
 			humanDuration(time.Since(e.StartedAt)),
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
+}
+
+// renderIdleWorkspacesSection emits Section 4 of status --all (#305):
+// workspaces registered by `bones up` for which no hub is currently
+// serving (HubPID == 0). The row reports the same identity columns as
+// the active table plus the registration timestamp so operators can
+// see "I've up'd this workspace, no agent has touched it yet". STATE
+// holds the literal "idle" for scripted parity with the active table.
+func renderIdleWorkspacesSection(w io.Writer, idle []registry.Entry) error {
+	if _, err := io.WriteString(w, "== Idle workspaces ==\n"); err != nil {
+		return err
+	}
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "WORKSPACE\tPATH\tSTATE\tREGISTERED"); err != nil {
+		return err
+	}
+	for _, e := range idle {
+		_, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n",
+			e.Name,
+			shortenHome(e.Cwd),
+			"idle",
+			humanAge(time.Since(e.StartedAt)),
 		)
 		if err != nil {
 			return err
@@ -684,30 +745,39 @@ func renderPausedWorkspacesSection(w io.Writer, paused []registry.Entry) error {
 }
 
 // renderStatusAllJSON emits a JSON object with a "workspaces" array
-// covering every live registry entry. Wrapped in the ADR 0053
+// covering every registered workspace. Wrapped in the ADR 0053
 // envelope under verb "status".
+//
+// Per #305 the payload carries every entry the registry still holds
+// (including PID=0 idle entries from `bones up`) with a per-row
+// `state` field: `active` (live hub, PID alive + HTTP probe ok),
+// `idle` (PID=0, no hub serving), or `paused` (PID > 0 but probe
+// failed). Pre-#305 only `active` rows appeared and PID=0 entries
+// were silently dropped.
 func renderStatusAllJSON(w io.Writer) error {
 	entries, err := registry.List()
 	if err != nil {
 		return err
 	}
-	live := entries[:0]
+	rows := make([]schemas.StatusWorkspaceRow, 0, len(entries))
 	for _, e := range entries {
-		if registry.IsAlive(e) {
-			live = append(live, e)
-		} else {
-			_ = registry.Remove(e.Cwd)
+		state := "idle"
+		switch {
+		case e.HubPID == 0:
+			state = "idle"
+		case registry.IsAlive(e):
+			state = "active"
+		default:
+			state = "paused"
 		}
-	}
-	rows := make([]schemas.StatusWorkspaceRow, len(live))
-	for i, e := range live {
-		rows[i] = schemas.StatusWorkspaceRow{
+		rows = append(rows, schemas.StatusWorkspaceRow{
 			Cwd:       e.Cwd,
 			Name:      e.Name,
 			HubURL:    e.HubURL,
+			State:     state,
 			Sessions:  sessions.CountByWorkspace(e.Cwd),
 			StartedAt: timefmt.NewLoggedTime(e.StartedAt),
-		}
+		})
 	}
 	return emitEnvelope(w, "status", schemas.StatusAllPayload{Workspaces: rows})
 }

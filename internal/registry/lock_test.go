@@ -1,7 +1,9 @@
 package registry
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -147,6 +149,58 @@ func pidAliveOrSkip(t *testing.T, pid int) bool {
 		t.Skip("dead-pid sentinel is alive on this host")
 	}
 	return false
+}
+
+// TestAcquireWorkspaceLock_DeadHolderEmitsRecoveryLog pins #305: when
+// the lock is reclaimed from a dead holder, the recovery is announced
+// via slog.Warn("workspace lock: stale lock recovered", ...) so
+// operators reading .bones/hub.log can correlate "the hub started but
+// the lock looked held" sequences instead of seeing a silent retake
+// followed by the hub coming up. Pre-#305 the recovery happened but
+// emitted no log line, leaving the hub-log void of any signal that a
+// crashed prior hub had been recovered from.
+func TestAcquireWorkspaceLock_DeadHolderEmitsRecoveryLog(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix-only: dead-PID reclamation uses flock")
+	}
+	root := t.TempDir()
+	bones := filepath.Join(root, ".bones")
+	if err := os.MkdirAll(bones, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dead := 999_999
+	for !pidAliveOrSkip(t, dead) {
+		break
+	}
+	pidPath := filepath.Join(bones, "hub.lock.pid")
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(dead)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Capture slog output through a JSON handler bound to a buffer for
+	// the duration of this test.
+	var buf bytes.Buffer
+	prev := slog.Default()
+	handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	})
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	rel, err := AcquireWorkspaceLock(root)
+	if err != nil {
+		t.Fatalf("AcquireWorkspaceLock: %v", err)
+	}
+	t.Cleanup(rel)
+
+	out := buf.String()
+	if !strings.Contains(out, "stale lock recovered") {
+		t.Errorf("expected stale-lock recovery log, got: %s", out)
+	}
+	if !strings.Contains(out, strconv.Itoa(dead)) {
+		t.Errorf("expected dead pid %d in recovery log, got: %s", dead, out)
+	}
 }
 
 // TestHelperHoldsLock is the child helper for the "held by live

@@ -2,6 +2,7 @@ package registry
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -76,8 +77,20 @@ func AcquireWorkspaceLock(root string) (func(), error) {
 	// "holder pid in lock.pid is alive" as the contention signal there.
 	// On Unix this is just an early human-readable error: flock will
 	// also fail and we'd still surface the holder pid below.
-	if holder, ok := readLockHolderPID(pidPath); ok && holder != os.Getpid() && pidAlive(holder) {
-		return nil, &ErrLockHeld{PID: holder, Path: path}
+	//
+	// Stale-holder shortcut (#305): if the recorded holder is dead the
+	// pid file is leftover crud from a crashed prior run. Remove it
+	// proactively so the post-flock recovery branch starts from a
+	// clean slate, and emit the recovery log line operators expect.
+	// On Windows this is the ONLY recovery path (no flock to fall
+	// through to).
+	if holder, ok := readLockHolderPID(pidPath); ok && holder != os.Getpid() {
+		if pidAlive(holder) {
+			return nil, &ErrLockHeld{PID: holder, Path: path}
+		}
+		slog.Warn("workspace lock: stale lock recovered",
+			"pid", holder, "lock", path, "reason", "dead")
+		_ = os.Remove(pidPath)
 	}
 
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
@@ -90,8 +103,12 @@ func AcquireWorkspaceLock(root string) (func(), error) {
 		// Stale-holder reclamation: if the recorded holder is dead,
 		// delete the pid file and retry once. The flock itself is
 		// already released (the dead process exited), so the retry
-		// succeeds.
+		// succeeds. Log the recovery so operators can correlate a
+		// "hub started but the lock looked held" sequence in
+		// .bones/hub.log (#305 acceptance criterion).
 		if holder > 0 && !pidAlive(holder) {
+			slog.Warn("workspace lock: stale lock recovered",
+				"pid", holder, "lock", path, "reason", "dead")
 			_ = os.Remove(pidPath)
 			f, err = os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 			if err != nil {
