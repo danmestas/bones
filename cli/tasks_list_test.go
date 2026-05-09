@@ -9,6 +9,66 @@ import (
 	"github.com/danmestas/bones/internal/tasks"
 )
 
+// TestResolveStatusFlags covers the alias surface added in #312:
+// --closed/--open/--claimed each resolve to the equivalent --status=
+// value, two aliases together error, and an alias combined with --status
+// errors. The empty case (no flag set) preserves the existing
+// no-status-filter behavior.
+func TestResolveStatusFlags(t *testing.T) {
+	tests := []struct {
+		name                  string
+		status                string
+		closed, open, claimed bool
+		want                  string
+		wantErr               string
+	}{
+		{name: "none", want: ""},
+		{name: "status only", status: "open", want: "open"},
+		{name: "alias closed", closed: true, want: "closed"},
+		{name: "alias open", open: true, want: "open"},
+		{name: "alias claimed", claimed: true, want: "claimed"},
+		{
+			name:    "two aliases",
+			closed:  true,
+			open:    true,
+			wantErr: "mutually exclusive",
+		},
+		{
+			name:    "all three aliases",
+			closed:  true,
+			open:    true,
+			claimed: true,
+			wantErr: "mutually exclusive",
+		},
+		{
+			name:    "alias with status",
+			status:  "open",
+			closed:  true,
+			wantErr: "--closed and --status",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveStatusFlags(tc.status, tc.closed, tc.open, tc.claimed)
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("want error containing %q; got nil (val=%q)", tc.wantErr, got)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("error %q missing %q", err.Error(), tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("got=%q want=%q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestFilterByIDSet(t *testing.T) {
 	all := []tasks.Task{
 		{ID: "a", Title: "alpha"},
