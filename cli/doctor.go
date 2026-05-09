@@ -806,19 +806,18 @@ func resetDriftedHooks(w io.Writer, cwd string, driftedKeys []string) (int, erro
 		hooks = map[string]any{}
 		root["hooks"] = hooks
 	}
-	// Rewrite every drifted key back to canonical. We don't try to
-	// be surgical at the entry level: the canonical re-install
-	// helpers (pruneCommandFromEvent + addHookWithMatcher) are
-	// idempotent per-command, so reseating every bones-owned
-	// command produces the same byte output as `bones up` did.
-	fixed := 0
+	// Reseat every bones-owned command back to canonical in a
+	// SINGLE pass. rewriteCanonicalHookEntry prunes-and-re-adds the
+	// whole bones-owned set internally, so calling it once heals
+	// every drifted entry — looping per-key would re-prune entries
+	// that the previous iteration just installed and emit duplicate
+	// FIX lines for entries that share the same rewrite cycle.
+	rewriteCanonicalHookEntry(hooks)
 	for _, key := range driftedKeys {
-		if rewriteCanonicalHookEntry(hooks) {
-			_, _ = fmt.Fprintf(w,
-				"  FIX   hooks: %-22s rewritten to canonical (--reset)\n", key)
-		}
-		fixed++
+		_, _ = fmt.Fprintf(w,
+			"  FIX   hooks: %-22s rewritten to canonical (--reset)\n", key)
 	}
+	fixed := len(driftedKeys)
 	root["hooks"] = hooks
 	out, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {

@@ -668,6 +668,82 @@ func TestCheckBonesHooksDrift_V1MigratesOnNextWriteManifest(t *testing.T) {
 	}
 }
 
+// TestCheckBonesHooksDrift_ResetMultipleEntriesOneFIXEach pins
+// the regression for the per-key FIX-line bug: with N drifted
+// entries, the rewrite must emit exactly N FIX lines (one per
+// named key), NOT N×K where K is the count of bones-owned
+// commands. The reseat helper handles all entries in one pass —
+// looping over the helper would emit duplicate FIX lines for
+// later iterations.
+func TestCheckBonesHooksDrift_ResetMultipleEntriesOneFIXEach(t *testing.T) {
+	dir := setupCleanScaffold(t)
+	// Edit BOTH bones-owned hook entries (prime + hub start) so
+	// both keys appear in driftedKeys.
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatal(err)
+	}
+	hooks := settings["hooks"].(map[string]any)
+	editPrimeEntry(t, hooks)
+	editHubStartEntry(t, hooks)
+	out, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(settingsPath, append(out, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := readManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	warns := checkBonesHooksDrift(&buf, dir, manifest, true /* reset */)
+	output := buf.String()
+	if warns != 0 {
+		t.Errorf("--reset still WARNed (%d):\n%s", warns, output)
+	}
+	// Exactly N FIX lines for N drifted keys. The pre-fix bug
+	// produced N×K lines (K = count of bones-owned commands).
+	fixLines := strings.Count(output, "FIX")
+	if fixLines != 2 {
+		t.Errorf("expected exactly 2 FIX lines (one per drifted key), got %d:\n%s",
+			fixLines, output)
+	}
+	for _, key := range []string{"SessionStart[0]/0", "SessionStart[1]/0"} {
+		if !strings.Contains(output, key) {
+			t.Errorf("FIX output missing key %s:\n%s", key, output)
+		}
+	}
+}
+
+// editHubStartEntry mutates the `bones hub start` entry
+// (SessionStart[1]/0) so its canonical hash diverges from the
+// manifest record. Mirrors editPrimeEntry's approach.
+func editHubStartEntry(t *testing.T, hooks map[string]any) {
+	t.Helper()
+	groups, _ := hooks["SessionStart"].([]any)
+	if len(groups) < 2 {
+		t.Fatal("SessionStart group 1 missing")
+	}
+	gm, ok := groups[1].(map[string]any)
+	if !ok {
+		t.Fatal("SessionStart[1] not a map")
+	}
+	entries, _ := gm["hooks"].([]any)
+	if len(entries) == 0 {
+		t.Fatal("SessionStart[1].hooks empty")
+	}
+	em, ok := entries[0].(map[string]any)
+	if !ok {
+		t.Fatal("SessionStart[1]/0 not a map")
+	}
+	em["timeout"] = float64(77)
+}
+
 // TestCheckBonesHooksDrift_ResetRewritesEditedEntry pins #318's
 // --reset opt-in: drifted entries are rewritten to canonical and
 // the manifest is re-stamped. The next doctor run reports clean.
@@ -745,5 +821,91 @@ func TestDoctorCmd_AcceptsResetFlag(t *testing.T) {
 	}
 	if !c.Reset {
 		t.Fatalf("Reset flag not set after --reset parse")
+	}
+}
+
+// TestRunBypassReportTo_HookProtocolRewriteRefreshesManifest pins
+// the #320 + #318 coordination contract: when checkBonesScaffoldedHooks
+// rewrites a v0.12 stale prime entry to the envelope-emitting form,
+// refreshManifestHooksIfPresent must re-stamp the per-entry hashes
+// so the immediate next checkBonesHooksDrift run reports zero
+// findings. Without this coordination doctor would false-positive
+// on its own auto-rewrite — the rewrite changes settings.json
+// content, drift check sees new bytes vs. stale manifest, WARNs
+// the operator about an entry doctor itself just edited.
+func TestRunBypassReportTo_HookProtocolRewriteRefreshesManifest(t *testing.T) {
+	dir := setupCleanScaffold(t)
+
+	// Plant a v0.12-style stale entry: rewrite settings.json so the
+	// SessionStart prime command is the legacy `--json` form. The
+	// existing manifest still records hashes for the canonical
+	// entry; #320's auto-rewrite will heal settings.json, and the
+	// coordination path must heal the manifest too.
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	stale := `{
+  "hooks": {
+    "SessionStart": [
+      {"matcher": "", "hooks": [
+        {"command": "bones tasks prime --json", "type": "command", "timeout": 10},
+        {"command": "bones hub start", "type": "command", "timeout": 10}
+      ]}
+    ]
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(stale), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run the full bypass report (default mode: noFix=false,
+	// reset=false). The pre-existing #320 path rewrites the stale
+	// prime entry; the new coordination call refreshes the
+	// manifest's per-entry hashes against the rewritten file.
+	var buf bytes.Buffer
+	if _, err := runBypassReportTo(&buf, dir); err != nil {
+		t.Fatalf("runBypassReportTo: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "FIX") {
+		t.Errorf("expected #320 FIX line for v0.12 prime rewrite:\n%s", out)
+	}
+
+	// Settings.json must now carry the canonical envelope-emitting form.
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "bones tasks prime --hook=session-start") {
+		t.Errorf("v0.12 prime not rewritten by #320 path:\n%s", got)
+	}
+
+	// Manifest must reflect the rewritten file. Pull the per-entry
+	// hashes both from manifest and from disk; every key the
+	// manifest records must match its on-disk hash.
+	manifest, err := readManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := bonesOwnedHookEntryHashesFromDisk(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.SettingsHooks) == 0 {
+		t.Fatalf("manifest SettingsHooks empty after rewrite — refresh did not run")
+	}
+	for k, want := range manifest.SettingsHooks {
+		if g := live[k]; g != want {
+			t.Errorf("post-rewrite drift on %s: manifest=%s on-disk=%s "+
+				"— refreshManifestHooksIfPresent did not re-stamp",
+				k, want, g)
+		}
+	}
+
+	// Drift check on the post-rewrite state must be silent. This is
+	// the load-bearing assertion: doctor should NOT false-positive
+	// on its own auto-rewrite.
+	var buf2 bytes.Buffer
+	if w := checkBonesHooksDrift(&buf2, dir, manifest, false); w != 0 {
+		t.Errorf("drift check after #320 rewrite reported %d WARNs "+
+			"(coordination broken):\n%s", w, buf2.String())
 	}
 }
