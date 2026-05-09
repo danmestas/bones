@@ -271,6 +271,11 @@ func TestEvery_JSONFlag_HasRegistryEntry(t *testing.T) {
 	}
 	exempt := map[string]bool{
 		"logs.go": true, // ADR 0053 / ADR 0052 carve-out
+		// tasks_watch.go --json emits streaming NDJSON
+		// (one EventEnvelope per line) per ADR 0052; the
+		// registry holds one-shot envelope verbs only. Same
+		// carve-out shape as logs.go.
+		"tasks_watch.go": true,
 	}
 
 	registered := make(map[string]struct{}, len(schemas.Verbs))
