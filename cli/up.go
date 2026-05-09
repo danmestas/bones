@@ -125,11 +125,12 @@ func runUp(cwd string, opts upOpts) (err error) {
 	// that triggers a hub serve (#305 / #339). PID=0 entry; the hub
 	// start path overwrites it with a PID-bearing record. `bones
 	// down` removes the entry. Best-effort: a HOME/permission failure
-	// here must not block scaffold completion. Gated on !JSON to keep
-	// stdout clean for --json | jq pipelines; the second commit on
-	// this branch routes the warning to stderr instead of dropping it.
-	if regErr := registry.Register(wsDir, resolveWorkspaceName(wsDir)); regErr != nil && !opts.JSON && !opts.Quiet {
-		logger.Warnf("up: WARN  registry register: %v", regErr)
+	// here must not block scaffold completion. Routes through the
+	// per-mode warn sink so --json keeps stdout clean (warning lands
+	// on stderr, matching #311's hub-URL precedent) and --quiet drops
+	// the warning entirely.
+	if regErr := registry.Register(wsDir, resolveWorkspaceName(wsDir)); regErr != nil {
+		warnSink(opts, logger)("up: WARN  registry register: %v", regErr)
 	}
 
 	gitignoreAdded := runPostScaffoldChecks(wsDir, opts, logger)
