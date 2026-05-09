@@ -5,17 +5,21 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
+	"github.com/alecthomas/kong"
 	"github.com/danmestas/bones/internal/version"
 )
 
 // TestWriteManifest_StampsScaffoldedEntries pins issue #262: after a
 // fresh scaffoldOrchestrator pass, the manifest's Scaffolded field
 // records .bones/agent.id and .bones/scaffold_version with sha256 +
-// size, and SettingsHooksSHA256 is non-empty (covering the
-// bones-owned hook subset of .claude/settings.json).
+// size. Per issue #318 it also pins that SettingsHooks (the per-
+// entry hash map) is populated for every bones-owned hook entry,
+// SchemaVersion stamps as v2 (current shape), and the legacy v1
+// SettingsHooksSHA256 field is NOT written.
 func TestWriteManifest_StampsScaffoldedEntries(t *testing.T) {
 	dir := t.TempDir()
 	// Write agent.id so writeManifest has something to stamp for it.
@@ -78,10 +82,40 @@ func TestWriteManifest_StampsScaffoldedEntries(t *testing.T) {
 		}
 	}
 
-	// Settings.json bones-owned hook subset: hash present.
-	if m.SettingsHooksSHA256 == "" {
-		t.Errorf("SettingsHooksSHA256 empty after fresh scaffold")
+	// Settings.json bones-owned hook subset (#318): per-entry map
+	// populated, schema version stamped, legacy v1 hash absent.
+	if m.SchemaVersion != manifestSchemaVersion {
+		t.Errorf("SchemaVersion=%d, want %d (current)",
+			m.SchemaVersion, manifestSchemaVersion)
 	}
+	if len(m.SettingsHooks) == 0 {
+		t.Errorf("SettingsHooks empty after fresh scaffold")
+	}
+	if m.SettingsHooksSHA256 != "" {
+		t.Errorf("SettingsHooksSHA256 written by current binary "+
+			"(want empty; legacy v1 field): %q", m.SettingsHooksSHA256)
+	}
+	// scaffoldOrchestrator places the prime entry under matcher
+	// "startup|compact" (group 0) and `bones hub start` under
+	// the default matcher "" (group 1). The keys reflect that
+	// layout — pin them so a future reordering is caught.
+	for _, want := range []string{"SessionStart[0]/0", "SessionStart[1]/0"} {
+		if _, ok := m.SettingsHooks[want]; !ok {
+			t.Errorf("SettingsHooks missing key %q; got keys=%v",
+				want, sortedKeys(m.SettingsHooks))
+		}
+	}
+}
+
+// sortedKeys returns m's keys in lexical order. Helper for assertion
+// failure messages so the test output is deterministic.
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // TestWriteManifest_OmitsRollingFiles pins the scope decision in
@@ -263,7 +297,7 @@ func TestCheckManifestIntegrity_Clean(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	got := checkManifestIntegrity(&buf, dir)
+	got := checkManifestIntegrity(&buf, dir, false)
 	if got != 0 {
 		t.Errorf("warns=%d on clean workspace; output:\n%s", got, buf.String())
 	}
@@ -286,7 +320,7 @@ func TestCheckManifestIntegrity_TamperedScaffoldedFile(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	warns := checkManifestIntegrity(&buf, dir)
+	warns := checkManifestIntegrity(&buf, dir, false)
 	out := buf.String()
 	if warns < 1 {
 		t.Errorf("expected at least 1 WARN, got %d; output:\n%s", warns, out)
@@ -309,7 +343,7 @@ func TestCheckManifestIntegrity_PartialScaffold(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	warns := checkManifestIntegrity(&buf, dir)
+	warns := checkManifestIntegrity(&buf, dir, false)
 	out := buf.String()
 	if warns < 1 {
 		t.Errorf("expected at least 1 WARN, got %d; output:\n%s", warns, out)
@@ -333,7 +367,7 @@ func TestCheckManifestIntegrity_VersionDrift(t *testing.T) {
 	bumpManifestVersion(t, dir, "0.0.1-stale", "9.9.9-current")
 
 	var buf bytes.Buffer
-	warns := checkManifestIntegrity(&buf, dir)
+	warns := checkManifestIntegrity(&buf, dir, false)
 	out := buf.String()
 	if warns < 1 {
 		t.Errorf("expected at least 1 WARN, got %d; output:\n%s", warns, out)
@@ -343,10 +377,13 @@ func TestCheckManifestIntegrity_VersionDrift(t *testing.T) {
 	}
 }
 
-// TestCheckManifestIntegrity_TamperedSettingsHooks detects a hand-
+// TestCheckManifestIntegrity_MissingSettingsHook detects a hand-
 // edit that removes a bones-owned hook from .claude/settings.json
-// after `bones up` stamped the manifest.
-func TestCheckManifestIntegrity_TamperedSettingsHooks(t *testing.T) {
+// after `bones up` stamped the manifest. Per issue #318 the surface
+// is per-entry: doctor names the missing entry's key
+// (`SessionStart[N]/M`) rather than emitting a generic "settings
+// hooks drifted" message.
+func TestCheckManifestIntegrity_MissingSettingsHook(t *testing.T) {
 	dir := setupCleanScaffold(t)
 	// Hand-edit settings.json to drop the `bones hub start` entry.
 	settingsPath := filepath.Join(dir, ".claude", "settings.json")
@@ -366,16 +403,19 @@ func TestCheckManifestIntegrity_TamperedSettingsHooks(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	warns := checkManifestIntegrity(&buf, dir)
+	warns := checkManifestIntegrity(&buf, dir, false)
 	output := buf.String()
 	if warns < 1 {
 		t.Errorf("expected at least 1 WARN, got %d; output:\n%s", warns, output)
 	}
-	if !strings.Contains(output, "settings.json") {
-		t.Errorf("expected settings.json finding:\n%s", output)
+	if !strings.Contains(output, "hooks:") {
+		t.Errorf("expected per-entry hooks finding (#318):\n%s", output)
 	}
-	if !strings.Contains(output, "tamper") {
-		t.Errorf("expected tamper label in output:\n%s", output)
+	if !strings.Contains(output, "SessionStart") {
+		t.Errorf("expected per-entry key naming the event:\n%s", output)
+	}
+	if !strings.Contains(output, "missing") {
+		t.Errorf("expected missing-entry label (#318):\n%s", output)
 	}
 }
 
@@ -385,7 +425,7 @@ func TestCheckManifestIntegrity_TamperedSettingsHooks(t *testing.T) {
 func TestCheckManifestIntegrity_NoManifest(t *testing.T) {
 	dir := t.TempDir()
 	var buf bytes.Buffer
-	warns := checkManifestIntegrity(&buf, dir)
+	warns := checkManifestIntegrity(&buf, dir, false)
 	if warns != 0 {
 		t.Errorf("warns=%d on workspace without manifest; output:\n%s",
 			warns, buf.String())
@@ -440,4 +480,432 @@ func bumpManifestVersion(t *testing.T, dir, stale, current string) {
 	prev := version.Get()
 	version.Set(current)
 	t.Cleanup(func() { version.Set(prev) })
+}
+
+// TestCheckBonesHooksDrift_CleanWorkspaceOK pins issue #318: every
+// per-entry hash matches after a fresh `bones up`, so doctor emits
+// zero hooks-drift findings. This is the hot-path no-op.
+func TestCheckBonesHooksDrift_CleanWorkspaceOK(t *testing.T) {
+	dir := setupCleanScaffold(t)
+	manifest, err := readManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	warns := checkBonesHooksDrift(&buf, dir, manifest, false)
+	if warns != 0 {
+		t.Errorf("clean workspace: warns=%d, want 0; output:\n%s",
+			warns, buf.String())
+	}
+	if strings.Contains(buf.String(), "hooks:") {
+		t.Errorf("clean workspace emitted per-entry findings:\n%s", buf.String())
+	}
+}
+
+// TestCheckBonesHooksDrift_EditedEntryWARN pins #318's per-entry
+// drift surface: editing one bones-owned entry surfaces a WARN that
+// names the specific entry key (`SessionStart[N]/M`) and tells the
+// operator about `bones doctor --reset`.
+func TestCheckBonesHooksDrift_EditedEntryWARN(t *testing.T) {
+	dir := setupCleanScaffold(t)
+	// Edit the prime entry's command in place — different content
+	// at the same slot is the signature of an operator hand-edit.
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatal(err)
+	}
+	hooks := settings["hooks"].(map[string]any)
+	editPrimeEntry(t, hooks)
+	out, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(settingsPath, append(out, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := readManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	warns := checkBonesHooksDrift(&buf, dir, manifest, false)
+	output := buf.String()
+	if warns < 1 {
+		t.Errorf("expected at least 1 WARN on edited entry, got %d:\n%s",
+			warns, output)
+	}
+	if !strings.Contains(output, "SessionStart[0]/0") {
+		t.Errorf("expected entry key SessionStart[0]/0 in output:\n%s", output)
+	}
+	if !strings.Contains(output, "edited since `bones up`") {
+		t.Errorf("expected drift label in output:\n%s", output)
+	}
+	if !strings.Contains(output, "--reset") {
+		t.Errorf("expected --reset hint in WARN output:\n%s", output)
+	}
+}
+
+// editPrimeEntry mutates the prime hook entry (SessionStart[0]/0)
+// to simulate an operator hand-edit. Bumps the timeout so the
+// canonical hash diverges from what the manifest recorded; the
+// command stays bones-owned so the entry remains in the per-entry
+// scan's surface.
+func editPrimeEntry(t *testing.T, hooks map[string]any) {
+	t.Helper()
+	groups, _ := hooks["SessionStart"].([]any)
+	if len(groups) == 0 {
+		t.Fatal("SessionStart group missing")
+	}
+	gm, ok := groups[0].(map[string]any)
+	if !ok {
+		t.Fatal("SessionStart[0] not a map")
+	}
+	entries, _ := gm["hooks"].([]any)
+	if len(entries) == 0 {
+		t.Fatal("SessionStart[0].hooks empty")
+	}
+	em, ok := entries[0].(map[string]any)
+	if !ok {
+		t.Fatal("SessionStart[0]/0 not a map")
+	}
+	em["timeout"] = float64(99)
+}
+
+// TestCheckBonesHooksDrift_LegacyV1ManifestINFOOnly pins the
+// migration-window behavior: a v1 manifest (single hash, no
+// per-entry map) does NOT false-positive against the per-entry
+// scan. doctor surfaces a one-line INFO and waits for `bones up`
+// to migrate.
+func TestCheckBonesHooksDrift_LegacyV1ManifestINFOOnly(t *testing.T) {
+	dir := setupCleanScaffold(t)
+	// Downgrade the manifest to v1 shape: clear the per-entry map,
+	// populate the legacy single-hash field, drop SchemaVersion.
+	mPath := filepath.Join(dir, filepath.FromSlash(manifestRel))
+	data, err := os.ReadFile(mPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m skillManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	m.SchemaVersion = 0
+	m.SettingsHooksSHA256 = "deadbeefcafef00d"
+	m.SettingsHooks = nil
+	out, _ := json.MarshalIndent(m, "", "  ")
+	if err := os.WriteFile(mPath, append(out, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := readManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	warns := checkBonesHooksDrift(&buf, dir, manifest, false)
+	output := buf.String()
+	if warns != 0 {
+		t.Errorf("legacy v1 manifest produced WARN, want 0; output:\n%s",
+			output)
+	}
+	if !strings.Contains(output, "INFO") {
+		t.Errorf("expected INFO line for legacy v1 manifest:\n%s", output)
+	}
+	if !strings.Contains(output, "legacy v1 hook hash") {
+		t.Errorf("expected legacy v1 message:\n%s", output)
+	}
+}
+
+// TestCheckBonesHooksDrift_V1MigratesOnNextWriteManifest pins the
+// migration: writing a fresh manifest (the next `bones up` after
+// the v1 install) drops the legacy field, populates the per-entry
+// map, and stamps the current schema version.
+func TestCheckBonesHooksDrift_V1MigratesOnNextWriteManifest(t *testing.T) {
+	dir := setupCleanScaffold(t)
+	// Force the on-disk manifest into the v1 shape.
+	mPath := filepath.Join(dir, filepath.FromSlash(manifestRel))
+	data, err := os.ReadFile(mPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m skillManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	m.SchemaVersion = 0
+	m.SettingsHooksSHA256 = "deadbeefcafef00d"
+	m.SettingsHooks = nil
+	out, _ := json.MarshalIndent(m, "", "  ")
+	if err := os.WriteFile(mPath, append(out, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-run writeManifest to simulate the next `bones up`. nil
+	// footprint: this is a synthetic re-stamp, not a real
+	// scaffoldOrchestrator pass, so #338's SettingsCreatedByUp
+	// signal is unavailable.
+	if err := writeManifest(dir, nil); err != nil {
+		t.Fatalf("writeManifest after v1 downgrade: %v", err)
+	}
+
+	got, err := readManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SchemaVersion != manifestSchemaVersion {
+		t.Errorf("SchemaVersion=%d, want %d after migration",
+			got.SchemaVersion, manifestSchemaVersion)
+	}
+	if got.SettingsHooksSHA256 != "" {
+		t.Errorf("legacy SettingsHooksSHA256 not cleared on migration: %q",
+			got.SettingsHooksSHA256)
+	}
+	if len(got.SettingsHooks) == 0 {
+		t.Errorf("SettingsHooks not populated by migration")
+	}
+}
+
+// TestCheckBonesHooksDrift_ResetMultipleEntriesOneFIXEach pins
+// the regression for the per-key FIX-line bug: with N drifted
+// entries, the rewrite must emit exactly N FIX lines (one per
+// named key), NOT N×K where K is the count of bones-owned
+// commands. The reseat helper handles all entries in one pass —
+// looping over the helper would emit duplicate FIX lines for
+// later iterations.
+func TestCheckBonesHooksDrift_ResetMultipleEntriesOneFIXEach(t *testing.T) {
+	dir := setupCleanScaffold(t)
+	// Edit BOTH bones-owned hook entries (prime + hub start) so
+	// both keys appear in driftedKeys.
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatal(err)
+	}
+	hooks := settings["hooks"].(map[string]any)
+	editPrimeEntry(t, hooks)
+	editHubStartEntry(t, hooks)
+	out, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(settingsPath, append(out, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := readManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	warns := checkBonesHooksDrift(&buf, dir, manifest, true /* reset */)
+	output := buf.String()
+	if warns != 0 {
+		t.Errorf("--reset still WARNed (%d):\n%s", warns, output)
+	}
+	// Exactly N FIX lines for N drifted keys. The pre-fix bug
+	// produced N×K lines (K = count of bones-owned commands).
+	fixLines := strings.Count(output, "FIX")
+	if fixLines != 2 {
+		t.Errorf("expected exactly 2 FIX lines (one per drifted key), got %d:\n%s",
+			fixLines, output)
+	}
+	for _, key := range []string{"SessionStart[0]/0", "SessionStart[1]/0"} {
+		if !strings.Contains(output, key) {
+			t.Errorf("FIX output missing key %s:\n%s", key, output)
+		}
+	}
+}
+
+// editHubStartEntry mutates the `bones hub start` entry
+// (SessionStart[1]/0) so its canonical hash diverges from the
+// manifest record. Mirrors editPrimeEntry's approach.
+func editHubStartEntry(t *testing.T, hooks map[string]any) {
+	t.Helper()
+	groups, _ := hooks["SessionStart"].([]any)
+	if len(groups) < 2 {
+		t.Fatal("SessionStart group 1 missing")
+	}
+	gm, ok := groups[1].(map[string]any)
+	if !ok {
+		t.Fatal("SessionStart[1] not a map")
+	}
+	entries, _ := gm["hooks"].([]any)
+	if len(entries) == 0 {
+		t.Fatal("SessionStart[1].hooks empty")
+	}
+	em, ok := entries[0].(map[string]any)
+	if !ok {
+		t.Fatal("SessionStart[1]/0 not a map")
+	}
+	em["timeout"] = float64(77)
+}
+
+// TestCheckBonesHooksDrift_ResetRewritesEditedEntry pins #318's
+// --reset opt-in: drifted entries are rewritten to canonical and
+// the manifest is re-stamped. The next doctor run reports clean.
+func TestCheckBonesHooksDrift_ResetRewritesEditedEntry(t *testing.T) {
+	dir := setupCleanScaffold(t)
+	// Simulate an operator hand-edit of the prime entry.
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatal(err)
+	}
+	hooks := settings["hooks"].(map[string]any)
+	editPrimeEntry(t, hooks)
+	out, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(settingsPath, append(out, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := readManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	warns := checkBonesHooksDrift(&buf, dir, manifest, true /* reset */)
+	output := buf.String()
+	if !strings.Contains(output, "FIX") {
+		t.Errorf("expected FIX line on --reset rewrite:\n%s", output)
+	}
+	if warns != 0 {
+		t.Errorf("--reset rewrite still surfaced WARN, got %d:\n%s",
+			warns, output)
+	}
+
+	// Verify the canonical state is restored: the entry's timeout
+	// is back to 10 and the manifest hashes match the live state.
+	rerun, err := readManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := bonesOwnedHookEntryHashesFromDisk(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, want := range rerun.SettingsHooks {
+		if got := live[k]; got != want {
+			t.Errorf("post-reset drift on %s: manifest=%s on-disk=%s",
+				k, want, got)
+		}
+	}
+
+	// Idempotency: running the drift check again with reset=false
+	// must report zero findings.
+	var buf2 bytes.Buffer
+	if w := checkBonesHooksDrift(&buf2, dir, rerun, false); w != 0 {
+		t.Errorf("post-reset drift check still WARNed (%d):\n%s",
+			w, buf2.String())
+	}
+}
+
+// TestDoctorCmd_AcceptsResetFlag verifies Kong wires up the new
+// `--reset` flag. Existence of the flag is the contract — the
+// rewrite behavior is tested via TestCheckBonesHooksDrift_Reset*.
+func TestDoctorCmd_AcceptsResetFlag(t *testing.T) {
+	var c DoctorCmd
+	parser, err := kong.New(&c)
+	if err != nil {
+		t.Fatalf("kong.New: %v", err)
+	}
+	if _, err := parser.Parse([]string{"--reset"}); err != nil {
+		t.Fatalf("parse --reset: %v", err)
+	}
+	if !c.Reset {
+		t.Fatalf("Reset flag not set after --reset parse")
+	}
+}
+
+// TestRunBypassReportTo_HookProtocolRewriteRefreshesManifest pins
+// the #320 + #318 coordination contract: when checkBonesScaffoldedHooks
+// rewrites a v0.12 stale prime entry to the envelope-emitting form,
+// refreshManifestHooksIfPresent must re-stamp the per-entry hashes
+// so the immediate next checkBonesHooksDrift run reports zero
+// findings. Without this coordination doctor would false-positive
+// on its own auto-rewrite — the rewrite changes settings.json
+// content, drift check sees new bytes vs. stale manifest, WARNs
+// the operator about an entry doctor itself just edited.
+func TestRunBypassReportTo_HookProtocolRewriteRefreshesManifest(t *testing.T) {
+	dir := setupCleanScaffold(t)
+
+	// Plant a v0.12-style stale entry: rewrite settings.json so the
+	// SessionStart prime command is the legacy `--json` form. The
+	// existing manifest still records hashes for the canonical
+	// entry; #320's auto-rewrite will heal settings.json, and the
+	// coordination path must heal the manifest too.
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	stale := `{
+  "hooks": {
+    "SessionStart": [
+      {"matcher": "", "hooks": [
+        {"command": "bones tasks prime --json", "type": "command", "timeout": 10},
+        {"command": "bones hub start", "type": "command", "timeout": 10}
+      ]}
+    ]
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(stale), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run the full bypass report (default mode: noFix=false,
+	// reset=false). The pre-existing #320 path rewrites the stale
+	// prime entry; the new coordination call refreshes the
+	// manifest's per-entry hashes against the rewritten file.
+	var buf bytes.Buffer
+	if _, err := runBypassReportTo(&buf, dir); err != nil {
+		t.Fatalf("runBypassReportTo: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "FIX") {
+		t.Errorf("expected #320 FIX line for v0.12 prime rewrite:\n%s", out)
+	}
+
+	// Settings.json must now carry the canonical envelope-emitting form.
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "bones tasks prime --hook=session-start") {
+		t.Errorf("v0.12 prime not rewritten by #320 path:\n%s", got)
+	}
+
+	// Manifest must reflect the rewritten file. Pull the per-entry
+	// hashes both from manifest and from disk; every key the
+	// manifest records must match its on-disk hash.
+	manifest, err := readManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := bonesOwnedHookEntryHashesFromDisk(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.SettingsHooks) == 0 {
+		t.Fatalf("manifest SettingsHooks empty after rewrite — refresh did not run")
+	}
+	for k, want := range manifest.SettingsHooks {
+		if g := live[k]; g != want {
+			t.Errorf("post-rewrite drift on %s: manifest=%s on-disk=%s "+
+				"— refreshManifestHooksIfPresent did not re-stamp",
+				k, want, g)
+		}
+	}
+
+	// Drift check on the post-rewrite state must be silent. This is
+	// the load-bearing assertion: doctor should NOT false-positive
+	// on its own auto-rewrite.
+	var buf2 bytes.Buffer
+	if w := checkBonesHooksDrift(&buf2, dir, manifest, false); w != 0 {
+		t.Errorf("drift check after #320 rewrite reported %d WARNs "+
+			"(coordination broken):\n%s", w, buf2.String())
+	}
 }

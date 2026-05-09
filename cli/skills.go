@@ -88,10 +88,26 @@ type scaffoldFile struct {
 // outside the skills tree (.bones/agent.id, .bones/scaffold_version)
 // and the bones-owned hook subset of .claude/settings.json. The
 // non-skill entries live in Scaffolded (with size + sha256) and
-// SettingsHooksSHA256 — sibling fields rather than crammed into
+// SettingsHooks — sibling fields rather than crammed into
 // Files because removeBonesSkills's per-file remove logic keys off
 // Files entries existing iff they were skill files.
+//
+// Issue #318 replaced the original single-roll-up SettingsHooksSHA256
+// hash with the per-entry SettingsHooks map so doctor can pinpoint
+// which hook entry drifted (e.g. SessionStart[0]/1) instead of
+// reporting an opaque "something changed". A SchemaVersion field was
+// added at the same time so future migrations have a tag to read; v1
+// is the legacy single-hash shape, v2 (current) is the per-entry map.
 type skillManifest struct {
+	// SchemaVersion tags the on-disk shape so manifest-format
+	// migrations can be detected on read. Absent/zero is treated as
+	// v1 (the pre-#318 single-hash shape) and triggers a one-time
+	// rewrite to v2 on the next `bones up`. Bumped whenever the
+	// manifest's structural shape changes in a way that needs a
+	// migration; pure additive fields (e.g. Scaffolded in #262) did
+	// not bump because absent fields are forward-compatible.
+	SchemaVersion int `json:"schema_version,omitempty"`
+
 	// Version is the bones binary version that wrote the manifest.
 	// Diagnostic only — not used in the remove decision.
 	Version string `json:"version"`
@@ -109,12 +125,22 @@ type skillManifest struct {
 	// written by pre-#262 binaries.
 	Scaffolded []scaffoldFile `json:"scaffolded,omitempty"`
 
-	// SettingsHooksSHA256 is the SHA-256 hex of the canonical-JSON
-	// rendering of the bones-owned hook subset of
-	// .claude/settings.json — only the hook entries bones installs
-	// (per bonesOwnedHookCommands). User-added hooks alongside
-	// bones's are NOT tamper-detected (they aren't bones's to claim).
-	// Empty on legacy manifests.
+	// SettingsHooks records a per-entry SHA-256 hex of the canonical
+	// rendering of every bones-owned hook entry in
+	// .claude/settings.json. Keys follow `<event>[<group_index>]/
+	// <hook_index>` (e.g. `SessionStart[0]/1`) so doctor can name the
+	// drifted entry exactly. The hash is over the entry's command,
+	// type, timeout and parent group's matcher — JSON-canonicalized
+	// so semantically equivalent entries produce identical hashes
+	// regardless of map iteration order. Empty on legacy v1 manifests
+	// (pre-#318), which also have a populated SettingsHooksSHA256
+	// field; the next `bones up` migrates to the per-entry map.
+	SettingsHooks map[string]string `json:"settings_hooks,omitempty"`
+
+	// SettingsHooksSHA256 is the legacy v1 single-hash field
+	// (pre-#318). Read for migration detection only; new manifests
+	// never write it. Doctor never compares against it once the v2
+	// map is present.
 	SettingsHooksSHA256 string `json:"settings_hooks_sha256,omitempty"`
 
 	// SettingsCreatedByUp records whether `bones up` created
@@ -150,6 +176,12 @@ type adoptedSkill struct {
 	AdoptedAt string `json:"adopted_at"`
 	Source    string `json:"source"`
 }
+
+// manifestSchemaVersion is the on-disk shape tag the current binary
+// writes. v1 was the implicit single-hash shape; v2 (current) carries
+// the per-entry SettingsHooks map. Bump when structural changes
+// require a one-time rewrite on the next `bones up`.
+const manifestSchemaVersion = 2
 
 // bonesOwnedHookCommands lists the (event, command) pairs bones
 // installs into .claude/settings.json. The integrity hash recorded in
@@ -253,7 +285,7 @@ func writeManifest(root string, fp *scaffoldFootprint) error {
 	if err != nil {
 		return err
 	}
-	hooksHash, err := bonesOwnedHooksHashFromDisk(root)
+	hookEntries, err := bonesOwnedHookEntryHashesFromDisk(root)
 	if err != nil {
 		return err
 	}
@@ -271,10 +303,11 @@ func writeManifest(root string, fp *scaffoldFootprint) error {
 		createdByUp = true
 	}
 	m := skillManifest{
+		SchemaVersion:       manifestSchemaVersion,
 		Version:             bonesVersion(),
 		Files:               files,
 		Scaffolded:          scaff,
-		SettingsHooksSHA256: hooksHash,
+		SettingsHooks:       hookEntries,
 		SettingsCreatedByUp: createdByUp,
 	}
 
@@ -404,28 +437,125 @@ func buildScaffoldedEntries(root string) ([]scaffoldFile, error) {
 	return out, nil
 }
 
-// bonesOwnedHooksHashFromDisk reads .claude/settings.json, extracts
-// the bones-owned hook subset (per bonesOwnedHookCommands), and
-// returns the SHA-256 hex of its canonical rendering. Returns an
-// empty string + nil error when settings.json is absent — that
-// matches a workspace where mergeSettings has not yet run.
-func bonesOwnedHooksHashFromDisk(root string) (string, error) {
+// bonesOwnedHookEntry identifies one bones-owned entry in
+// .claude/settings.json by its position. Key is the doctor-facing
+// `<event>[<group_index>]/<hook_index>` string; Hash is the canonical
+// SHA-256 hex of the entry contents (matcher + command + type +
+// timeout). Used for the per-entry drift detection introduced in
+// issue #318.
+type bonesOwnedHookEntry struct {
+	Key  string
+	Hash string
+}
+
+// bonesOwnedHookEntryHashesFromDisk reads .claude/settings.json,
+// walks every bones-owned hook entry (per bonesOwnedHookCommands),
+// and returns a map of entry key → canonical hash. Returns an empty
+// map + nil error when settings.json is absent — that matches a
+// workspace where mergeSettings has not yet run.
+func bonesOwnedHookEntryHashesFromDisk(root string) (map[string]string, error) {
 	path := filepath.Join(root, ".claude", "settings.json")
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return "", nil
+		return map[string]string{}, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("read settings.json: %w", err)
+		return nil, fmt.Errorf("read settings.json: %w", err)
 	}
 	var settings map[string]any
 	if len(data) > 0 {
 		if err := json.Unmarshal(data, &settings); err != nil {
-			return "", fmt.Errorf("parse settings.json: %w", err)
+			return nil, fmt.Errorf("parse settings.json: %w", err)
 		}
 	}
 	hooks, _ := settings["hooks"].(map[string]any)
-	return hashBonesOwnedHooks(hooks), nil
+	entries := bonesOwnedHookEntriesIn(hooks)
+	out := map[string]string{}
+	for _, e := range entries {
+		out[e.Key] = e.Hash
+	}
+	return out, nil
+}
+
+// bonesOwnedHookEntriesIn walks hooks and returns one
+// bonesOwnedHookEntry per bones-owned hook entry it finds. The
+// position-keyed identifier (`<event>[<group_index>]/<hook_index>`)
+// matches doctor's report format and lets the manifest pin "this
+// specific slot in settings.json" rather than naming entries by
+// content. Order is deterministic: events sorted alphabetically, then
+// by group index, then hook index.
+//
+// Membership in bonesOwnedHookCommands is what makes an entry
+// "bones-owned" — entries with commands the user installed alongside
+// bones's are not surfaced (they aren't bones's to claim).
+func bonesOwnedHookEntriesIn(hooks map[string]any) []bonesOwnedHookEntry {
+	if hooks == nil {
+		return nil
+	}
+	owned := map[string]map[string]bool{}
+	for _, h := range bonesOwnedHookCommands {
+		if owned[h.Event] == nil {
+			owned[h.Event] = map[string]bool{}
+		}
+		owned[h.Event][h.Command] = true
+	}
+	events := make([]string, 0, len(owned))
+	for ev := range owned {
+		events = append(events, ev)
+	}
+	sort.Strings(events)
+	var out []bonesOwnedHookEntry
+	for _, event := range events {
+		groups, _ := hooks[event].([]any)
+		for gi, g := range groups {
+			gm, ok := g.(map[string]any)
+			if !ok {
+				continue
+			}
+			matcher, _ := gm["matcher"].(string)
+			entries, _ := gm["hooks"].([]any)
+			for hi, e := range entries {
+				em, ok := e.(map[string]any)
+				if !ok {
+					continue
+				}
+				cmd, _ := em["command"].(string)
+				if !owned[event][cmd] {
+					continue
+				}
+				out = append(out, bonesOwnedHookEntry{
+					Key:  fmt.Sprintf("%s[%d]/%d", event, gi, hi),
+					Hash: hashHookEntry(matcher, em),
+				})
+			}
+		}
+	}
+	return out
+}
+
+// hashHookEntry returns the canonical SHA-256 hex of a single hook
+// entry. The hashed shape is JSON of {matcher, command, type,
+// timeout} — exactly the fields bones cares about for drift
+// detection. Whitespace and key ordering don't influence the hash
+// because Marshal sorts keys deterministically and the input is a
+// fixed-shape struct.
+func hashHookEntry(matcher string, entry map[string]any) string {
+	type canonical struct {
+		Matcher string `json:"matcher"`
+		Command string `json:"command"`
+		Type    string `json:"type"`
+		Timeout any    `json:"timeout,omitempty"`
+	}
+	cmd, _ := entry["command"].(string)
+	typ, _ := entry["type"].(string)
+	c := canonical{
+		Matcher: matcher,
+		Command: cmd,
+		Type:    typ,
+		Timeout: entry["timeout"],
+	}
+	out, _ := json.Marshal(c)
+	return hashHex(out)
 }
 
 // hashBonesOwnedHooks computes the canonical SHA-256 hex of the
@@ -439,6 +569,11 @@ func bonesOwnedHooksHashFromDisk(root string) (string, error) {
 // hook commands are present on disk (e.g. user hand-pruned them).
 // In that case doctor compares "" against the manifest's recorded
 // hash and surfaces the divergence as a tamper finding.
+//
+// Retained post-#318 for the legacy v1 single-hash shape; the
+// current binary writes the per-entry SettingsHooks map instead.
+// Tests still exercise this helper to pin the legacy hashing
+// contract since v1 manifests on disk carry the value.
 func hashBonesOwnedHooks(hooks map[string]any) string {
 	type entry struct {
 		Event   string `json:"event"`

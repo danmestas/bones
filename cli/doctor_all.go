@@ -127,8 +127,12 @@ func runDoctorOne(e registry.Entry) workspaceResult {
 		printFix(&buf, FixForHubDown())
 		r.Issues++
 	}
-	// noFix=true: --all is report-only. See function doc above.
-	bypassWarns, _ := runBypassReportToWith(&buf, e.Cwd, true)
+	// noFix=true, reset=false: --all is report-only across the
+	// board. See function doc above for why; the same blast-radius
+	// logic that gates ADR 0051 auto-rewrite also gates issue
+	// #318's per-entry hook reset (operator may not be in any of
+	// these workspaces' shells).
+	bypassWarns, _ := runBypassReportToWith(&buf, e.Cwd, true, false)
 	r.Issues += bypassWarns
 	r.Detail = buf.String()
 	return r

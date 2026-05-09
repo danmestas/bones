@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -50,6 +51,13 @@ type DoctorCmd struct {
 	// stale .claude/settings.json hook entries; --no-fix surfaces
 	// drift as WARN lines without rewriting the file.
 	NoFix bool `name:"no-fix" help:"report-only: do not auto-rewrite stale hook entries"`
+	// Reset opts in to rewriting drifted bones-owned hook entries
+	// back to their canonical form (issue #318). Default is
+	// report-only because drift here means "operator hand-edited
+	// the entry"; rewriting without consent destroys their change.
+	// Different posture from --no-fix's auto-rewrite of stale v0.12
+	// command forms (where drift = stale shape bones itself created).
+	Reset bool `name:"reset" help:"rewrite drifted hook entries to canonical (overwrites edits)"`
 }
 
 // Run invokes the EdgeSync doctor first; on completion (regardless
@@ -147,14 +155,16 @@ func (c *DoctorCmd) runTelemetryReport() {
 // single-workspace mode (the per-line WARN prefix is the signal).
 //
 // Threads c.NoFix into the bypass report so ADR 0051's hook-protocol
-// auto-rewrite is opt-out via `bones doctor --no-fix`.
+// auto-rewrite is opt-out via `bones doctor --no-fix`. Threads
+// c.Reset so issue #318's per-entry drift check can opt-in to
+// rewriting drifted bones-owned hook entries.
 func (c *DoctorCmd) runBypassReport() {
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Printf("  WARN  cwd: %v\n", err)
 		return
 	}
-	_, _ = runBypassReportToWith(os.Stdout, cwd, c.NoFix)
+	_, _ = runBypassReportToWith(os.Stdout, cwd, c.NoFix, c.Reset)
 }
 
 // runBypassReportTo is the writer-injection variant of runBypassReport.
@@ -166,16 +176,17 @@ func (c *DoctorCmd) runBypassReport() {
 // The warn count is the source of truth — callers must not scrape it from
 // the output buffer (display format is not a stable interface).
 //
-// Default is auto-rewrite mode (noFix=false). Tests and report-only
-// callers should use runBypassReportToWith directly.
+// Default is auto-rewrite mode (noFix=false), no per-entry reset
+// (reset=false). Tests and report-only callers should use
+// runBypassReportToWith directly.
 func runBypassReportTo(w io.Writer, cwd string) (warns int, err error) {
-	return runBypassReportToWith(w, cwd, false)
+	return runBypassReportToWith(w, cwd, false, false)
 }
 
-// runBypassReportToWith is the noFix-aware variant. ADR 0051's
-// auto-rewrite respects the noFix flag; everything else stays
-// unchanged.
-func runBypassReportToWith(w io.Writer, cwd string, noFix bool) (warns int, err error) {
+// runBypassReportToWith is the noFix+reset-aware variant. ADR 0051's
+// auto-rewrite respects noFix; issue #318's per-entry drift rewrite
+// is opt-in via reset. Everything else stays unchanged.
+func runBypassReportToWith(w io.Writer, cwd string, noFix, reset bool) (warns int, err error) {
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "=== bones substrate gates (ADR 0034) ===")
 
@@ -225,7 +236,7 @@ func runBypassReportToWith(w io.Writer, cwd string, noFix bool) (warns int, err 
 	}
 
 	warns += checkScaffoldGates(w, cwd, noFix)
-	warns += checkManifestIntegrity(w, cwd)
+	warns += checkManifestIntegrity(w, cwd, reset)
 	warns += checkOrphanHubs(w)
 	warns += checkStaleSlotDirs(w, cwd)
 
@@ -318,6 +329,16 @@ func checkBonesScaffoldedHooksWith(w io.Writer, cwd string, noFix bool) bool {
 		if err := os.WriteFile(settingsPath, append(out, '\n'), 0o644); err != nil {
 			_, _ = fmt.Fprintf(w, "  WARN  rewrite settings.json: %v\n", err)
 			return true
+		}
+		// Coordinate with issue #318: the rewrite changed settings.json
+		// content, so the manifest's per-entry hash map is now stale.
+		// Re-stamp it so the next checkBonesHooksDrift run reports OK
+		// instead of false-positive on the rewrite we just performed.
+		// Silent on workspaces without a manifest (the file is a
+		// post-`bones up` artifact; doctor predates `bones up` here).
+		if mErr := refreshManifestHooksIfPresent(cwd); mErr != nil {
+			_, _ = fmt.Fprintf(w,
+				"  WARN  re-stamp manifest after rewrite: %v\n", mErr)
 		}
 	}
 
@@ -669,18 +690,19 @@ func checkOrphanHubs(w io.Writer) int {
 //   - partial: a file in Scaffolded is missing on disk entirely
 //   - mid-version drift: manifest.Version != current binary version
 //
-// The bones-owned hook subset of .claude/settings.json is also
-// hashed (manifest.SettingsHooksSHA256) and compared against the
-// current on-disk hash. Divergence here means somebody has hand-
-// edited or deleted bones's hook entries since `bones up`; doctor
-// surfaces it as a WARN so the operator can re-run `bones up` to
-// restore the canonical set.
+// Per-entry drift detection for the bones-owned hook subset of
+// .claude/settings.json lives in checkBonesHooksDrift (issue #318);
+// callers walk both helpers together to get the full manifest
+// picture.
 //
 // Read-only and silent on workspaces without a manifest (legacy
 // pre-issue-#262 installs and pre-`bones up` directories).
 //
-// Returns the count of WARN-class findings emitted.
-func checkManifestIntegrity(w io.Writer, cwd string) int {
+// Returns the count of WARN-class findings emitted. Threads reset
+// through to checkBonesHooksDrift so `bones doctor --reset`
+// (issue #318) can opt into rewriting drifted bones-owned hook
+// entries to canonical.
+func checkManifestIntegrity(w io.Writer, cwd string, reset bool) int {
 	manifest, err := readManifest(cwd)
 	if err != nil {
 		_, _ = fmt.Fprintf(w, "  WARN  read bones manifest: %v\n", err)
@@ -736,28 +758,254 @@ func checkManifestIntegrity(w io.Writer, cwd string) int {
 		}
 	}
 
-	// Bones-owned hook subset of .claude/settings.json. Empty
-	// recorded value means a legacy manifest from a pre-#262
-	// binary — skip silently rather than false-positive.
-	if manifest.SettingsHooksSHA256 != "" {
-		got, herr := bonesOwnedHooksHashFromDisk(cwd)
-		if herr != nil {
-			_, _ = fmt.Fprintf(w,
-				"  WARN  read bones-owned hooks: %v\n", herr)
-			warns++
-		} else if got != manifest.SettingsHooksSHA256 {
-			_, _ = fmt.Fprintf(w,
-				"  WARN  bones manifest tamper: .claude/settings.json bones-owned hooks "+
-					"sha256 drift (manifest=%s on-disk=%s) — run `bones up` to restore\n",
-				short(manifest.SettingsHooksSHA256), short(got))
-			warns++
-		}
-	}
+	warns += checkBonesHooksDrift(w, cwd, manifest, reset)
 
 	if warns == 0 && len(manifest.Scaffolded) > 0 {
 		_, _ = fmt.Fprintln(w, "  OK    bones manifest matches on-disk scaffold")
 	}
 	return warns
+}
+
+// checkBonesHooksDrift compares the per-entry hashes recorded in
+// manifest.SettingsHooks against the live state of every bones-owned
+// hook entry in .claude/settings.json. Per issue #318 the drift
+// surface is per-entry (so doctor can name SessionStart[0]/1 instead
+// of saying "something changed") and report-only by default — drift
+// here means "operator hand-edited the entry," and rewriting would
+// clobber their change. Pass --reset to opt into a rewrite.
+//
+// Migration: a legacy v1 manifest carries SettingsHooksSHA256 (the
+// pre-#318 single-roll-up hash) and an empty SettingsHooks map. Doctor
+// reports a one-line INFO so the operator knows their next `bones up`
+// will rewrite to v2; it does NOT compare the legacy hash because
+// the per-entry surface supersedes it.
+//
+// Returns the count of WARN-class findings emitted (zero on a clean
+// workspace). When reset is true, drifted entries are rewritten to
+// their canonical form (re-installed via mergeSettings's helpers)
+// and the manifest's per-entry hash is re-stamped — emitting a FIX
+// line per rewritten entry instead of a WARN.
+func checkBonesHooksDrift(w io.Writer, cwd string, manifest *skillManifest, reset bool) int {
+	if manifest == nil {
+		return 0
+	}
+	// Legacy v1 manifest (pre-#318): single rolled-up hash, no
+	// per-entry map. Don't false-positive against the per-entry
+	// surface — surface a one-line INFO and let `bones up` migrate.
+	if manifest.SchemaVersion < manifestSchemaVersion &&
+		manifest.SettingsHooksSHA256 != "" &&
+		len(manifest.SettingsHooks) == 0 {
+		_, _ = fmt.Fprintln(w,
+			"  INFO  bones manifest uses legacy v1 hook hash — "+
+				"next `bones up` migrates to per-entry hashing (#318)")
+		return 0
+	}
+	if len(manifest.SettingsHooks) == 0 {
+		// Manifest exists but never recorded any hook entries
+		// (workspace where mergeSettings hasn't run). Nothing to
+		// compare against.
+		return 0
+	}
+	live, err := bonesOwnedHookEntryHashesFromDisk(cwd)
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "  WARN  read bones-owned hooks: %v\n", err)
+		return 1
+	}
+	keys := manifestHookKeysSorted(manifest.SettingsHooks, live)
+	driftedKeys, warns := reportHookDriftPerEntry(w, manifest.SettingsHooks, live, keys)
+	if reset && len(driftedKeys) > 0 {
+		fixed, ferr := resetDriftedHooks(w, cwd, driftedKeys)
+		if ferr != nil {
+			_, _ = fmt.Fprintf(w, "  WARN  reset bones-owned hooks: %v\n", ferr)
+			return warns + 1
+		}
+		// FIX lines were already emitted by resetDriftedHooks; the
+		// drift is healed, so do NOT count the original divergence
+		// as a WARN — auto-rewrite of bones-owned shape is a
+		// healing action, not a finding (mirrors ADR 0051's policy
+		// for checkBonesScaffoldedHooks).
+		return warns - fixed
+	}
+	return warns
+}
+
+// reportHookDriftPerEntry emits one WARN/INFO line per entry whose
+// state diverges from the manifest. Returns the entry keys that need
+// canonical rewriting (hash mismatch only — missing entries are
+// re-installed by `bones up` rather than the per-entry rewrite path)
+// and the WARN count.
+func reportHookDriftPerEntry(
+	w io.Writer, manifest, live map[string]string, keys []string,
+) (drifted []string, warns int) {
+	for _, key := range keys {
+		want, hadWant := manifest[key]
+		got, hadGot := live[key]
+		switch {
+		case hadWant && !hadGot:
+			_, _ = fmt.Fprintf(w,
+				"  WARN  hooks: %-22s missing — manifest claims this entry "+
+					"but it is absent on disk; run `bones up` to restore\n",
+				key)
+			warns++
+		case !hadWant && hadGot:
+			// Live entry without a manifest record — likely a
+			// migration window before #318's first `bones up`.
+			// Report as INFO; rewrite happens at next up.
+			_, _ = fmt.Fprintf(w,
+				"  INFO  hooks: %-22s present on disk but not in manifest "+
+					"— next `bones up` will record it\n", key)
+		case want != got:
+			_, _ = fmt.Fprintf(w,
+				"  WARN  hooks: %-22s edited since `bones up` "+
+					"(manifest=%s on-disk=%s) — `bones doctor --reset` "+
+					"rewrites to canonical\n",
+				key, short(want), short(got))
+			warns++
+			drifted = append(drifted, key)
+		}
+	}
+	return drifted, warns
+}
+
+// resetDriftedHooks rewrites every entry in driftedKeys back to its
+// canonical bones-installed shape. The rewrite path uses the same
+// helpers mergeSettings uses (pruneCommandFromEvent +
+// addHookWithMatcher) so the resulting settings.json is byte-
+// identical to a fresh `bones up`. After the rewrite, the manifest
+// is re-stamped with fresh per-entry hashes so a subsequent doctor
+// run reports OK.
+//
+// Emits one FIX line per rewritten entry naming the key. Returns
+// the number of entries successfully rewritten (so the caller can
+// decrement its WARN count — a healed entry is not a finding).
+func resetDriftedHooks(w io.Writer, cwd string, driftedKeys []string) (int, error) {
+	settingsPath := filepath.Join(cwd, ".claude", "settings.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return 0, fmt.Errorf("read settings.json: %w", err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		return 0, fmt.Errorf("parse settings.json: %w", err)
+	}
+	hooks, _ := root["hooks"].(map[string]any)
+	if hooks == nil {
+		hooks = map[string]any{}
+		root["hooks"] = hooks
+	}
+	// Reseat every bones-owned command back to canonical in a
+	// SINGLE pass. rewriteCanonicalHookEntry prunes-and-re-adds the
+	// whole bones-owned set internally, so calling it once heals
+	// every drifted entry — looping per-key would re-prune entries
+	// that the previous iteration just installed and emit duplicate
+	// FIX lines for entries that share the same rewrite cycle.
+	rewriteCanonicalHookEntry(hooks)
+	for _, key := range driftedKeys {
+		_, _ = fmt.Fprintf(w,
+			"  FIX   hooks: %-22s rewritten to canonical (--reset)\n", key)
+	}
+	fixed := len(driftedKeys)
+	root["hooks"] = hooks
+	out, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return fixed, fmt.Errorf("serialize settings.json: %w", err)
+	}
+	if err := os.WriteFile(settingsPath, append(out, '\n'), 0o644); err != nil {
+		return fixed, fmt.Errorf("write settings.json: %w", err)
+	}
+	// Re-stamp the manifest's per-entry hashes so doctor reports
+	// OK on the next run. nil footprint: the rewrite path is not
+	// part of scaffoldOrchestrator's flow, so #338's
+	// SettingsCreatedByUp signal is unavailable here. The sticky-
+	// provenance logic in writeManifest inherits the previous
+	// manifest's value when fp is nil, which preserves whatever
+	// `bones up` originally recorded.
+	if err := writeManifest(cwd, nil); err != nil {
+		return fixed, fmt.Errorf("re-stamp manifest: %w", err)
+	}
+	return fixed, nil
+}
+
+// refreshManifestHooksIfPresent re-stamps the manifest's per-entry
+// hook hashes from the current on-disk state of .claude/settings.json.
+// No-ops silently when no manifest is present (workspace predates
+// `bones up`). Used by checkBonesScaffoldedHooksWith after an ADR
+// 0051 auto-rewrite to keep #318's per-entry hashes aligned with
+// the file the rewrite just produced.
+func refreshManifestHooksIfPresent(cwd string) error {
+	manifest, err := readManifest(cwd)
+	if err != nil {
+		return err
+	}
+	if manifest == nil {
+		return nil
+	}
+	live, err := bonesOwnedHookEntryHashesFromDisk(cwd)
+	if err != nil {
+		return err
+	}
+	manifest.SettingsHooks = live
+	manifest.SchemaVersion = manifestSchemaVersion
+	// v1 legacy field is intentionally cleared on rewrite — once
+	// the per-entry map is populated, the rolled-up hash is dead
+	// weight and would mislead operators reading the manifest.
+	manifest.SettingsHooksSHA256 = ""
+	out, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal manifest: %w", err)
+	}
+	path := filepath.Join(cwd, filepath.FromSlash(manifestRel))
+	return os.WriteFile(path, append(out, '\n'), 0o644)
+}
+
+// rewriteCanonicalHookEntry re-applies every bones-owned hook
+// command to hooks. Idempotent: re-adding a command bones already
+// installed is a no-op. The matcher placement follows ADR 0051
+// (SessionStart prime under "startup|compact"; everything else
+// under the default "" matcher). Returns true when at least one
+// add operation took effect (the command was missing entirely
+// rather than just edited).
+func rewriteCanonicalHookEntry(hooks map[string]any) bool {
+	primeCmd := clauderhooks.PrimeCommandFor(clauderhooks.EventSessionStart)
+	added := false
+	// First, prune any drifted entry that still exists with the
+	// canonical command — addHookWithMatcher is no-op when the
+	// command is already present at the right matcher, but a
+	// drifted entry might be at a different matcher or have
+	// modified fields. Pruning resets the slate.
+	for _, h := range bonesOwnedHookCommands {
+		pruneCommandFromEvent(hooks, h.Event, h.Command)
+	}
+	// Re-install canonically. Prime gets the matcher; hub start is
+	// at default matcher.
+	if addHookWithMatcher(hooks, "SessionStart",
+		clauderhooks.SessionStartMatcher, primeCmd) {
+		added = true
+	}
+	if addHook(hooks, "SessionStart", "bones hub start") {
+		added = true
+	}
+	return added
+}
+
+// manifestHookKeysSorted returns the union of entry keys from the
+// manifest map and the on-disk map, sorted lexically. Used by
+// checkBonesHooksDrift so output is deterministic regardless of map
+// iteration order.
+func manifestHookKeysSorted(manifest, live map[string]string) []string {
+	seen := map[string]bool{}
+	for k := range manifest {
+		seen[k] = true
+	}
+	for k := range live {
+		seen[k] = true
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // checkStaleSlotDirs reports per-slot directories under
