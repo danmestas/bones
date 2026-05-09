@@ -313,3 +313,98 @@ func TestRemove(t *testing.T) {
 		t.Fatalf("Remove nonexistent: want nil, got %v", err)
 	}
 }
+
+// TestRegister_WritesIdleEntry pins #305: Register writes an entry
+// with HubPID=0 and the supplied name, so a freshly-up'd workspace
+// is visible to `bones status --all` before any verb triggers a hub
+// serve.
+func TestRegister_WritesIdleEntry(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cwd := t.TempDir()
+	writeWorkspaceMarker(t, cwd)
+
+	if err := Register(cwd, "fresh"); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	got, err := Read(cwd)
+	if err != nil {
+		t.Fatalf("Read after Register: %v", err)
+	}
+	if got.HubPID != 0 {
+		t.Errorf("HubPID = %d, want 0 (idle entry)", got.HubPID)
+	}
+	if got.Name != "fresh" {
+		t.Errorf("Name = %q, want %q", got.Name, "fresh")
+	}
+	if got.Cwd != cwd {
+		t.Errorf("Cwd = %q, want %q", got.Cwd, cwd)
+	}
+}
+
+// TestRegister_PreservesLiveEntry pins #305: Register is a no-op when
+// a live (PID > 0) entry already exists, so `bones up` re-runs against
+// a workspace whose hub is currently serving must NOT clobber the
+// HubURL/PID/timestamps the hub wrote. Only the PID=0 idle case gets
+// refreshed.
+func TestRegister_PreservesLiveEntry(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cwd := t.TempDir()
+	writeWorkspaceMarker(t, cwd)
+
+	live := Entry{
+		Cwd: cwd, Name: "live", HubURL: "http://127.0.0.1:9",
+		HubPID: os.Getpid(), StartedAt: time.Now().UTC().Truncate(time.Second),
+	}
+	if err := Write(live); err != nil {
+		t.Fatalf("Write live: %v", err)
+	}
+
+	if err := Register(cwd, "should-be-ignored"); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	got, err := Read(cwd)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got.Name != "live" {
+		t.Errorf("Register clobbered live entry name: %q want %q", got.Name, "live")
+	}
+	if got.HubPID != live.HubPID {
+		t.Errorf("Register clobbered live entry HubPID: %d want %d",
+			got.HubPID, live.HubPID)
+	}
+	if got.HubURL != live.HubURL {
+		t.Errorf("Register clobbered live entry HubURL: %q want %q",
+			got.HubURL, live.HubURL)
+	}
+}
+
+// TestRegister_IdleEntrySurvivesPrune pins #305 corollary: a PID=0
+// idle entry written by Register must NOT be pruned by the read-time
+// self-prune. Pre-#305 isStaleEntry treated PID=0 as dead and dropped
+// the row on the next List/Read, making the registered-but-idle state
+// unobservable. cwd existence still gates pruning.
+func TestRegister_IdleEntrySurvivesPrune(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cwd := t.TempDir()
+	writeWorkspaceMarker(t, cwd)
+
+	if err := Register(cwd, "idle"); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	entries, err := List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var found bool
+	for _, e := range entries {
+		if e.Cwd == cwd {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("idle entry pruned by List(); have %+v", entries)
+	}
+}

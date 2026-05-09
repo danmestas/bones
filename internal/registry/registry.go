@@ -86,6 +86,33 @@ func Write(e Entry) error {
 // ErrNotFound is returned by Read when no entry exists for the given cwd.
 var ErrNotFound = errors.New("registry: entry not found")
 
+// Register persists a PID=0 "registered but idle" entry for cwd
+// (#305). Used by `bones up` so the workspace is visible to
+// `bones status --all` between `bones up` and the first verb that
+// triggers a hub serve.
+//
+// Idempotent: if an entry already exists with HubPID > 0 (a live or
+// recently-live hub), Register is a no-op so the hub-written record
+// is preserved. If the existing entry is a PID=0 register row, it's
+// refreshed with the new name and timestamp.
+//
+// `bones down` removes entries via Remove; a hub start overwrites
+// the idle row with a PID-bearing entry via Write.
+func Register(cwd, name string) error {
+	if existing, err := Read(cwd); err == nil {
+		if existing.HubPID > 0 {
+			return nil
+		}
+	} else if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	return Write(Entry{
+		Cwd:       cwd,
+		Name:      name,
+		StartedAt: time.Now().UTC(),
+	})
+}
+
 // Read loads the workspace's registry entry. Single-file layout (#250):
 // the canonical path is <id>.json. Legacy per-PID files (`<id>-<pid>.json`)
 // are migrated on read into the canonical name and then deleted —

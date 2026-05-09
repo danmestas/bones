@@ -13,6 +13,7 @@ import (
 
 	"github.com/danmestas/bones/internal/githook"
 	"github.com/danmestas/bones/internal/hub"
+	"github.com/danmestas/bones/internal/registry"
 	"github.com/danmestas/bones/internal/scaffoldver"
 	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/telemetry"
@@ -106,6 +107,16 @@ func runUp(cwd string, verbose, stealth bool) (err error) {
 	if hookErr := installGitHook(wsDir, verbose, logger); hookErr != nil {
 		err = fmt.Errorf("git hook: %w", hookErr)
 		return err
+	}
+
+	// Register the workspace in the cross-host registry so it appears
+	// in `bones status --all` between `bones up` and the first verb
+	// that triggers a hub serve (#305). PID=0 entry; the hub start
+	// path overwrites it with a PID-bearing record. `bones down`
+	// removes the entry. Best-effort: a HOME/permission failure here
+	// must not block scaffold completion.
+	if regErr := registry.Register(wsDir, resolveWorkspaceName(wsDir)); regErr != nil {
+		logger.Warnf("up: WARN  registry register: %v", regErr)
 	}
 
 	gitignoreAdded := runPostScaffoldChecks(wsDir, stealth, logger)

@@ -260,6 +260,158 @@ func TestStatusAllEmptyRegistry(t *testing.T) {
 	}
 }
 
+// TestStatusAllShowsIdleAfterRegister pins #305 acceptance criterion 1:
+// after `bones up` (modeled here as registry.Register, the underlying
+// call), `bones status --all` shows the workspace under the Idle
+// section with state=idle. Pre-#305 the workspace was invisible to
+// --all because only hub-write paths populated the registry.
+func TestStatusAllShowsIdleAfterRegister(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cwd := t.TempDir()
+
+	if err := registry.Register(cwd, "freshly-up"); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := renderStatusAll(&buf); err != nil {
+		t.Fatalf("renderStatusAll: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"== Idle workspaces ==", "freshly-up", "idle"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	// "No workspaces running" must NOT appear when the registry has an
+	// idle entry — that hint is the bug #305 fixes.
+	if strings.Contains(out, "No workspaces running") {
+		t.Fatalf("idle workspace must suppress empty-registry hint:\n%s", out)
+	}
+}
+
+// TestStatusAllPromotesIdleToActiveOnHubWrite pins #305 acceptance
+// criterion 2: a workspace that was idle gets surfaced as active once
+// the hub start path overwrites the PID=0 entry with a PID-bearing
+// row. We model the hub-write by Register-then-Write, matching the
+// real bones up → bones hub start sequence.
+func TestStatusAllPromotesIdleToActiveOnHubWrite(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cwd := t.TempDir()
+
+	if err := registry.Register(cwd, "served"); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+	if err := registry.Write(registry.Entry{
+		Cwd: cwd, Name: "served", HubURL: srv.URL,
+		HubPID: os.Getpid(), StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := renderStatusAll(&buf); err != nil {
+		t.Fatalf("renderStatusAll: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"== Active workspaces ==", "served", "active"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "== Idle workspaces ==") {
+		t.Fatalf("active entry must not appear in idle section:\n%s", out)
+	}
+}
+
+// TestStatusAllJSONIncludesStateField pins #305 acceptance criterion 3:
+// the --json envelope's per-workspace row carries a `state` field set
+// to "active", "idle", or "paused". Scripts branching on workspace
+// state should match this field rather than re-deriving it from
+// HubPID.
+func TestStatusAllJSONIncludesStateField(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cwdIdle := t.TempDir()
+	cwdActive := t.TempDir()
+
+	if err := registry.Register(cwdIdle, "idle-ws"); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+	if err := registry.Write(registry.Entry{
+		Cwd: cwdActive, Name: "active-ws", HubURL: srv.URL,
+		HubPID: os.Getpid(), StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := renderStatusAllJSON(&buf); err != nil {
+		t.Fatalf("renderStatusAllJSON: %v", err)
+	}
+
+	// Envelope shape: { "verb": "status", "version": "v1", "data": { "workspaces": [...] } }.
+	var env struct {
+		Data struct {
+			Workspaces []struct {
+				Name  string `json:"name"`
+				State string `json:"state"`
+			} `json:"workspaces"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, buf.String())
+	}
+	if len(env.Data.Workspaces) != 2 {
+		t.Fatalf("expected 2 rows, got %d:\n%s", len(env.Data.Workspaces), buf.String())
+	}
+	got := map[string]string{}
+	for _, r := range env.Data.Workspaces {
+		got[r.Name] = r.State
+	}
+	if got["idle-ws"] != "idle" {
+		t.Errorf("idle-ws state = %q, want %q", got["idle-ws"], "idle")
+	}
+	if got["active-ws"] != "active" {
+		t.Errorf("active-ws state = %q, want %q", got["active-ws"], "active")
+	}
+}
+
+// TestStatusAllRemovedAfterRegistryRemove pins #305 acceptance
+// criterion 4: after `bones down` (modeled by registry.Remove), the
+// workspace disappears from --all output entirely.
+func TestStatusAllRemovedAfterRegistryRemove(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cwd := t.TempDir()
+
+	if err := registry.Register(cwd, "transient"); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if err := registry.Remove(cwd); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := renderStatusAll(&buf); err != nil {
+		t.Fatalf("renderStatusAll: %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "transient") {
+		t.Fatalf("removed workspace must not appear in output:\n%s", out)
+	}
+	if !strings.Contains(out, "No workspaces running") {
+		t.Fatalf("empty registry should produce friendly hint:\n%s", out)
+	}
+}
+
 // TestResolveStatusRoot_DoesNotAutoStartHub mirrors the #138 item 7
 // fix for `bones down` (TestResolveDownRoot_DoesNotAutoStartHub) for
 // `bones status` (#207). Pre-fix, every CLI verb resolved the

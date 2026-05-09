@@ -83,10 +83,16 @@ type StatusAllPayload struct {
 }
 
 // StatusWorkspaceRow is one row of the status --all view.
+//
+// State (#305) is one of "active" (live hub, PID alive + HTTP probe
+// ok), "idle" (PID=0, registered by `bones up` but no hub serving),
+// or "paused" (PID > 0 but probe failed). Scripts branching on the
+// row should match this field rather than reading HubPID directly.
 type StatusWorkspaceRow struct {
 	Cwd       string             `json:"cwd"`
 	Name      string             `json:"name"`
 	HubURL    string             `json:"hub_url"`
+	State     string             `json:"state"`
 	Sessions  int                `json:"sessions"`
 	StartedAt timefmt.LoggedTime `json:"started_at"`
 }

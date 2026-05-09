@@ -61,25 +61,36 @@ func pruneStale() ([]string, []Entry, error) {
 }
 
 // isStaleEntry reports whether e is registry crud that the read-path
-// scan should delete. Two signals qualify:
+// scan should delete. Three signals qualify:
 //
-//  1. e.HubPID is not alive on this host (dead PID, never-existed PID,
-//     or recycled-to-other-process PID we don't have permission to
-//     signal). The original hub is gone; nothing this entry points to
-//     still exists.
-//  2. e.Cwd does not exist on disk (ENOENT). The workspace was rm
+//  1. e.Cwd does not exist on disk (ENOENT). The workspace was rm
 //     -rf'd; even if the PID happens to be alive (recycled to an
 //     unrelated process, or a true orphan), the entry has no
 //     reachable workspace to act against.
+//  2. e.HubPID > 0 but is not alive on this host (dead PID, never-
+//     existed PID, or recycled-to-other-process PID we don't have
+//     permission to signal). The original hub is gone; nothing this
+//     entry points to still exists.
+//
+// PID=0 entries are NOT stale: they're "registered but idle"
+// workspaces written by `bones up` (#305). They carry a valid cwd
+// and no claimed hub PID; they exist so a freshly-up'd workspace is
+// visible to `bones status --all` between `bones up` and the first
+// verb that triggers a hub serve. `bones down` deletes these via
+// Remove; a hub start overwrites them with a PID-bearing entry.
 //
 // Live PID + cwd-exists-but-marker-missing-or-trashed entries are
 // left alone — those are doctor-actionable orphans (ADR 0043) that
 // the operator should resolve via `bones hub reap`.
 func isStaleEntry(e Entry) bool {
-	if !pidAlive(e.HubPID) {
+	if _, err := os.Stat(e.Cwd); errors.Is(err, os.ErrNotExist) {
 		return true
 	}
-	if _, err := os.Stat(e.Cwd); errors.Is(err, os.ErrNotExist) {
+	if e.HubPID == 0 {
+		// Registered-but-idle (#305): no claimed hub, valid cwd. Keep.
+		return false
+	}
+	if !pidAlive(e.HubPID) {
 		return true
 	}
 	return false
