@@ -59,7 +59,11 @@ func main() {
 	}
 
 	var c CLI
-	ctx := kong.Parse(&c,
+	// Pre-parse `--help --all` (#325): when present, strips `--all` from
+	// os.Args and returns a kong.Help() option that installs a recursive
+	// help printer. Returns nil otherwise — leaving Kong's default help
+	// wiring untouched so default `--help` output stays byte-identical.
+	parseOpts := []kong.Option{
 		kong.Name("bones"),
 		kong.Description("bones unified CLI: workspace, orchestrator, tasks"),
 		kong.UsageOnError(),
@@ -79,7 +83,11 @@ func main() {
 			}
 			os.Exit(code)
 		}),
-	)
+	}
+	if helpAllOpt := applyHelpAllArgs(); helpAllOpt != nil {
+		parseOpts = append(parseOpts, helpAllOpt)
+	}
+	ctx := kong.Parse(&c, parseOpts...)
 	// Default slog level is Info; demote operational telemetry sites
 	// to Debug so non-`-v` invocations stay quiet. `-v` (repocli
 	// Globals.Verbose) reinstalls a Debug-level handler so the same
