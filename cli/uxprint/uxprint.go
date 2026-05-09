@@ -125,6 +125,20 @@ func Summary(w io.Writer, n int, noun, verb string) {
 	_, _ = fmt.Fprintf(w, "%d %s %s\n", n, noun, verb)
 }
 
+// Up prints the one-line success signature for `bones up` (issue
+// #314 / convention #323). Workspace is the (possibly home-shortened)
+// workspace path; actionCount is the number of structured per-action
+// lines emitted before this signature.
+//
+//	up       <workspace>  actions=<n>
+//
+// The verb column matches the eight-char width used by the other
+// helpers so a `bones tasks watch`-style scan reads aligned. Workspace
+// is rendered as a bare token (no %q) — it's a path, not a title.
+func Up(w io.Writer, workspace string, actionCount int) {
+	_, _ = fmt.Fprintf(w, "up       %s  actions=%d\n", workspace, actionCount)
+}
+
 // NoOpenTasks prints the filter-emptiness hint emitted by `tasks
 // list` (and read verbs that gate on open/closed) when the filter
 // hid existing closed rows.

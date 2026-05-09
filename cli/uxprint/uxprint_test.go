@@ -135,6 +135,31 @@ func TestSummary(t *testing.T) {
 	}
 }
 
+// TestUp pins the `bones up` success signature wording per #314 /
+// the convention from #323. Workspace path is rendered bare; the
+// action count surfaces as `actions=<n>`.
+func TestUp(t *testing.T) {
+	var buf bytes.Buffer
+	Up(&buf, "~/projects/bones", 7)
+	want := "up       ~/projects/bones  actions=7\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("Up: got %q want %q", got, want)
+	}
+}
+
+// TestUpZeroActions covers the no-op-rerun case: `bones up` after a
+// fully-converged workspace emits zero per-action lines and the
+// summary still renders with actions=0 so the operator gets explicit
+// affirmation rather than silence.
+func TestUpZeroActions(t *testing.T) {
+	var buf bytes.Buffer
+	Up(&buf, "/tmp/ws", 0)
+	want := "up       /tmp/ws  actions=0\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("Up zero-actions: got %q want %q", got, want)
+	}
+}
+
 func TestNoOpenTasks(t *testing.T) {
 	var buf bytes.Buffer
 	NoOpenTasks(&buf, 1)

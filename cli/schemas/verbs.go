@@ -43,6 +43,7 @@ var Verbs = []VerbInfo{
 	{Verb: "tasks.ready", CurrentVersion: "v1", PayloadName: "TasksReadyPayload"},
 	{Verb: "tasks.show", CurrentVersion: "v1", PayloadName: "TasksShowPayload"},
 	{Verb: "tasks.update", CurrentVersion: "v1", PayloadName: "TasksUpdatePayload"},
+	{Verb: "up", CurrentVersion: "v1", PayloadName: "UpPayload"},
 	{Verb: "workspaces.get", CurrentVersion: "v1", PayloadName: "WorkspacesGetPayload"},
 	{Verb: "workspaces.list", CurrentVersion: "v1", PayloadName: "WorkspacesListPayload"},
 }

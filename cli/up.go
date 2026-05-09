@@ -11,14 +11,28 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/danmestas/bones/cli/schemas"
+	"github.com/danmestas/bones/cli/uxprint"
 	"github.com/danmestas/bones/internal/githook"
 	"github.com/danmestas/bones/internal/hub"
 	"github.com/danmestas/bones/internal/registry"
 	"github.com/danmestas/bones/internal/scaffoldver"
 	"github.com/danmestas/bones/internal/swarm"
 	"github.com/danmestas/bones/internal/telemetry"
+	"github.com/danmestas/bones/internal/version"
 	"github.com/danmestas/bones/internal/workspace"
 )
+
+// upOpts bundles the per-invocation toggles for runUp. Pinned as a
+// struct so future flags (#314 added JSON + Quiet on top of the
+// pre-existing Verbose + Stealth) don't keep growing the runUp
+// signature.
+type upOpts struct {
+	Verbose bool
+	Stealth bool
+	JSON    bool
+	Quiet   bool
+}
 
 // runUp performs workspace bootstrap from a fresh clone:
 //  1. workspace init (idempotent — joins if already initialized)
@@ -49,7 +63,7 @@ import (
 // stealth=true (issue #291) skips the merge into `.claude/settings.json`.
 // Operators set this — typically alongside BONES_DIR — when running bones
 // against a project they don't want to mark with Claude hook entries.
-func runUp(cwd string, verbose, stealth bool) (err error) {
+func runUp(cwd string, opts upOpts) (err error) {
 	ctx, end := telemetry.RecordCommand(context.Background(), "bones.up",
 		telemetry.String("workspace_hash", telemetry.WorkspaceHash(cwd)),
 	)
@@ -87,116 +101,201 @@ func runUp(cwd string, verbose, stealth bool) (err error) {
 	logger := openUpLog(wsDir)
 	defer logger.Close(err)
 
-	if verbose {
+	if opts.Verbose && !opts.JSON {
 		logger.Infof("up: workspace at %s", wsDir)
 	}
 
-	if recovery {
+	if recovery && !opts.JSON {
 		logger.Warnf("bones: scaffold incomplete from prior run — re-running scaffold")
 	}
 
-	fp, scaffErr := scaffoldOrchestrator(wsDir, scaffoldOpts{Stealth: stealth})
+	fp, scaffErr := scaffoldOrchestrator(wsDir, scaffoldOpts{Stealth: opts.Stealth})
 	if scaffErr != nil {
 		err = fmt.Errorf("orchestrator scaffold: %w", scaffErr)
 		return err
 	}
-	if verbose {
-		logger.Infof("up: orchestrator skills and hooks installed")
-	}
 
-	if hookErr := installGitHook(wsDir, verbose, logger); hookErr != nil {
+	if hookErr := installGitHook(wsDir, opts.Verbose && !opts.JSON, logger); hookErr != nil {
 		err = fmt.Errorf("git hook: %w", hookErr)
 		return err
 	}
 
 	// Register the workspace in the cross-host registry so it appears
 	// in `bones status --all` between `bones up` and the first verb
-	// that triggers a hub serve (#305). PID=0 entry; the hub start
-	// path overwrites it with a PID-bearing record. `bones down`
-	// removes the entry. Best-effort: a HOME/permission failure here
-	// must not block scaffold completion.
+	// that triggers a hub serve (#305 / #339). PID=0 entry; the hub
+	// start path overwrites it with a PID-bearing record. `bones
+	// down` removes the entry. Best-effort: a HOME/permission failure
+	// here must not block scaffold completion. Routes through the
+	// per-mode warn sink so --json keeps stdout clean (warning lands
+	// on stderr, matching #311's hub-URL precedent) and --quiet drops
+	// the warning entirely.
 	if regErr := registry.Register(wsDir, resolveWorkspaceName(wsDir)); regErr != nil {
-		logger.Warnf("up: WARN  registry register: %v", regErr)
+		warnSink(opts, logger)("up: WARN  registry register: %v", regErr)
 	}
 
-	gitignoreAdded := runPostScaffoldChecks(wsDir, stealth, logger)
+	gitignoreAdded := runPostScaffoldChecks(wsDir, opts, logger)
+	actions := collectUpActions(fp, gitignoreAdded)
+	return emitUpResult(opts, logger, wsDir, actions)
+}
 
-	if verbose {
-		logger.Infof("up: workspace ready. Run any verb (e.g., `bones tasks status`) " +
-			"and the hub will start automatically; or run `bones hub start` now.")
-	} else {
-		logger.Infof("up: ready at %s", wsDir)
-		emitFootprintSummary(logger, fp)
-		if len(gitignoreAdded) > 0 {
-			logger.Infof("up:   added to .gitignore: %s",
-				strings.Join(gitignoreAdded, ", "))
+// collectUpActions assembles the per-action list from the scaffold
+// footprint and the gitignore-added entries. Pairs hook removals with
+// matching installs so legacy → canonical migrations surface as
+// `hooks rewrote` lines. Manifest is reported as bumped only when the
+// scaffold actually mutated state — re-runs against a converged
+// workspace yield no manifest action.
+func collectUpActions(fp scaffoldFootprint, gitignoreAdded []string) []upAction {
+	rewrites, installs := pairRewrites(fp.HookRemovals, fp.HookInstalls)
+	skillsSynced := countSkillFiles(fp.FilesWritten)
+	manifestVersion := ""
+	if scaffoldChanged(fp) {
+		manifestVersion = version.Get()
+	}
+	return buildUpActions(gitignoreAdded, rewrites, installs, skillsSynced, manifestVersion)
+}
+
+// emitUpResult dispatches the actions slice onto the JSON, quiet, or
+// human output paths per opts. JSON returns the envelope contract;
+// quiet returns silently; the default path renders per-action lines,
+// the success signature, and the hub-status orientation aid through
+// the logger's Tee so the audit log captures every emitted line.
+func emitUpResult(opts upOpts, logger *upLogger, wsDir string, actions []upAction) error {
+	if opts.JSON {
+		return emitUpJSON(os.Stdout, wsDir, actions)
+	}
+	if opts.Quiet {
+		return nil
+	}
+	teeOut := logger.Tee(os.Stdout)
+	for _, a := range actions {
+		renderUpAction(teeOut, a)
+	}
+	uxprint.Up(teeOut, shortenCwd(wsDir, os.Getenv("HOME")), len(actions))
+	printHubStatus(teeOut, wsDir)
+	return nil
+}
+
+// emitUpJSON marshals the up actions + summary into the ADR 0053
+// envelope and writes it to w. Per #314 the JSON path is the round-
+// trippable surface for tests and downstream consumers; --json
+// suppresses every other stdout line so a `--json | jq` pipeline
+// gets exactly one object.
+func emitUpJSON(w io.Writer, wsDir string, actions []upAction) error {
+	payload := schemas.UpPayload{
+		Actions: make([]schemas.UpAction, 0, len(actions)),
+		Summary: schemas.UpSummary{
+			Workspace:   wsDir,
+			ActionCount: len(actions),
+		},
+	}
+	for _, a := range actions {
+		payload.Actions = append(payload.Actions, schemas.UpAction{
+			Category: a.Category,
+			Action:   a.Action,
+			Target:   a.Target,
+			From:     a.From,
+			To:       a.To,
+		})
+	}
+	return emitEnvelope(w, "up", payload)
+}
+
+// countSkillFiles returns how many entries in filesWritten are
+// .claude/skills/*. Used to surface the `skills synced N skills`
+// action when the scaffold materialized fresh skill content.
+func countSkillFiles(filesWritten []string) int {
+	n := 0
+	for _, f := range filesWritten {
+		if strings.HasPrefix(f, ".claude/skills/") {
+			n++
 		}
 	}
-	printHubStatus(logger.Tee(os.Stdout), wsDir)
-	return nil
+	return n
+}
+
+// scaffoldChanged reports whether the scaffold pass actually mutated
+// state on disk (wrote files or rewired hooks). Used to gate the
+// `manifest bumped` action — re-running on a converged workspace
+// should not claim a manifest bump that did not happen.
+func scaffoldChanged(fp scaffoldFootprint) bool {
+	if len(fp.FilesWritten) > 0 {
+		return true
+	}
+	if len(fp.HookInstalls) > 0 || len(fp.HookRemovals) > 0 {
+		return true
+	}
+	return false
 }
 
 // runPostScaffoldChecks runs the workspace-wide checks that follow
 // orchestrator scaffold + git-hook install. None of them should
 // block bones up — the scaffold already landed; these are
 // informational. Returns the gitignore entries added so the caller
-// can surface them in the footprint summary.
+// can surface them in the per-action structured output.
 //
 // Three checks today:
 //   - ensureBonesGitignore (#306): adds .bones/ + skill manifest entries.
-//   - trackedDeletedFiles (#303): warns about tracked-but-missing files.
+//   - trackedDeletedFiles (#303 / #310): warns about tracked-but-missing files.
 //   - checkFossilDrift: warns when fossil tip diverges from git HEAD.
+//
+// Warnings route through the per-mode sink returned by warnSink:
+//
+//   - default (human) mode → logger.Warnf, which writes to stderr +
+//     captures to .bones/up.log;
+//   - JSON mode → bare stderr, so stdout stays a single valid envelope
+//     and warnings are still discoverable (matches #311's precedent of
+//     hub URLs → stderr);
+//   - --quiet → dropped entirely (the operator opted into silence).
 func runPostScaffoldChecks(
-	wsDir string, stealth bool, logger *upLogger,
+	wsDir string, opts upOpts, logger *upLogger,
 ) []string {
-	gitignoreAdded, gitignoreErr := ensureBonesGitignore(wsDir, stealth)
+	warn := warnSink(opts, logger)
+
+	gitignoreAdded, gitignoreErr := ensureBonesGitignore(wsDir, opts.Stealth)
 	if gitignoreErr != nil {
 		// Non-fatal: a read-only filesystem or gitignore the operator
 		// pinned with chmod 444 must not block scaffold. Surface as a
 		// warning so the host-local agent.id risk is at least visible.
-		logger.Warnf("up: WARN  gitignore: %v", gitignoreErr)
+		warn("up: WARN  gitignore: %v", gitignoreErr)
 	}
 
 	if missing, _ := trackedDeletedFiles(wsDir); len(missing) > 0 {
-		logger.Warnf("up: WARN  %s",
-			formatTrackedDeletedWarning(missing))
+		warn("up: WARN  %s", formatTrackedDeletedWarning(missing))
 	}
 
 	if dErr := checkFossilDrift(wsDir); dErr != nil {
-		logger.Warnf("up: WARN  %v", dErr)
+		warn("up: WARN  %v", dErr)
 	}
 
 	return gitignoreAdded
 }
 
-// emitFootprintSummary surfaces per-action file/hook changes from the
-// scaffold pass into the default-mode summary (#173). Each line is
-// indented under the "up: ready at" banner so a quick scan reads as
-// "what just changed in this workspace". When the workspace was already
-// fully scaffolded (no-op re-run), the function emits a single
-// "no changes" line so the operator sees an explicit affirmation rather
-// than wondering whether they pasted the wrong cwd.
-func emitFootprintSummary(logger *upLogger, fp scaffoldFootprint) {
-	emitted := false
-
-	if len(fp.FilesWritten) > 0 {
-		emitted = true
-		logger.Infof("up:   wrote %s", strings.Join(fp.FilesWritten, ", "))
+// warnSink returns the per-mode warning emitter for runPostScaffoldChecks.
+// One seam decides where post-scaffold WARN lines land so the three
+// call sites stay terse and consistent.
+//
+//   - --quiet: returns a no-op closure (operator opted into silence).
+//   - --json:  returns a closure that writes to os.Stderr only — stdout
+//     stays a single valid envelope, but the warnings remain visible
+//     to operators piping `--json | jq` (#310's intent is preserved).
+//   - default: returns logger.Warnf, which writes to stderr AND
+//     captures to .bones/up.log so the audit trail mirrors the
+//     terminal output.
+func warnSink(opts upOpts, logger *upLogger) func(format string, args ...any) {
+	if opts.Quiet {
+		return func(format string, args ...any) {}
 	}
-	if total := fp.hooksAdded(); total > 0 {
-		emitted = true
-		logger.Infof("up:   merged %d hooks into .claude/settings.json (%s)",
-			total, formatHookCounts(fp.HooksAddedByEvent))
+	if opts.JSON {
+		return func(format string, args ...any) {
+			_, _ = fmt.Fprintf(os.Stderr, format+"\n", args...)
+		}
 	}
-
-	if !emitted {
-		logger.Infof("up:   no changes (workspace already converged)")
-	}
+	return logger.Warnf
 }
 
 // formatHookCounts renders the per-event hook-add counts with stable
-// ordering so summary output is reproducible across runs (the underlying
-// map is unordered).
+// ordering. Retained as a helper so tests and any future debug surface
+// (e.g. `bones doctor`'s hook-coverage section) can reuse the wording.
 func formatHookCounts(byEvent map[string]int) string {
 	keys := make([]string, 0, len(byEvent))
 	for k, v := range byEvent {

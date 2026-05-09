@@ -43,10 +43,11 @@ func TestCLI_UpHelpADR0041(t *testing.T) {
 	}
 }
 
-// TestCLI_UpDefaultSummary pins #173: default-mode `bones up` lists
-// per-action file footprint changes (wrote files, merged hooks) instead
-// of just "ready at <wsDir>". Operators auditing what bones did to
-// their tree should not need `git status`.
+// TestCLI_UpDefaultSummary pins #314: default-mode `bones up` emits
+// one structured per-action line per change (gitignore add, hook
+// install/rewrite, skill sync, manifest bump) plus a one-line
+// success signature ("up <workspace> actions=<n>"). Operators
+// auditing what bones did to their tree should not need `git status`.
 func TestCLI_UpDefaultSummary(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skip in -short: integration test")
@@ -67,14 +68,16 @@ func TestCLI_UpDefaultSummary(t *testing.T) {
 	}
 	t.Cleanup(func() { _, _, _ = runCmd(t, bonesBin, dir, "down", "--yes") })
 
-	// Default summary must surface concrete file footprint, not just the
-	// pre-#173 "ready at" + hub status.
+	// Default summary must surface the per-action structure introduced
+	// in #314.
 	mustContain := []string{
-		"up: ready at",
-		"up:   wrote",           // file footprint marker
-		"up:   merged",          // hook merge marker
-		".claude/settings.json", // hook target named
-		"up: hub:",              // existing hub status line
+		"gitignore  added",     // gitignore action category
+		"hooks      installed", // hook install line
+		"skills     synced",    // skills sync line
+		"manifest   bumped",    // manifest bump line
+		"up       ",            // success signature verb column
+		"actions=",             // success signature key=value tail
+		"up: hub:",             // existing hub status line
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(stdout, want) {
@@ -118,7 +121,7 @@ func TestCLI_UpWritesAuditLog(t *testing.T) {
 		"finished",  // close banner
 		"exit=0",    // success exit code
 		"duration=", // elapsed
-		"up: ready", // captured terminal output
+		"actions=",  // captured success signature (#314)
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("up.log missing %q:\n%s", want, body)

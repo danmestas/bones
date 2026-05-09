@@ -43,10 +43,12 @@ func (c *JoinCmd) Run(g *repocli.Globals) error {
 // longer started by `bones up`; per ADR 0041 it auto-starts on the first
 // verb that needs it via workspace.Join.
 //
-// Default output: a single confirmation line. With -v / --verbose: the
-// banner plus per-step status lines. WARN lines (drift, missing git)
-// print regardless because they describe real issues the operator must
-// see. Verbosity comes from the global -v flag on repocli.Globals.
+// Per #314 the default output is now per-action structured: every
+// gitignore add, hook install/rewrite, skill sync, and manifest bump
+// gets one grep-friendly line, terminated by a one-line success
+// signature ("up <workspace> actions=<n>"). --quiet suppresses both
+// the per-action lines AND the summary signature; --json emits the
+// same actions wrapped in the ADR 0053 schema envelope.
 //
 // --stealth (issue #291) suppresses the merge into .claude/settings.json
 // — useful when running bones against a project where the operator does
@@ -56,17 +58,24 @@ type UpCmd struct {
 	// Stealth skips the .claude/settings.json merge. Combine with
 	// BONES_DIR=/path for a zero-workspace-write install.
 	Stealth bool `name:"stealth" help:"skip .claude/settings.json merge (combine with BONES_DIR)"`
+	JSON    bool `name:"json" help:"emit JSON envelope (ADR 0053)"`
+	Quiet   bool `name:"quiet" help:"suppress per-action output and success signature"`
 }
 
 func (c *UpCmd) Run(g *repocli.Globals) error {
-	if g.Verbose {
+	if g.Verbose && !c.JSON {
 		banner.Print()
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("cwd: %w", err)
 	}
-	return runUp(cwd, g.Verbose, c.Stealth)
+	return runUp(cwd, upOpts{
+		Verbose: g.Verbose,
+		Stealth: c.Stealth,
+		JSON:    c.JSON,
+		Quiet:   c.Quiet,
+	})
 }
 
 // reportWorkspace formats the standard workspace report and returns nil
