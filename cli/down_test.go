@@ -284,23 +284,52 @@ func TestRemoveBonesHooks_MissingFile(t *testing.T) {
 	}
 }
 
-// TestPlanDown_EmptyTree: on a tree without bones state, the always-on
-// actions are hub stop and registry removal (both best-effort, no-ops when
-// nothing is running). Per ADR 0041, planStopHub no longer probes for a
-// script — it always queues hub.Stop.
+// TestPlanDown_EmptyTree: on a tree without bones state, registry
+// removal is the always-on action (best-effort no-op when no entry
+// exists). The hub-stop action is gated on .bones/hub.pid actually
+// existing (#307 plan accuracy): the line previously rendered even
+// against workspaces that never started a hub, claiming to act on a
+// file that wasn't there. With no .bones/ at all in this test, no
+// hub.pid is possible, so the plan reflects only the registry remove.
 func TestPlanDown_EmptyTree(t *testing.T) {
 	dir := t.TempDir()
 	plan := planDown(dir, &DownCmd{})
-	if len(plan) != 2 {
-		t.Fatalf("empty tree plan: got %d actions, want 2 (hub stop + registry remove):\n%+v",
+	if len(plan) != 1 {
+		t.Fatalf("empty tree plan: got %d actions, want 1 (registry remove "+
+			"only — no hub.pid means no stop-hub line per #307):\n%+v",
 			len(plan), plan)
 	}
-	descs := plan[0].description + "\n" + plan[1].description
-	if !strings.Contains(descs, "stop hub") {
-		t.Errorf("plan missing hub stop; got:\n%s", descs)
+	if !strings.Contains(plan[0].description, "registry entry") {
+		t.Errorf("plan missing registry remove; got: %s", plan[0].description)
 	}
-	if !strings.Contains(descs, "registry entry") {
-		t.Errorf("plan missing registry remove; got:\n%s", descs)
+	for _, a := range plan {
+		if strings.Contains(a.description, "stop hub") {
+			t.Errorf("stop hub line present despite no .bones/hub.pid (#307); "+
+				"got: %s", a.description)
+		}
+	}
+}
+
+// TestPlanDown_HubPidPresentQueuesStop pins the inverse of #307's plan
+// accuracy fix: when .bones/hub.pid exists on disk, the stop-hub line
+// is in the plan. Without this companion test, the empty-tree fix
+// could regress to "always skip" and pass silently.
+func TestPlanDown_HubPidPresentQueuesStop(t *testing.T) {
+	dir := t.TempDir()
+	mkdir(t, filepath.Join(dir, ".bones"))
+	if err := os.WriteFile(filepath.Join(dir, ".bones", "hub.pid"),
+		[]byte("999999\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plan := planDown(dir, &DownCmd{})
+	descs := make([]string, len(plan))
+	for i, a := range plan {
+		descs[i] = a.description
+	}
+	joined := strings.Join(descs, "\n")
+	if !strings.Contains(joined, "stop hub") {
+		t.Errorf("plan missing stop-hub line despite .bones/hub.pid present "+
+			"(#307 plan accuracy):\n%s", joined)
 	}
 }
 
@@ -329,6 +358,11 @@ func TestPlanDown_EmptyTree_KeepHub(t *testing.T) {
 func TestPlanDown_FullInstall(t *testing.T) {
 	dir := t.TempDir()
 	mkdir(t, filepath.Join(dir, ".bones"))
+	// hub.pid must be present for the stop-hub line to appear in the
+	// plan post-#307 (plan accuracy: lines for nonexistent files are
+	// dropped). Pre-#307 the line rendered unconditionally; the test
+	// previously relied on that and didn't seed hub.pid.
+	writeFile(t, filepath.Join(dir, ".bones", "hub.pid"), "999999\n")
 	mkdir(t, filepath.Join(dir, ".orchestrator", "scripts"))
 	for _, name := range []string{"orchestrator", "subagent", "uninstall-bones"} {
 		mkdir(t, filepath.Join(dir, ".claude", "skills", name))
@@ -1105,6 +1139,144 @@ func TestRunDown_PreservesNonEmptyClaudeDir(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".claude", "user-notes.md")); err != nil {
 		t.Errorf("user file should be preserved: %v", err)
+	}
+}
+
+// TestRunDown_AbortIsTypedSentinel pins issue #307: canceling the
+// teardown via "n" at the y/N prompt returns the typed errAborted
+// sentinel, not a generic errors.New error. Scripts and the kong
+// runner branch on the typed identity (errors.Is) so the abort path
+// is distinguishable from a teardown step that genuinely failed.
+// Pre-fix runDown returned errors.New("down: aborted"), forcing
+// callers to substring-match the message.
+func TestRunDown_AbortIsTypedSentinel(t *testing.T) {
+	dir := t.TempDir()
+	mkdir(t, filepath.Join(dir, ".bones"))
+
+	// "n" answer.
+	err := runDown(dir, &DownCmd{}, strings.NewReader("n\n"))
+	if !errors.Is(err, errAborted) {
+		t.Errorf("answer-N: expected errors.Is(err, errAborted) = true; got err=%v", err)
+	}
+
+	// Closed stdin (no TTY): confirm reads EOF, treats as N.
+	err = runDown(dir, &DownCmd{}, strings.NewReader(""))
+	if !errors.Is(err, errAborted) {
+		t.Errorf("EOF-stdin: expected errors.Is(err, errAborted) = true; got err=%v", err)
+	}
+}
+
+// TestPlanDown_NoHubPidNoStopLine pins #307 fix 2 in isolation: a
+// workspace whose .bones/ exists but has no hub.pid (i.e. the hub
+// was never started in this lifecycle) produces a plan with no
+// stop-hub line. The dry-run output should not claim to act on a
+// file that doesn't exist.
+func TestPlanDown_NoHubPidNoStopLine(t *testing.T) {
+	dir := t.TempDir()
+	mkdir(t, filepath.Join(dir, ".bones"))
+	writeFile(t, filepath.Join(dir, ".bones", "agent.id"), "test-agent\n")
+
+	plan := planDown(dir, &DownCmd{})
+	for _, a := range plan {
+		if strings.Contains(a.description, "stop hub") {
+			t.Errorf("stop-hub line present despite no hub.pid (#307); "+
+				"got: %s", a.description)
+		}
+	}
+}
+
+// TestRunDown_RemovesEmptyStubWhenBonesCreated pins #307 fix 3: on a
+// workspace where bones up created .claude/settings.json from
+// scratch (manifest records SettingsCreatedByUp=true), trimming
+// bones-owned hooks leaves the file as `{}` and bones removes it so
+// the parent "remove .claude/ if empty" pass can succeed.
+//
+// Distinct from TestRunDown_PreservesClaudeWithStubSettings (#256)
+// which seeds settings.json directly without writing the manifest.
+// The provenance bit is what differentiates the two: bones owns
+// file existence iff bones created the file.
+func TestRunDown_RemovesEmptyStubWhenBonesCreated(t *testing.T) {
+	dir := t.TempDir()
+	mkdir(t, filepath.Join(dir, ".bones"))
+	writeFile(t, filepath.Join(dir, ".bones", "agent.id"), "test-agent\n")
+	// Drive scaffoldOrchestrator so the manifest is written with
+	// SettingsCreatedByUp=true (no pre-existing settings.json).
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
+		t.Fatalf("scaffoldOrchestrator: %v", err)
+	}
+	// Sanity: manifest has the provenance bit set after a fresh
+	// scaffold against a workspace with no pre-existing .claude/.
+	m, err := readManifest(dir)
+	if err != nil || m == nil {
+		t.Fatalf("readManifest: m=%v err=%v", m, err)
+	}
+	if !m.SettingsCreatedByUp {
+		t.Fatalf("manifest.SettingsCreatedByUp = false; want true after " +
+			"fresh scaffold (no pre-existing settings.json)")
+	}
+
+	if err := runDown(dir, &DownCmd{Yes: true, KeepHub: true},
+		strings.NewReader("")); err != nil {
+		t.Fatalf("runDown: %v", err)
+	}
+
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	if _, err := os.Stat(settingsPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("settings.json should be removed (#307 bones-created stub); "+
+			"got err=%v", err)
+	}
+	claudeDir := filepath.Join(dir, ".claude")
+	if _, err := os.Stat(claudeDir); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf(".claude/ should be removed (empty after settings.json removal); "+
+			"got err=%v", err)
+	}
+}
+
+// TestRunDown_PreservesUserKeysWhenBonesCreated pins the
+// non-clobber half of #307: even when bones created the file, any
+// user-authored top-level keys (theme, env, …) added later survive
+// trim. The empty-stub branch only fires when the post-trim object
+// is literally `{}`.
+func TestRunDown_PreservesUserKeysWhenBonesCreated(t *testing.T) {
+	dir := t.TempDir()
+	mkdir(t, filepath.Join(dir, ".bones"))
+	writeFile(t, filepath.Join(dir, ".bones", "agent.id"), "test-agent\n")
+	if _, err := scaffoldOrchestrator(dir, scaffoldOpts{}); err != nil {
+		t.Fatalf("scaffoldOrchestrator: %v", err)
+	}
+	// Operator adds a user key alongside the bones-installed hooks.
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings.json: %v", err)
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(data, &obj); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	obj["theme"] = "dark"
+	out, err := json.MarshalIndent(obj, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(settingsPath, append(out, '\n'), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if err := runDown(dir, &DownCmd{Yes: true, KeepHub: true},
+		strings.NewReader("")); err != nil {
+		t.Fatalf("runDown: %v", err)
+	}
+
+	if _, err := os.Stat(settingsPath); err != nil {
+		t.Fatalf("settings.json should survive (user key present): %v", err)
+	}
+	got := readJSON(t, settingsPath)
+	if got["theme"] != "dark" {
+		t.Errorf("theme: got %v, want dark", got["theme"])
+	}
+	if _, ok := got["hooks"]; ok {
+		t.Errorf("bones hooks should be stripped; got %+v", got["hooks"])
 	}
 }
 
