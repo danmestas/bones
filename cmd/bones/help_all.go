@@ -69,14 +69,23 @@ func detectHelpAll(args []string) (filtered []string, helpAll bool) {
 func recursiveHelpPrinter() kong.HelpPrinter {
 	return func(options kong.HelpOptions, ctx *kong.Context) error {
 		// Start node: the command the user selected, or the application
-		// root for bare `bones --help --all`.
+		// root for bare `bones --help --all`. The isAppRoot distinction
+		// matters: DefaultHelpPrinter branches on ctx.Selected() (nil →
+		// printApp, non-nil → printCommand), and the synthetic Path we
+		// build per node decides which branch fires. For a selected leaf
+		// we MUST include its full Command chain so printCommand renders
+		// the leaf's own usage — passing isRoot=true here is the bug
+		// from #325 review: it stripped the Command path and routed every
+		// `bones <leaf> --help --all` invocation through printApp,
+		// surfacing the top-level app help instead of the leaf's.
 		root := ctx.Selected()
-		if root == nil {
+		isAppRoot := root == nil
+		if isAppRoot {
 			root = ctx.Model.Node
 		}
 
 		// Print the root node first (full help block).
-		if err := printNode(options, ctx, root, true); err != nil {
+		if err := printNode(options, ctx, root, isAppRoot); err != nil {
 			return err
 		}
 

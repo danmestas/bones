@@ -166,12 +166,22 @@ func TestCLI_HelpAllRecursesEveryVerb(t *testing.T) {
 
 // TestCLI_HelpAllSubtreeTasks pins `bones tasks --help --all`: only the
 // tasks subtree should render; top-level verbs (e.g. `up`, `swarm`) must
-// not appear, but every non-hidden `tasks <sub>` must.
+// not appear, but every non-hidden `tasks <sub>` must. Also asserts the
+// output STARTS with the parent verb's own usage line — guarding against
+// the regression where the recursive printer routed parent invocations
+// through the application-root branch and surfaced the top-level help.
 func TestCLI_HelpAllSubtreeTasks(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skip in -short: integration test")
 	}
 	out := runHelp(t, "tasks", "--help", "--all")
+
+	if !strings.HasPrefix(out, "Usage: bones tasks ") {
+		t.Errorf(
+			"tasks --help --all must start with the parent's own usage line, got first line:\n%q",
+			firstLine(out),
+		)
+	}
 
 	wantHeaders := []string{
 		"=== bones tasks create ===",
@@ -204,6 +214,57 @@ func TestCLI_HelpAllSubtreeTasks(t *testing.T) {
 		if strings.Contains(out, leak) {
 			t.Errorf("tasks --help --all should not include sibling %q", leak)
 		}
+	}
+}
+
+// TestCLI_HelpAllLeaves covers `bones <leaf> --help --all` — the regression
+// the #325 review caught. Every leaf invocation must render the leaf's own
+// help (not the application root) and must NOT contain divider headers
+// (a leaf has no subtree to recurse into). We sample three leaves at
+// distinct depths: a top-level leaf (`up`), a deeply-nested leaf
+// (`tasks list`), and another verb's leaf (`cleanup`).
+func TestCLI_HelpAllLeaves(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+
+	cases := []struct {
+		name      string
+		args      []string
+		wantUsage string
+	}{
+		{name: "up", args: []string{"up", "--help", "--all"}, wantUsage: "Usage: bones up "},
+		{
+			name:      "tasks list",
+			args:      []string{"tasks", "list", "--help", "--all"},
+			wantUsage: "Usage: bones tasks list ",
+		},
+		{
+			name:      "cleanup",
+			args:      []string{"cleanup", "--help", "--all"},
+			wantUsage: "Usage: bones cleanup ",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := runHelp(t, tc.args...)
+			if !strings.HasPrefix(out, tc.wantUsage) {
+				t.Errorf(
+					"%s: expected output to start with %q, got first line:\n%q",
+					tc.name, tc.wantUsage, firstLine(out),
+				)
+			}
+			// Leaves have no children → no divider headers should appear.
+			if strings.Contains(out, "=== bones ") {
+				t.Errorf("%s: leaf --help --all should emit no dividers, got:\n%s", tc.name, out)
+			}
+			// Top-level app description must not appear — that was the
+			// symptom of the bug (root help getting rendered for leaves).
+			if strings.Contains(out, "bones unified CLI: workspace, orchestrator, tasks") {
+				t.Errorf("%s: leaf --help --all leaked app-root description:\n%s", tc.name, out)
+			}
+		})
 	}
 }
 
