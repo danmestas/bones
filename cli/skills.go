@@ -529,65 +529,6 @@ var nowUTC = func() string {
 	return timefmt.Logged(time.Now())
 }
 
-// orphanSkillEntries lists workspace-relative skill directory names
-// (under .claude/skills/) that exist on disk but are not bones-owned
-// (not in bonesOwnedSkills) and not already adopted in the manifest.
-// Returns slash-separated relative names sorted lexicographically so
-// callers get deterministic output.
-//
-// Pure read; never modifies the manifest. The "orphan" classification
-// is intentionally lexical: a directory is an orphan if its name is
-// not in bonesOwnedSkills AND its name is not in any Adopted entry.
-// We don't recurse into the directory's files — adoption operates at
-// skill granularity to mirror how bones writes them (one dir per
-// skill, treated as an opaque unit).
-func orphanSkillEntries(root string) ([]string, error) {
-	skillsDir := filepath.Join(root, ".claude", "skills")
-	entries, err := os.ReadDir(skillsDir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read skills dir: %w", err)
-	}
-	owned := map[string]struct{}{}
-	for _, name := range bonesOwnedSkills {
-		owned[name] = struct{}{}
-	}
-	manifest, err := readManifest(root)
-	if err != nil {
-		return nil, err
-	}
-	adopted := map[string]struct{}{}
-	if manifest != nil {
-		for _, a := range manifest.Adopted {
-			// Adopted.Path is workspace-relative
-			// (".claude/skills/foo"); we compare on the leaf so the
-			// caller's directory walk lines up.
-			leaf := filepath.Base(a.Path)
-			adopted[leaf] = struct{}{}
-		}
-	}
-	var orphans []string
-	for _, e := range entries {
-		name := e.Name()
-		// Hidden dotfiles in the skills root (.bones-manifest.json,
-		// .gitignore, .gitkeep) are skipped.
-		if strings.HasPrefix(name, ".") {
-			continue
-		}
-		if _, ok := owned[name]; ok {
-			continue
-		}
-		if _, ok := adopted[name]; ok {
-			continue
-		}
-		orphans = append(orphans, name)
-	}
-	sort.Strings(orphans)
-	return orphans, nil
-}
-
 // adoptIntoManifest records orphan as a post-hoc adoption in the
 // workspace's skill manifest. Idempotent: a second call with the same
 // orphan is a no-op (the existing Adopted entry is preserved).
