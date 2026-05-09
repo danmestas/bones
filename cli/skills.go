@@ -12,7 +12,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/danmestas/bones/internal/timefmt"
 	"github.com/danmestas/bones/internal/version"
 	"github.com/danmestas/bones/internal/workspace"
 )
@@ -124,6 +126,29 @@ type skillManifest struct {
 	// legacy manifests; absent / false → preserve-stub semantics
 	// (#256) wins, matching the conservative default for upgraders.
 	SettingsCreatedByUp bool `json:"settings_created_by_up,omitempty"`
+
+	// Adopted records skills that existed in `.claude/skills/` before
+	// bones tracked them and were folded into the manifest by
+	// `bones doctor` (issue #315). These entries are NOT bones-managed
+	// content — bones up will not refresh them, bones down will not
+	// remove them. Each entry records the adoption timestamp and a
+	// source tag so post-hoc audits can distinguish adopted skills
+	// from skills bones wrote during a normal install.
+	Adopted []adoptedSkill `json:"adopted,omitempty"`
+}
+
+// adoptedSkill records one skill directory adopted into the manifest
+// post-hoc by `bones doctor`. Path is the workspace-relative
+// slash-separated path (e.g. ".claude/skills/legacy-thing"); SHA256
+// is the hex of the directory's canonical content hash at adoption
+// time; AdoptedAt is the RFC 3339 UTC timestamp of the adoption;
+// Source tags the migration that produced the entry (currently
+// always "orphan-migration"; reserved for future adoption sources).
+type adoptedSkill struct {
+	Path      string `json:"path"`
+	SHA256    string `json:"sha256"`
+	AdoptedAt string `json:"adopted_at"`
+	Source    string `json:"source"`
 }
 
 // bonesOwnedHookCommands lists the (event, command) pairs bones
@@ -493,6 +518,179 @@ func readManifest(root string) (*skillManifest, error) {
 // override the value without monkey-patching internal/version.
 var bonesVersion = func() string {
 	return version.Get()
+}
+
+// nowUTC returns the adoption timestamp in RFC 3339 UTC. Routes
+// through timefmt.Logged to honor the project-wide #324 policy that
+// every persisted timestamp uses the same shape. Indirected so tests
+// can pin the value (post-hoc adoption rows include this in the
+// manifest, so a stable test value gives stable golden output).
+var nowUTC = func() string {
+	return timefmt.Logged(time.Now())
+}
+
+// orphanSkillEntries lists workspace-relative skill directory names
+// (under .claude/skills/) that exist on disk but are not bones-owned
+// (not in bonesOwnedSkills) and not already adopted in the manifest.
+// Returns slash-separated relative names sorted lexicographically so
+// callers get deterministic output.
+//
+// Pure read; never modifies the manifest. The "orphan" classification
+// is intentionally lexical: a directory is an orphan if its name is
+// not in bonesOwnedSkills AND its name is not in any Adopted entry.
+// We don't recurse into the directory's files — adoption operates at
+// skill granularity to mirror how bones writes them (one dir per
+// skill, treated as an opaque unit).
+func orphanSkillEntries(root string) ([]string, error) {
+	skillsDir := filepath.Join(root, ".claude", "skills")
+	entries, err := os.ReadDir(skillsDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read skills dir: %w", err)
+	}
+	owned := map[string]struct{}{}
+	for _, name := range bonesOwnedSkills {
+		owned[name] = struct{}{}
+	}
+	manifest, err := readManifest(root)
+	if err != nil {
+		return nil, err
+	}
+	adopted := map[string]struct{}{}
+	if manifest != nil {
+		for _, a := range manifest.Adopted {
+			// Adopted.Path is workspace-relative
+			// (".claude/skills/foo"); we compare on the leaf so the
+			// caller's directory walk lines up.
+			leaf := filepath.Base(a.Path)
+			adopted[leaf] = struct{}{}
+		}
+	}
+	var orphans []string
+	for _, e := range entries {
+		name := e.Name()
+		// Hidden dotfiles in the skills root (.bones-manifest.json,
+		// .gitignore, .gitkeep) are skipped.
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		if _, ok := owned[name]; ok {
+			continue
+		}
+		if _, ok := adopted[name]; ok {
+			continue
+		}
+		orphans = append(orphans, name)
+	}
+	sort.Strings(orphans)
+	return orphans, nil
+}
+
+// adoptIntoManifest records orphan as a post-hoc adoption in the
+// workspace's skill manifest. Idempotent: a second call with the same
+// orphan is a no-op (the existing Adopted entry is preserved).
+//
+// When the manifest does not yet exist, this function creates one
+// with the adoption row alone — Files/Scaffolded are left empty
+// because adoption happens against workspaces that bones does not
+// fully own (the adopted skill is operator content). The caller
+// (doctor) treats a missing manifest as "no skills tracked yet" and
+// adoption is the first track event.
+//
+// orphan is a leaf name (e.g. "legacy-thing"); the recorded Path is
+// ".claude/skills/<orphan>". The recorded SHA256 is computed from
+// the directory's canonical content hash (sorted relative paths +
+// per-file bytes) so adoption captures a reproducible witness of
+// what was on disk at adoption time.
+func adoptIntoManifest(root, orphan string) error {
+	manifest, err := readManifest(root)
+	if err != nil {
+		return err
+	}
+	if manifest == nil {
+		manifest = &skillManifest{
+			Version: bonesVersion(),
+			Files:   map[string]string{},
+		}
+	}
+	rel := ".claude/skills/" + orphan
+	for _, a := range manifest.Adopted {
+		if a.Path == rel {
+			return nil // idempotent: already adopted
+		}
+	}
+	hash, err := hashSkillDir(filepath.Join(root, ".claude", "skills", orphan))
+	if err != nil {
+		return fmt.Errorf("hash adopted skill %s: %w", orphan, err)
+	}
+	manifest.Adopted = append(manifest.Adopted, adoptedSkill{
+		Path:      rel,
+		SHA256:    hash,
+		AdoptedAt: nowUTC(),
+		Source:    "orphan-migration",
+	})
+	sort.Slice(manifest.Adopted, func(i, j int) bool {
+		return manifest.Adopted[i].Path < manifest.Adopted[j].Path
+	})
+	return writeManifestStruct(root, manifest)
+}
+
+// hashSkillDir returns the SHA-256 hex of a stable canonical
+// rendering of a skill directory's contents: per-file rows of
+// "<relpath>\t<sha256>\n" with relpaths sorted lexicographically.
+// The encoding is path-relative-to-dir, slash-separated, so the
+// resulting hash is portable across hosts.
+func hashSkillDir(dir string) (string, error) {
+	type row struct{ rel, sum string }
+	var rows []row
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, rerr := filepath.Rel(dir, path)
+		if rerr != nil {
+			return fmt.Errorf("rel %s: %w", path, rerr)
+		}
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return fmt.Errorf("read %s: %w", path, rerr)
+		}
+		rows = append(rows, row{rel: filepath.ToSlash(rel), sum: hashHex(data)})
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].rel < rows[j].rel })
+	h := sha256.New()
+	for _, r := range rows {
+		_, _ = h.Write([]byte(r.rel))
+		_, _ = h.Write([]byte("\t"))
+		_, _ = h.Write([]byte(r.sum))
+		_, _ = h.Write([]byte("\n"))
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// writeManifestStruct serializes m and writes it to manifestRel
+// under root. The on-disk layout matches writeManifest's output
+// (indented JSON + trailing newline) so a manifest written by
+// `bones up` and one written by adoption are byte-comparable.
+func writeManifestStruct(root string, m *skillManifest) error {
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal manifest: %w", err)
+	}
+	path := filepath.Join(root, filepath.FromSlash(manifestRel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("mkdir manifest dir: %w", err)
+	}
+	return os.WriteFile(path, append(out, '\n'), 0o644)
 }
 
 // materializeSkillFile writes one embedded skill file to dst, honoring

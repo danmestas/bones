@@ -520,6 +520,190 @@ func TestDoctorCmd_AcceptsNoFixFlag(t *testing.T) {
 	}
 }
 
+// TestCheckSkillsManifestDrift_NoOrphans pins issue #315 happy path:
+// a workspace whose only skills are bones-owned (per bonesOwnedSkills)
+// emits OK lines and no WARN/FIX classes. The check is silent on
+// non-skill clutter at the .claude/skills/ root (dotfiles).
+func TestCheckSkillsManifestDrift_NoOrphans(t *testing.T) {
+	root := t.TempDir()
+	skillsDir := filepath.Join(root, ".claude", "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Drop a bones-owned skill on disk so the OK branch fires.
+	owned := filepath.Join(skillsDir, "orchestrator")
+	if err := os.MkdirAll(owned, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(owned, "SKILL.md"),
+		[]byte("# orchestrator\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	warns := checkSkillsManifestDrift(&buf, root, false)
+	if warns != 0 {
+		t.Errorf("no-orphan workspace produced %d WARNs:\n%s", warns, buf.String())
+	}
+	out := buf.String()
+	if !strings.Contains(out, "OK    .claude/skills/orchestrator") {
+		t.Errorf("expected OK line for bones-owned skill, got:\n%s", out)
+	}
+	if strings.Contains(out, "WARN") || strings.Contains(out, "FIX") {
+		t.Errorf("happy path emitted WARN/FIX:\n%s", out)
+	}
+}
+
+// TestCheckSkillsManifestDrift_NoFixReportsOrphan pins issue #315:
+// `--no-fix` mode surfaces orphans as WARN lines but does not modify
+// the manifest. Manifest contents (including absence) are preserved.
+func TestCheckSkillsManifestDrift_NoFixReportsOrphan(t *testing.T) {
+	root := t.TempDir()
+	skillsDir := filepath.Join(root, ".claude", "skills")
+	orphanDir := filepath.Join(skillsDir, "legacy-thing")
+	if err := os.MkdirAll(orphanDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(orphanDir, "SKILL.md"),
+		[]byte("# legacy operator skill\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, ".claude", "skills", ".bones-manifest.json")
+
+	var buf bytes.Buffer
+	warns := checkSkillsManifestDrift(&buf, root, true /* noFix */)
+	if warns != 1 {
+		t.Errorf("expected 1 WARN for orphan in --no-fix mode, got %d:\n%s",
+			warns, buf.String())
+	}
+	out := buf.String()
+	if !strings.Contains(out, "WARN") {
+		t.Errorf("--no-fix orphan did not WARN:\n%s", out)
+	}
+	if !strings.Contains(out, "legacy-thing") {
+		t.Errorf("WARN line missing orphan name:\n%s", out)
+	}
+	if strings.Contains(out, "FIX") {
+		t.Errorf("--no-fix mode emitted FIX line:\n%s", out)
+	}
+	// Manifest must NOT have been written (no manifest existed before;
+	// none should exist after).
+	if _, err := os.Stat(manifestPath); err == nil {
+		t.Errorf("--no-fix mode wrote manifest at %s; it must report only",
+			manifestPath)
+	}
+}
+
+// TestCheckSkillsManifestDrift_DefaultAdoptsOrphan pins issue #315
+// auto-fix: default mode (noFix=false) writes an Adopted entry for
+// the orphan into the manifest, with adopted_at + source markers,
+// and emits a FIX line.
+func TestCheckSkillsManifestDrift_DefaultAdoptsOrphan(t *testing.T) {
+	root := t.TempDir()
+	skillsDir := filepath.Join(root, ".claude", "skills")
+	orphanDir := filepath.Join(skillsDir, "legacy-thing")
+	if err := os.MkdirAll(orphanDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(orphanDir, "SKILL.md"),
+		[]byte("# operator content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	warns := checkSkillsManifestDrift(&buf, root, false /* default fix */)
+	if warns != 0 {
+		t.Errorf("expected 0 WARN after auto-adoption, got %d:\n%s",
+			warns, buf.String())
+	}
+	out := buf.String()
+	if !strings.Contains(out, "FIX") {
+		t.Errorf("default mode did not FIX orphan:\n%s", out)
+	}
+	if !strings.Contains(out, "adopted .claude/skills/legacy-thing") {
+		t.Errorf("FIX line missing adoption phrasing:\n%s", out)
+	}
+
+	// Manifest must now contain an Adopted entry with the markers.
+	m, err := readManifest(root)
+	if err != nil {
+		t.Fatalf("readManifest: %v", err)
+	}
+	if m == nil {
+		t.Fatal("manifest absent after adoption; expected file written")
+	}
+	if len(m.Adopted) != 1 {
+		t.Fatalf("expected 1 Adopted entry, got %d", len(m.Adopted))
+	}
+	a := m.Adopted[0]
+	if a.Path != ".claude/skills/legacy-thing" {
+		t.Errorf("Adopted.Path = %q, want .claude/skills/legacy-thing", a.Path)
+	}
+	if a.Source != "orphan-migration" {
+		t.Errorf("Adopted.Source = %q, want orphan-migration", a.Source)
+	}
+	if a.AdoptedAt == "" {
+		t.Errorf("Adopted.AdoptedAt empty; markers must be stamped")
+	}
+	if a.SHA256 == "" {
+		t.Errorf("Adopted.SHA256 empty; content hash must be stamped")
+	}
+}
+
+// TestCheckSkillsManifestDrift_Idempotent pins issue #315 idempotency:
+// a second doctor run on the same orphan reports OK (already adopted)
+// and does not append a duplicate Adopted entry.
+func TestCheckSkillsManifestDrift_Idempotent(t *testing.T) {
+	root := t.TempDir()
+	skillsDir := filepath.Join(root, ".claude", "skills")
+	orphanDir := filepath.Join(skillsDir, "legacy-thing")
+	if err := os.MkdirAll(orphanDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(orphanDir, "SKILL.md"),
+		[]byte("# operator content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// First run: adopts.
+	var buf1 bytes.Buffer
+	if w := checkSkillsManifestDrift(&buf1, root, false); w != 0 {
+		t.Fatalf("first run produced %d WARNs:\n%s", w, buf1.String())
+	}
+	if !strings.Contains(buf1.String(), "FIX") {
+		t.Errorf("first run did not adopt:\n%s", buf1.String())
+	}
+
+	// Second run: must report OK (adopted) and not WARN/FIX.
+	var buf2 bytes.Buffer
+	if w := checkSkillsManifestDrift(&buf2, root, false); w != 0 {
+		t.Fatalf("second run produced %d WARNs:\n%s", w, buf2.String())
+	}
+	out := buf2.String()
+	if strings.Contains(out, "FIX") {
+		t.Errorf("second run re-FIXed an already-adopted orphan:\n%s", out)
+	}
+	if strings.Contains(out, "WARN") {
+		t.Errorf("second run WARNed on already-adopted orphan:\n%s", out)
+	}
+	if !strings.Contains(out, "OK    .claude/skills/legacy-thing  (adopted)") {
+		t.Errorf("second run missing OK (adopted) line:\n%s", out)
+	}
+
+	// Manifest must still have exactly one Adopted entry.
+	m, err := readManifest(root)
+	if err != nil {
+		t.Fatalf("readManifest: %v", err)
+	}
+	if m == nil || len(m.Adopted) != 1 {
+		got := 0
+		if m != nil {
+			got = len(m.Adopted)
+		}
+		t.Errorf("expected exactly 1 Adopted entry after two runs, got %d", got)
+	}
+}
+
 // TestPreCommitHookLabel_Disambiguated pins #231: bones substrate
 // pre-commit hook check must use a label distinct from EdgeSync's
 // "pre-commit hook" label. Without disambiguation, `bones doctor`

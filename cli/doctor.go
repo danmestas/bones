@@ -488,6 +488,10 @@ func reportHookEntries(w io.Writer, hooks map[string]any) {
 // Per ADR 0051 the hook-presence check is also where doctor's
 // auto-rewrite of the Claude Code hook protocol entries lives;
 // noFix=true switches it to report-only.
+//
+// Per issue #315 the orphan-skills check also lives here, sharing
+// the same noFix flag plumbing — default mode adopts orphans into
+// the manifest, --no-fix surfaces them as WARNs.
 func checkScaffoldGates(w io.Writer, cwd string, noFix bool) int {
 	var warns int
 	if checkBonesScaffoldedHooksWith(w, cwd, noFix) {
@@ -496,7 +500,90 @@ func checkScaffoldGates(w io.Writer, cwd string, noFix bool) int {
 	if checkSessionStartSentinel(w, cwd) {
 		warns++
 	}
+	warns += checkSkillsManifestDrift(w, cwd, noFix)
 	return warns
+}
+
+// checkSkillsManifestDrift reports skills present in
+// `.claude/skills/` that are not bones-owned (per bonesOwnedSkills)
+// and not already adopted into the manifest. Per issue #315 the
+// default behavior adopts each orphan into the manifest with an
+// `adopted_at` / `source: "orphan-migration"` marker; with noFix=true
+// orphans surface as WARN lines and the manifest is left untouched.
+//
+// Adoption is the safe default: orphan skills are operator content
+// (pre-existing skills, manual additions, mid-PR upgrade artifacts)
+// and bones must not delete them. Adoption pulls them into the
+// manifest's accounting so future doctor runs report them as OK
+// rather than re-warning forever.
+//
+// Each emitted line is one of:
+//
+//	OK     .claude/skills/foo  (manifest)
+//	OK     .claude/skills/foo  (adopted)
+//	WARN   .claude/skills/foo  (orphaned — not in manifest)
+//	FIX    adopted .claude/skills/foo
+//
+// Returns the count of WARN-class findings emitted (FIX lines are
+// healing, not findings, and don't increment the counter).
+func checkSkillsManifestDrift(w io.Writer, cwd string, noFix bool) int {
+	skillsDir := filepath.Join(cwd, ".claude", "skills")
+	if info, err := os.Stat(skillsDir); err != nil || !info.IsDir() {
+		return 0
+	}
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "  WARN  read .claude/skills/: %v\n", err)
+		return 1
+	}
+	manifest, _ := readManifest(cwd)
+	owned := map[string]struct{}{}
+	for _, name := range bonesOwnedSkills {
+		owned[name] = struct{}{}
+	}
+	adopted := map[string]struct{}{}
+	if manifest != nil {
+		for _, a := range manifest.Adopted {
+			adopted[filepath.Base(a.Path)] = struct{}{}
+		}
+	}
+	_, _ = fmt.Fprintln(w, "  skills:")
+	var warns int
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		if !e.IsDir() {
+			continue
+		}
+		switch {
+		case existsIn(owned, name):
+			_, _ = fmt.Fprintf(w, "    OK    .claude/skills/%s  (manifest)\n", name)
+		case existsIn(adopted, name):
+			_, _ = fmt.Fprintf(w, "    OK    .claude/skills/%s  (adopted)\n", name)
+		case noFix:
+			_, _ = fmt.Fprintf(w,
+				"    WARN  .claude/skills/%s  (orphaned — not in manifest)\n", name)
+			warns++
+		default:
+			if err := adoptIntoManifest(cwd, name); err != nil {
+				_, _ = fmt.Fprintf(w,
+					"    WARN  .claude/skills/%s  adopt failed: %v\n", name, err)
+				warns++
+				continue
+			}
+			_, _ = fmt.Fprintf(w, "    FIX   adopted .claude/skills/%s\n", name)
+		}
+	}
+	return warns
+}
+
+// existsIn is a tiny helper so the orphan classifier reads as a flat
+// switch instead of nested map lookups.
+func existsIn(set map[string]struct{}, key string) bool {
+	_, ok := set[key]
+	return ok
 }
 
 // checkSessionStartSentinel surfaces whether bones SessionStart hooks
