@@ -131,6 +131,77 @@ func drainReplay(
 	}
 }
 
+// Live opens a live subscription to the task event log. The returned
+// channel emits envelopes published *after* the call (DeliverNewPolicy)
+// until ctx is canceled, the manager is closed, or the underlying
+// consumer stops. Symmetric to Replay (one-shot drain) but for the
+// continuous tail used by `bones tasks watch`.
+//
+// Per ADR 0052 the event log is the source of truth for task state;
+// Live consumers see the full envelope (Type, TaskID, Timestamp,
+// Payload) on every event — no projection lookup required. Field-level
+// changes for EventTypeUpdated land in the payload, so context-only
+// updates surface here even though they don't mutate the KV projection
+// shape consumers can distinguish.
+//
+// Callers must drain the channel promptly; a blocked reader stalls the
+// forwarder. Buffer is sized for typical interactive use (64). Decode
+// errors are dropped silently — one malformed record does not poison
+// the stream.
+func (m *Manager) Live(ctx context.Context) (<-chan EventEnvelope, error) {
+	assert.NotNil(ctx, "tasks.Live: ctx is nil")
+	if m.stream == nil {
+		return nil, errors.New("tasks.Live: event log disabled")
+	}
+
+	cons, err := m.stream.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{
+		FilterSubjects: []string{AllEventsSubject},
+		DeliverPolicy:  jetstream.DeliverNewPolicy,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("tasks.Live: consumer: %w", err)
+	}
+
+	out := make(chan EventEnvelope, 64)
+	go forwardLive(ctx, cons, out)
+	return out, nil
+}
+
+// forwardLive bridges a JetStream consumer to the EventEnvelope channel.
+// Callbacks fired by Consume marshal-and-send each envelope; the loop
+// blocks on ctx.Done so the goroutine has a single exit path. cc.Stop
+// flushes in-flight callbacks before close(out) so a late callback
+// never writes to a closed channel.
+func forwardLive(
+	ctx context.Context,
+	cons jetstream.Consumer,
+	out chan EventEnvelope,
+) {
+	cc, err := cons.Consume(func(msg jetstream.Msg) {
+		env, perr := UnmarshalEnvelope(msg.Data())
+		_ = msg.Ack()
+		if perr != nil {
+			return
+		}
+		meta, _ := msg.Metadata()
+		if meta != nil {
+			env.StreamSeq = meta.Sequence.Stream
+		}
+		select {
+		case out <- env:
+		case <-ctx.Done():
+		}
+	})
+	if err != nil {
+		close(out)
+		return
+	}
+
+	<-ctx.Done()
+	cc.Stop()
+	close(out)
+}
+
 // Recent returns the most recent n events from the log in stream
 // order (oldest of the slice first, newest last). Used by
 // `bones status` for the Recent Activity surface.

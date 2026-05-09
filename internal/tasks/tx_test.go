@@ -90,6 +90,7 @@ func TestTx_OnlyMutationPath(t *testing.T) {
 		"Get":       true,
 		"KVForTest": true, // exposed for in-package test seeding only
 		"List":      true,
+		"Live":      true,
 		"Purge":     true,
 		"Recent":    true,
 		"Replay":    true,
