@@ -114,6 +114,16 @@ type skillManifest struct {
 	// bones's are NOT tamper-detected (they aren't bones's to claim).
 	// Empty on legacy manifests.
 	SettingsHooksSHA256 string `json:"settings_hooks_sha256,omitempty"`
+
+	// SettingsCreatedByUp records whether `bones up` created
+	// .claude/settings.json from scratch (true) versus merged into a
+	// pre-existing user-authored file (false). Read by `bones down`
+	// to decide whether the post-trim empty stub is safe to remove
+	// (#307: bones owns file existence iff bones created the file).
+	// Sticky across re-scaffold: once true, stays true. Empty on
+	// legacy manifests; absent / false → preserve-stub semantics
+	// (#256) wins, matching the conservative default for upgraders.
+	SettingsCreatedByUp bool `json:"settings_created_by_up,omitempty"`
 }
 
 // bonesOwnedHookCommands lists the (event, command) pairs bones
@@ -200,7 +210,7 @@ func writeBonesSkills(root string, fp *scaffoldFootprint) error {
 //     before bones did and stay out of the manifest entirely.
 //
 // The manifest itself is excluded from its own contents.
-func writeManifest(root string) error {
+func writeManifest(root string, fp *scaffoldFootprint) error {
 	prev, err := readManifest(root)
 	if err != nil {
 		return err
@@ -222,11 +232,25 @@ func writeManifest(root string) error {
 	if err != nil {
 		return err
 	}
+	// Sticky provenance for #307: SettingsCreatedByUp stays true once
+	// set. mergeSettings only flips it true on the call that actually
+	// created the file from scratch — subsequent up runs never see
+	// "no file pre-existed" again, but the flag must persist so down
+	// can still recognize bones-owned file existence. Inherit from
+	// previous manifest unless this run flipped it true.
+	createdByUp := false
+	if prev != nil {
+		createdByUp = prev.SettingsCreatedByUp
+	}
+	if fp != nil && fp.SettingsCreatedByUp {
+		createdByUp = true
+	}
 	m := skillManifest{
 		Version:             bonesVersion(),
 		Files:               files,
 		Scaffolded:          scaff,
 		SettingsHooksSHA256: hooksHash,
+		SettingsCreatedByUp: createdByUp,
 	}
 
 	out, err := json.MarshalIndent(m, "", "  ")

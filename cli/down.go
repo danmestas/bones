@@ -59,6 +59,15 @@ func (c *DownCmd) Run(g *repocli.Globals) error {
 	return runDown(root, c, os.Stdin)
 }
 
+// errAborted signals an operator-initiated cancellation: stdin EOF,
+// non-TTY without --yes, or an explicit "n" at the y/N prompt. Surfaced
+// as a sentinel so callers (and the kong runner) can distinguish operator
+// cancellation from a teardown step that genuinely failed. Both still
+// translate to a non-zero exit code via main.go's ctx.Run handler — the
+// typed error keeps the semantics auditable in scripts and tests
+// (errors.Is(err, errAborted) instead of string-matching the message).
+var errAborted = errors.New("down: aborted")
+
 // runAll iterates the workspace registry and tears each down. Prints
 // a summary, prompts unless --yes, then invokes runDown per workspace.
 func (c *DownCmd) runAll() error {
@@ -79,7 +88,7 @@ func (c *DownCmd) runAll() error {
 
 	if !c.Yes {
 		if !confirm(os.Stdin, "Continue?") {
-			return errors.New("down --all: aborted")
+			return fmt.Errorf("down --all: %w", errAborted)
 		}
 	}
 
@@ -140,7 +149,7 @@ func runDown(root string, c *DownCmd, confirmIn interface {
 
 	if !c.Yes {
 		if !confirm(confirmIn, "Proceed?") {
-			return errors.New("down: aborted")
+			return errAborted
 		}
 	}
 
@@ -339,9 +348,18 @@ func planStopHub(root string, c *DownCmd) []downAction {
 	if c.KeepHub {
 		return nil
 	}
-	// Always queue the stop — hub.Stop is best-effort and idempotent
-	// (no-op when hub isn't running), so unconditional inclusion is
-	// both correct and self-documenting in the dry-run output.
+	// Plan accuracy (#307): only queue the stop-hub action when
+	// .bones/hub.pid actually exists on disk. Pre-fix the line was
+	// always rendered with the comment "hub.Stop is idempotent so
+	// unconditional inclusion is self-documenting" — but a `bones
+	// down --dry-run` run on a workspace that never ran the hub
+	// printed "stop hub (.bones/hub.pid)" referencing a file that
+	// doesn't exist. The plan should reflect what will actually
+	// happen, not the full surface bones knows how to teardown.
+	pidFile := filepath.Join(workspace.BonesDir(root), "hub.pid")
+	if !fileExists(pidFile) {
+		return nil
+	}
 	return []downAction{{
 		description: "stop hub (.bones/hub.pid)",
 		do: func() error {
@@ -458,9 +476,16 @@ func planRemoveHooks(root string, c *DownCmd) []downAction {
 	if !fileExists(settings) {
 		return nil
 	}
+	// Snapshot the manifest's SettingsCreatedByUp bit at plan-build
+	// time. The action thunk runs after planRemoveSkills, which
+	// removes the manifest as part of clearing .claude/skills/, so by
+	// the time removeBonesHooks executes the manifest is gone.
+	// Capturing the provenance now keeps the empty-stub branch (#307)
+	// reachable on real `bones up` → `bones down` cycles.
+	bonesCreated := bonesCreatedSettings(settings)
 	return []downAction{{
 		description: "remove bones hooks from " + settings,
-		do:          func() error { return removeBonesHooks(settings) },
+		do:          func() error { return removeBonesHooksWith(settings, bonesCreated) },
 	}}
 }
 
@@ -495,14 +520,40 @@ func planRemoveFossilMarkers(root string) []downAction {
 // "hooks" top-level key are pruned when removal leaves them empty.
 //
 // Per #256: bones owns specific hook entries inside settings.json,
-// not the file itself. When stripping leaves the JSON object as `{}`,
-// the file is rewritten as `{}\n` rather than unlinked — operator
-// owns file existence, bones only owns the keys it installed. This
-// supersedes the prior #235 symmetry-with-up behavior, which deleted
-// the file when it became bones-only-empty. User-authored keys (theme,
-// env, permissions, etc.) at the top level are preserved byte-for-byte
-// alongside the bones-owned hook stripping.
+// not the file itself by default. When stripping leaves the JSON
+// object as `{}` AND bones did not create the file (operator-authored
+// pre-up content lived alongside the bones hooks), the file is
+// rewritten as `{}\n` rather than unlinked — operator owns file
+// existence in that case.
+//
+// Per #307: when `bones up` originally created the settings.json (no
+// pre-existing file), bones owns its existence too. After stripping
+// leaves the file effectively empty (`{}` or `{"hooks": {}}`), the
+// file is removed so the parent "remove .claude/ if empty" pass can
+// succeed. The provenance bit lives in the manifest as
+// SettingsCreatedByUp; absent / false → preserve-stub semantics
+// from #256 wins (conservative default for legacy / hand-authored
+// installs).
+//
+// User-authored keys (theme, env, permissions, etc.) at the top level
+// are preserved byte-for-byte either way.
+//
+// Convenience wrapper that resolves the bones-created provenance from
+// the on-disk manifest. Production callers from `bones down` use
+// removeBonesHooksWith directly so they can capture the provenance bit
+// at plan-build time (the manifest is removed by planRemoveSkills
+// before this action's thunk runs). Tests that exercise the trim
+// behavior in isolation use this entry point.
 func removeBonesHooks(path string) error {
+	return removeBonesHooksWith(path, bonesCreatedSettings(path))
+}
+
+// removeBonesHooksWith is the core trim implementation, parameterized
+// on whether the caller has determined bones owns the file's
+// existence (per the #307 manifest provenance bit). When true, an
+// empty post-trim file is removed; when false, it falls through to
+// the preserve-as-`{}` branch (#256).
+func removeBonesHooksWith(path string, bonesCreated bool) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -522,10 +573,21 @@ func removeBonesHooks(path string) error {
 	}
 	hooks, _ := rootObj["hooks"].(map[string]any)
 	if hooks != nil {
-		pruneHookEvent(hooks, "SessionStart", "hub-bootstrap.sh")         // legacy
-		pruneHookEvent(hooks, "SessionStart", "bones hub start")          // current (ADR 0041)
-		pruneHookEvent(hooks, "SessionStart", "bones tasks prime --json") // task priming
-		pruneHookEvent(hooks, "PreCompact", "bones tasks prime --json")   // task priming
+		pruneHookEvent(hooks, "SessionStart", "hub-bootstrap.sh") // legacy
+		pruneHookEvent(hooks, "SessionStart", "bones hub start")  // current (ADR 0041)
+		// Task priming: substring needle "bones tasks prime" matches
+		// every variant bones up has shipped — `--json` (v0.12 legacy),
+		// `--hook=session-start` (current ADR 0051 form), and any bare
+		// invocation. Pre-#307 the needle was the literal `--json`
+		// string, which silently no-op'd against the canonical
+		// `--hook=session-start` entry written by mergeSettings — every
+		// `bones up`-then-`bones down` cycle stranded a prime hook in
+		// settings.json. The broader substring is intentional: every
+		// shipping variant is bones-owned. User scripts that happen to
+		// invoke `bones tasks prime` from these events are exceptional
+		// and were never bones-supported.
+		pruneHookEvent(hooks, "SessionStart", "bones tasks prime")
+		pruneHookEvent(hooks, "PreCompact", "bones tasks prime")
 		// Current installs land under SessionEnd; the legacy Stop event
 		// is also pruned so workspaces installed before the migration
 		// are still cleaned up by `bones down`.
@@ -537,17 +599,54 @@ func removeBonesHooks(path string) error {
 			rootObj["hooks"] = hooks
 		}
 	}
+	// Empty-stub branch (#307): if the post-trim object is `{}` and
+	// the manifest recorded that bones created this file, remove it.
+	// Operator-created files (no manifest, or SettingsCreatedByUp=false)
+	// fall through to the preserve-as-`{}` branch from #256.
+	if len(rootObj) == 0 && bonesCreated {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
 	// Per #256: bones owns specific keys, not the file. If no top-level
-	// keys remain after stripping, write `{}\n` back rather than
-	// unlinking — operator owns file existence. Supersedes #235's
-	// empty-object deletion. User-authored top-level keys (theme,
-	// model, env, permissions, includeCoAuthoredBy, …) are preserved
-	// verbatim either way.
+	// keys remain after stripping (and bones did not create the file),
+	// write `{}\n` back rather than unlinking — operator owns file
+	// existence. User-authored top-level keys (theme, model, env,
+	// permissions, includeCoAuthoredBy, …) are preserved verbatim
+	// either way.
 	out, err := json.MarshalIndent(rootObj, "", "  ")
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(path, append(out, '\n'), 0o644)
+}
+
+// bonesCreatedSettings reports whether the manifest at the workspace
+// root containing settingsPath records that `bones up` created
+// .claude/settings.json from scratch (#307). False when:
+//   - settingsPath is not under a recognized .claude/settings.json
+//     position (manifest cannot be located);
+//   - no manifest exists (legacy install pre-#307);
+//   - the manifest exists but SettingsCreatedByUp is false (operator
+//     pre-existed the file before bones merged into it).
+//
+// Conservative default: if anything fails to parse cleanly, return
+// false so the caller falls into the preserve-`{}` branch (#256). The
+// down operator never loses a file the manifest doesn't claim.
+func bonesCreatedSettings(settingsPath string) bool {
+	// Expect <root>/.claude/settings.json. Walk up two parents to
+	// recover the workspace root, then read the manifest there.
+	claudeDir := filepath.Dir(settingsPath)
+	if filepath.Base(claudeDir) != ".claude" {
+		return false
+	}
+	root := filepath.Dir(claudeDir)
+	m, err := readManifest(root)
+	if err != nil || m == nil {
+		return false
+	}
+	return m.SettingsCreatedByUp
 }
 
 // pruneHookEvent removes hook entries under hooks[event] whose

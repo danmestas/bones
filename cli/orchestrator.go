@@ -54,6 +54,15 @@ type scaffoldFootprint struct {
 	// surfaces them so the operator knows their edits are persistent
 	// but won't get fresh skill content on bones release upgrades.
 	SkillsModified []string
+
+	// SettingsCreatedByUp records whether mergeSettings created
+	// .claude/settings.json from scratch (no file pre-existed) or
+	// merged into a user-authored file. Persisted into the manifest
+	// so `bones down` can decide whether the post-trim empty stub
+	// belongs to bones (safe to remove) or to the operator (preserve
+	// per #256). Sticky across re-scaffolds: once true on disk,
+	// writeManifest carries it forward.
+	SettingsCreatedByUp bool
 }
 
 // hooksAdded returns the total count of new hook entries written, summed
@@ -110,7 +119,9 @@ func scaffoldOrchestrator(root string, opts scaffoldOpts) (scaffoldFootprint, er
 	// .bones/scaffold_version, .bones/agent.id, and the bones-owned
 	// hook subset of .claude/settings.json. doctor uses these to
 	// detect tamper / partial-scaffold drift in `bones doctor`.
-	if err := writeManifest(root); err != nil {
+	// Footprint is passed so writeManifest can stamp the
+	// SettingsCreatedByUp provenance bit (#307).
+	if err := writeManifest(root, &fp); err != nil {
 		return fp, fmt.Errorf("manifest: %w", err)
 	}
 	return fp, nil
@@ -179,14 +190,24 @@ func removeLegacyBonesSkills(root string) error {
 // migrated away.
 func mergeSettings(path string, fp *scaffoldFootprint) error {
 	root := map[string]any{}
+	// Provenance signal for #307: if no file exists pre-merge, bones
+	// is creating it. The flag is sticky across re-scaffold via the
+	// manifest read in writeManifest, so a file that bones created
+	// originally stays "bones-created" even on subsequent up runs.
+	preExisted := true
 	if data, err := os.ReadFile(path); err == nil {
 		if len(data) > 0 {
 			if err := json.Unmarshal(data, &root); err != nil {
 				return fmt.Errorf("parse %s: %w", path, err)
 			}
 		}
-	} else if !os.IsNotExist(err) {
+	} else if os.IsNotExist(err) {
+		preExisted = false
+	} else {
 		return err
+	}
+	if !preExisted && fp != nil {
+		fp.SettingsCreatedByUp = true
 	}
 
 	hooks, _ := root["hooks"].(map[string]any)
