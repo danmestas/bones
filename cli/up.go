@@ -234,34 +234,62 @@ func scaffoldChanged(fp scaffoldFootprint) bool {
 //
 // Three checks today:
 //   - ensureBonesGitignore (#306): adds .bones/ + skill manifest entries.
-//   - trackedDeletedFiles (#303): warns about tracked-but-missing files.
+//   - trackedDeletedFiles (#303 / #310): warns about tracked-but-missing files.
 //   - checkFossilDrift: warns when fossil tip diverges from git HEAD.
 //
-// JSON mode silences the human-targeted WARN lines — they would
-// otherwise contaminate the JSON envelope on stdout. The structured
-// JSON payload itself is still authoritative; warnings are surfaced
-// via stderr in the human path only.
+// Warnings route through the per-mode sink returned by warnSink:
+//
+//   - default (human) mode → logger.Warnf, which writes to stderr +
+//     captures to .bones/up.log;
+//   - JSON mode → bare stderr, so stdout stays a single valid envelope
+//     and warnings are still discoverable (matches #311's precedent of
+//     hub URLs → stderr);
+//   - --quiet → dropped entirely (the operator opted into silence).
 func runPostScaffoldChecks(
 	wsDir string, opts upOpts, logger *upLogger,
 ) []string {
+	warn := warnSink(opts, logger)
+
 	gitignoreAdded, gitignoreErr := ensureBonesGitignore(wsDir, opts.Stealth)
-	if gitignoreErr != nil && !opts.JSON && !opts.Quiet {
+	if gitignoreErr != nil {
 		// Non-fatal: a read-only filesystem or gitignore the operator
 		// pinned with chmod 444 must not block scaffold. Surface as a
 		// warning so the host-local agent.id risk is at least visible.
-		logger.Warnf("up: WARN  gitignore: %v", gitignoreErr)
+		warn("up: WARN  gitignore: %v", gitignoreErr)
 	}
 
-	if missing, _ := trackedDeletedFiles(wsDir); len(missing) > 0 && !opts.JSON && !opts.Quiet {
-		logger.Warnf("up: WARN  %s",
-			formatTrackedDeletedWarning(missing))
+	if missing, _ := trackedDeletedFiles(wsDir); len(missing) > 0 {
+		warn("up: WARN  %s", formatTrackedDeletedWarning(missing))
 	}
 
-	if dErr := checkFossilDrift(wsDir); dErr != nil && !opts.JSON && !opts.Quiet {
-		logger.Warnf("up: WARN  %v", dErr)
+	if dErr := checkFossilDrift(wsDir); dErr != nil {
+		warn("up: WARN  %v", dErr)
 	}
 
 	return gitignoreAdded
+}
+
+// warnSink returns the per-mode warning emitter for runPostScaffoldChecks.
+// One seam decides where post-scaffold WARN lines land so the three
+// call sites stay terse and consistent.
+//
+//   - --quiet: returns a no-op closure (operator opted into silence).
+//   - --json:  returns a closure that writes to os.Stderr only — stdout
+//     stays a single valid envelope, but the warnings remain visible
+//     to operators piping `--json | jq` (#310's intent is preserved).
+//   - default: returns logger.Warnf, which writes to stderr AND
+//     captures to .bones/up.log so the audit trail mirrors the
+//     terminal output.
+func warnSink(opts upOpts, logger *upLogger) func(format string, args ...any) {
+	if opts.Quiet {
+		return func(format string, args ...any) {}
+	}
+	if opts.JSON {
+		return func(format string, args ...any) {
+			_, _ = fmt.Fprintf(os.Stderr, format+"\n", args...)
+		}
+	}
+	return logger.Warnf
 }
 
 // formatHookCounts renders the per-event hook-add counts with stable

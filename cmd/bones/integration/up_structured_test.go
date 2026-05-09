@@ -155,6 +155,124 @@ func TestCLI_Up_JSONEnvelope(t *testing.T) {
 	}
 }
 
+// TestCLI_Up_JSONRoutesWarningsToStderr pins the reviewer-flagged
+// regression risk on the #310 surface: in --json mode, post-scaffold
+// WARN lines (tracked-deleted files, gitignore err, fossil drift)
+// must not be silently dropped. They land on stderr while stdout
+// stays a single valid envelope — matches #311's precedent of
+// routing hub URLs to stderr so `bones up --json | jq` works.
+//
+// Fixture: a workspace with one tracked-but-deleted file. The
+// warning copy from formatTrackedDeletedWarning ("missing from
+// working tree (deleted without 'git rm')") must appear on stderr;
+// stdout must parse as the up envelope.
+func TestCLI_Up_JSONRoutesWarningsToStderr(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := newWorkspace(t)
+	gitInit(t, dir)
+	t.Cleanup(func() { _, _, _ = runCmd(t, bonesBin, dir, "down", "--yes") })
+
+	if _, _, code := runCmd(t, bonesBin, dir, "down", "--yes"); code != 0 {
+		t.Fatalf("down --yes failed before warning fixture")
+	}
+
+	plantTrackedDeleted(t, dir)
+
+	stdout, stderr, code := runCmd(t, bonesBin, dir, "up", "--json")
+	if code != 0 {
+		t.Fatalf("up --json: code=%d stderr=%s", code, stderr)
+	}
+
+	// Stdout must remain parseable as the up envelope — no warning
+	// contamination.
+	var env struct {
+		Schema struct {
+			Verb string `json:"verb"`
+		} `json:"schema"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &env); err != nil {
+		t.Fatalf("--json stdout not parseable as envelope: %v\n%s",
+			err, stdout)
+	}
+	if env.Schema.Verb != "up" {
+		t.Errorf("schema.verb=%q want %q", env.Schema.Verb, "up")
+	}
+
+	// Warning must surface on stderr — silence here would be the
+	// regression the reviewer flagged.
+	if !strings.Contains(stderr, "missing from working tree") {
+		t.Errorf("--json should route tracked-deleted warning to stderr; "+
+			"got stderr:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "to-be-deleted.txt") {
+		t.Errorf("--json stderr warning should name the missing file:\n%s",
+			stderr)
+	}
+}
+
+// TestCLI_Up_QuietDropsWarnings pins the matched negative: --quiet
+// suppresses post-scaffold WARN lines on BOTH stdout and stderr.
+// The operator opted into silence; tracked-deleted warnings stay
+// on the human path (and JSON mode's stderr) only.
+func TestCLI_Up_QuietDropsWarnings(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in -short: integration test")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := newWorkspace(t)
+	gitInit(t, dir)
+	t.Cleanup(func() { _, _, _ = runCmd(t, bonesBin, dir, "down", "--yes") })
+
+	if _, _, code := runCmd(t, bonesBin, dir, "down", "--yes"); code != 0 {
+		t.Fatalf("down --yes failed before quiet fixture")
+	}
+
+	plantTrackedDeleted(t, dir)
+
+	stdout, stderr, code := runCmd(t, bonesBin, dir, "up", "--quiet")
+	if code != 0 {
+		t.Fatalf("up --quiet: code=%d stderr=%s", code, stderr)
+	}
+	if strings.TrimSpace(stdout) != "" {
+		t.Errorf("--quiet stdout not empty:\n%s", stdout)
+	}
+	if strings.Contains(stderr, "missing from working tree") {
+		t.Errorf("--quiet should suppress tracked-deleted warning on stderr too:\n%s",
+			stderr)
+	}
+}
+
+// plantTrackedDeleted commits a file under dir then deletes it from
+// the working tree without `git rm`. Reproduces the #310 trigger
+// state used by the JSON / quiet warning-routing tests.
+func plantTrackedDeleted(t *testing.T, dir string) {
+	t.Helper()
+	tracked := filepath.Join(dir, "to-be-deleted.txt")
+	if err := os.WriteFile(tracked, []byte("hi\n"), 0o644); err != nil {
+		t.Fatalf("write tracked file: %v", err)
+	}
+	for _, args := range [][]string{
+		{"add", "to-be-deleted.txt"},
+		{"commit", "-q", "-m", "track file"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if err := os.Remove(tracked); err != nil {
+		t.Fatalf("delete tracked file: %v", err)
+	}
+}
+
 // TestCLI_Up_LegacyHookRewrite pins #314's load-bearing fix: a
 // workspace whose .claude/settings.json already contains the v0.12
 // `bones tasks prime --json` SessionStart entry triggers a `hooks
