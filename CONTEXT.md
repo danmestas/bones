@@ -139,6 +139,17 @@ chat}`. Domain may import substrate; substrate may not import
 domain (enforced by `depguard` in `.golangci.yml`). See ADR 0025
 for the layering rule and its known exceptions.
 
+**Substrate API discipline.** A substrate verb ships only when a
+non-test caller ships in the same change. Speculative APIs —
+verbs that "the substrate could support" but no caller exercises —
+are rejected at ADR review. An ADR that proposes adding a verb
+names the caller, the failure semantics, and the wire shape; if
+the caller is hypothetical, the ADR is rejected. Applies to every
+substrate package (`internal/coord/`, `internal/coord/thread/`,
+`internal/swarm/`, `internal/holds/`, `internal/tasks/`, future
+ones). ADR 0048 is the first enforcement of this rule and the
+worked example.
+
 ## Process
 
 **Orchestrator.** The role that drives bootstrap (`bones up`),

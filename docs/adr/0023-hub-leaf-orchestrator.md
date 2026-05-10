@@ -1,6 +1,7 @@
 # ADR 0023 — Hub-leaf orchestrator
 
 **Status:** Accepted (2026-04-26, deployment merge 2026-04-29)
+**Amended by:** ADR 0048 — the orchestrator's task-thread messaging surface is `Post` / `Subscribe` / `Who` on `internal/coord/thread`, not the wider chat surface this ADR was written against. The hub-leaf substrate, autosync, trunk linearization, and slot-disjointness properties below are unchanged.
 
 ## Context
 
@@ -96,8 +97,8 @@ caller-driven.
 5. Slot disjointness — plan validator enforces it; coord trusts it.
    Amended by ADR 0050: applies to plan-anchored slots only. Synthetic
    agent slots (issue #266) target overlapping files by design and rely
-   on fossil auto-fork (ADR 0010 §4) plus chat-on-conflict (§5) as the
-   recovery path.
+   on fossil auto-fork (ADR 0010 §4) plus thread-post-on-conflict (per
+   ADR 0048's narrowed messaging surface) as the recovery path.
 
 ## Tradeoffs
 
