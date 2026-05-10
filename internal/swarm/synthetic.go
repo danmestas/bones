@@ -112,6 +112,34 @@ func AgentBranchTags(agentID string) []TagSpec {
 	}
 }
 
+// TrunkBranchTags returns the libfossil branch-tag pair that explicitly
+// lands a commit on trunk. Mirrors AgentBranchTags's shape (the same
+// `branch=<name>` + `sym-<name>=*` pair) but with name="trunk".
+//
+// Plan-anchored slots use this (not nil tags) so the resulting checkin
+// carries the propagating `branch=trunk` tag. Pre-#NNN, plan-anchored
+// slots passed Tags=nil to libfossil.Commit, expecting parent-branch
+// inheritance the way `fossil ci` does. libfossil emits exactly the
+// tag cards the caller supplies — when none are supplied, the commit
+// has no branch tag, `fossil info trunk` resolves to the seed (the
+// last commit explicitly tagged), and `bones apply` shows the trunk
+// as un-advanced even though the operator's slot work pushed
+// successfully. Today's spy on v0.16.0 reproduced this end-to-end:
+// after `swarm dispatch --advance` "all waves complete", `bones apply`
+// returned "already up to date" and `git status` showed zero new
+// files even though the commits were in the hub fossil.
+//
+// Same emission path as AgentBranchTags — libfossil's existing tag
+// machinery handles both. The only behavioral asymmetry was the
+// caller passing nil for plan slots while passing AgentBranchTags
+// for synthetic ones.
+func TrunkBranchTags() []TagSpec {
+	return []TagSpec{
+		{Name: "branch", Value: "trunk"},
+		{Name: "sym-trunk", Value: "*"},
+	}
+}
+
 // IsSyntheticSlot reports whether slot is a synthetic agent slot
 // (i.e. begins with AgentSlotPrefix). Used by callers that need to
 // distinguish plan-anchored slots from agent slots — for example,

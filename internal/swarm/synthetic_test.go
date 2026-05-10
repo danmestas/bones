@@ -116,6 +116,31 @@ func TestAgentBranchTags_Pair(t *testing.T) {
 	}
 }
 
+// TestTrunkBranchTags_Pair pins the libfossil branch-tag pair
+// TrunkBranchTags emits. Plan-anchored slots use this to land
+// commits on trunk explicitly. Pre-#NNN they passed nil tags
+// expecting parent-branch inheritance, which libfossil does not do
+// — the result was tag-less commits that `fossil info trunk`
+// didn't recognize, so `bones apply` saw an empty trunk while slot
+// work sat in the hub fossil unreachable to the operator.
+//
+// Same shape as AgentBranchTags but with name="trunk".
+func TestTrunkBranchTags_Pair(t *testing.T) {
+	tags := TrunkBranchTags()
+	if len(tags) != 2 {
+		t.Fatalf("TrunkBranchTags returned %d tags; want exactly 2 (branch + sym pair)",
+			len(tags))
+	}
+	if tags[0].Name != "branch" || tags[0].Value != "trunk" {
+		t.Errorf("tags[0] = {Name:%q Value:%q}, want {Name:%q Value:%q}",
+			tags[0].Name, tags[0].Value, "branch", "trunk")
+	}
+	if tags[1].Name != "sym-trunk" || tags[1].Value != "*" {
+		t.Errorf("tags[1] = {Name:%q Value:%q}, want {Name:%q Value:%q}",
+			tags[1].Name, tags[1].Value, "sym-trunk", "*")
+	}
+}
+
 // TestSwarmJoinAuto_IdempotentReEntry: a second JoinAuto with the
 // same agent.id returns ReEntry=true and the same slot/wt without
 // creating a duplicate session record.
