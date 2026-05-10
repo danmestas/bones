@@ -78,9 +78,8 @@ func (c *Coord) watchChat(
 // reserveSubscriberSlot increments subsActive and rolls back if the new
 // count exceeds Config.MaxSubscribers, returning ErrTooManySubscribers
 // wrapped with the caller-supplied method prefix. prefix is
-// "coord.Subscribe" or "coord.SubscribePattern" so the error text names
-// the actual entry point. Extracted so each Subscribe variant stays
-// below the 70-line funlen cap.
+// "coord.Subscribe" so the error text names the actual entry point.
+// Extracted so each Subscribe variant stays below the 70-line funlen cap.
 func (c *Coord) reserveSubscriberSlot(prefix string) error {
 	next := c.subsActive.Add(1)
 	if int(next) > c.cfg.Tuning.MaxSubscribers {
