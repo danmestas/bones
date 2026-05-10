@@ -134,6 +134,72 @@ func TestSelectByStatus(t *testing.T) {
 	}
 }
 
+// TestFilterTasks_StatusClosedReturnsClosed pins the Cluster E fix:
+// pre-fix #NNN, filterTasks dropped closed tasks unless --all was set,
+// regardless of an explicit `--status=closed` filter. The `--closed`
+// alias from #336 routed through the same path and was therefore
+// silently empty. Now an explicit closed-status filter returns the
+// closed tasks even without --all.
+func TestFilterTasks_StatusClosedReturnsClosed(t *testing.T) {
+	all := []tasks.Task{
+		{ID: "open1", Status: tasks.StatusOpen},
+		{ID: "claimed1", Status: tasks.StatusClaimed},
+		{ID: "closed1", Status: tasks.StatusClosed},
+		{ID: "closed2", Status: tasks.StatusClosed},
+	}
+	got := filterTasks(all, false, tasks.StatusClosed, "")
+	if len(got) != 2 {
+		t.Fatalf("status=closed without --all: want 2 closed, got %d: %#v", len(got), got)
+	}
+	for _, ts := range got {
+		if ts.Status != tasks.StatusClosed {
+			t.Errorf("expected only closed, got status=%s id=%s", ts.Status, ts.ID)
+		}
+	}
+}
+
+// TestFilterTasks_NoFilterHidesClosed pins the unchanged default
+// behavior: with no --all and no --status, closed tasks are hidden
+// (so plain `bones tasks list` shows only the in-flight backlog).
+func TestFilterTasks_NoFilterHidesClosed(t *testing.T) {
+	all := []tasks.Task{
+		{ID: "open1", Status: tasks.StatusOpen},
+		{ID: "closed1", Status: tasks.StatusClosed},
+	}
+	got := filterTasks(all, false, "", "")
+	if len(got) != 1 || got[0].ID != "open1" {
+		t.Errorf("no-filter default: want only open1, got %#v", got)
+	}
+}
+
+// TestFilterTasks_AllReturnsEverything pins that --all (with no status
+// filter) returns every task regardless of status.
+func TestFilterTasks_AllReturnsEverything(t *testing.T) {
+	all := []tasks.Task{
+		{ID: "open1", Status: tasks.StatusOpen},
+		{ID: "closed1", Status: tasks.StatusClosed},
+		{ID: "claimed1", Status: tasks.StatusClaimed},
+	}
+	got := filterTasks(all, true, "", "")
+	if len(got) != 3 {
+		t.Errorf("--all: want all 3, got %d", len(got))
+	}
+}
+
+// TestFilterTasks_StatusOpenAlias pins that --status=open (alias
+// --open) returns only open tasks (claimed and closed both filtered).
+func TestFilterTasks_StatusOpenAlias(t *testing.T) {
+	all := []tasks.Task{
+		{ID: "open1", Status: tasks.StatusOpen},
+		{ID: "claimed1", Status: tasks.StatusClaimed},
+		{ID: "closed1", Status: tasks.StatusClosed},
+	}
+	got := filterTasks(all, false, tasks.StatusOpen, "")
+	if len(got) != 1 || got[0].ID != "open1" {
+		t.Errorf("status=open: want only open1, got %#v", got)
+	}
+}
+
 // TestGroupBySlot covers the inspection-mode aggregation introduced for
 // issue #214 — grouping open tasks by their Context["slot"] value with a
 // hot-slot indicator. Closed tasks free the slot and must not be counted.

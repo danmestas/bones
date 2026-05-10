@@ -803,6 +803,80 @@ func TestRenderActiveWorkspacesSection_NoneFallback(t *testing.T) {
 	}
 }
 
+// TestStatusJSONForRoot_RegisteredWorkspace pins the Cluster D fix:
+// `bones status --json` (no --all) emits the same StatusAllPayload
+// envelope shape --all uses, scoped to the single workspace at the
+// caller's cwd. Pre-fix #NNN, --json was declared but the non-`--all`
+// path silently emitted human text.
+func TestStatusJSONForRoot_RegisteredWorkspace(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+	cwd := t.TempDir()
+	if err := registry.Write(registry.Entry{
+		Cwd: cwd, Name: "lone", HubURL: srv.URL, HubPID: os.Getpid(),
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := renderStatusJSONForRoot(&buf, cwd); err != nil {
+		t.Fatalf("renderStatusJSONForRoot: %v", err)
+	}
+	var env struct {
+		Schema struct {
+			Verb    string `json:"verb"`
+			Version string `json:"version"`
+		} `json:"schema"`
+		Data struct {
+			Workspaces []struct {
+				Name  string `json:"name"`
+				Cwd   string `json:"cwd"`
+				State string `json:"state"`
+			} `json:"workspaces"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, buf.String())
+	}
+	if env.Schema.Verb != "status" || env.Schema.Version != "v1" {
+		t.Errorf("schema = %+v, want {status v1}", env.Schema)
+	}
+	if len(env.Data.Workspaces) != 1 {
+		t.Fatalf("workspaces len = %d, want 1: %s", len(env.Data.Workspaces), buf.String())
+	}
+	if env.Data.Workspaces[0].Name != "lone" {
+		t.Errorf("name = %q, want lone", env.Data.Workspaces[0].Name)
+	}
+}
+
+// TestStatusJSONForRoot_UnregisteredCwd pins the missing-registration
+// path: a cwd that hasn't called `bones up` yet (or whose entry was
+// removed by `bones down`) emits an empty workspaces array — the
+// envelope contract holds; consumers see len(workspaces)==0.
+func TestStatusJSONForRoot_UnregisteredCwd(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cwd := t.TempDir() // never registered
+	var buf bytes.Buffer
+	if err := renderStatusJSONForRoot(&buf, cwd); err != nil {
+		t.Fatalf("renderStatusJSONForRoot: %v", err)
+	}
+	var env struct {
+		Data struct {
+			Workspaces []struct{} `json:"workspaces"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(env.Data.Workspaces) != 0 {
+		t.Errorf("unregistered cwd: workspaces len = %d, want 0",
+			len(env.Data.Workspaces))
+	}
+}
+
 func TestStatusAllJSON(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

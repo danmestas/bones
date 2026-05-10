@@ -17,6 +17,7 @@ import (
 	edgecli "github.com/danmestas/EdgeSync/cli"
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
+	"github.com/danmestas/bones/cli/schemas"
 	"github.com/danmestas/bones/internal/clauderhooks"
 	"github.com/danmestas/bones/internal/githook"
 	"github.com/danmestas/bones/internal/hub"
@@ -67,6 +68,15 @@ func (c *DoctorCmd) Run(g *repocli.Globals) (err error) {
 	if c.All {
 		return c.runAll(g)
 	}
+	// JSON mode (no --all): emit a single-element DoctorAllPayload
+	// covering the current workspace, mirroring the --all --json
+	// envelope shape. Pre-fix #NNN, --json was declared on this verb
+	// but the non-`--all` path silently emitted human text. The
+	// per-workspace JSON path delegates to runDoctorOne so it sees
+	// exactly the checks --all does.
+	if c.JSON {
+		return c.runJSONForCwd()
+	}
 
 	_, end := telemetry.RecordCommand(context.Background(), "doctor")
 	var (
@@ -104,6 +114,53 @@ func (c *DoctorCmd) Run(g *repocli.Globals) (err error) {
 		return baseErr
 	}
 	return swarmErr
+}
+
+// runJSONForCwd renders `bones doctor --json` (no --all) by locating
+// the current cwd's registry entry and running the same runDoctorOne
+// path --all uses for that single workspace. Emits the standard
+// DoctorAllPayload envelope so consumers piping `doctor --json` and
+// `doctor --all --json` get the same shape (single-element vs full
+// roster). When the cwd has no registry entry yet (incomplete `bones
+// up`, fresh workspace), emits an empty workspaces array — same
+// "registered or not" provenance the --all path uses.
+func (c *DoctorCmd) runJSONForCwd() error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("cwd: %w", err)
+	}
+	entries, err := registry.List()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "doctor --json: registry list: %v\n", err)
+		return err
+	}
+	cwdResolved := registry.ResolveCwd(cwd)
+	rows := make([]schemas.DoctorWorkspaceRow, 0, 1)
+	anyIssue := false
+	for _, e := range entries {
+		if registry.ResolveCwd(e.Cwd) != cwdResolved {
+			continue
+		}
+		r := runDoctorOne(e)
+		rows = append(rows, schemas.DoctorWorkspaceRow{
+			Name:     r.Entry.Name,
+			Cwd:      r.Entry.Cwd,
+			HubAlive: r.HubAlive,
+			Issues:   r.Issues,
+		})
+		if r.Issues > 0 {
+			anyIssue = true
+		}
+		break
+	}
+	if err := emitEnvelope(os.Stdout, "doctor",
+		schemas.DoctorAllPayload{Workspaces: rows}); err != nil {
+		return err
+	}
+	if anyIssue {
+		return fmt.Errorf("doctor: issues found")
+	}
+	return nil
 }
 
 // runAll dispatches the cross-workspace --all rendering path.

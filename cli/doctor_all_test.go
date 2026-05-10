@@ -157,6 +157,68 @@ func TestDoctorAllJSON(t *testing.T) {
 	}
 }
 
+// TestDoctorJSON_PerWorkspaceEnvelope pins the Cluster D fix:
+// `bones doctor --json` (no --all) emits the same DoctorAllPayload
+// envelope shape --all uses, scoped to the single workspace at the
+// caller's cwd. Pre-fix #NNN, --json was declared but the non-`--all`
+// path silently emitted human text.
+func TestDoctorJSON_PerWorkspaceEnvelope(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+	xDir := makeFakeWorkspace(t, "lone")
+	if err := registry.Write(registry.Entry{
+		Cwd: xDir, Name: "lone", HubURL: srv.URL, HubPID: os.Getpid(),
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	t.Chdir(xDir)
+	// Capture stdout via the package-level os.Stdout swap pattern other
+	// tests use. Simpler here: redirect os.Stdout for the duration of
+	// the call and restore after.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := os.Stdout
+	os.Stdout = w
+	cmd := &DoctorCmd{JSON: true}
+	runErr := cmd.runJSONForCwd()
+	_ = w.Close()
+	os.Stdout = prev
+	if runErr != nil {
+		t.Fatalf("runJSONForCwd: %v", runErr)
+	}
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatal(err)
+	}
+	var env struct {
+		Schema struct {
+			Verb    string `json:"verb"`
+			Version string `json:"version"`
+		} `json:"schema"`
+		Data struct {
+			Workspaces []struct {
+				Name string `json:"name"`
+				Cwd  string `json:"cwd"`
+			} `json:"workspaces"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, buf.String())
+	}
+	if env.Schema.Verb != "doctor" || env.Schema.Version != "v1" {
+		t.Errorf("schema = %+v, want {doctor v1}", env.Schema)
+	}
+	if len(env.Data.Workspaces) != 1 || env.Data.Workspaces[0].Name != "lone" {
+		t.Errorf("workspaces = %+v", env.Data.Workspaces)
+	}
+}
+
 // TestDoctorAll_DoesNotRewriteSettings pins the ADR 0051 contract
 // for --all mode: per-workspace auto-rewrite is off in the
 // multi-workspace path. A `bones doctor --all` invocation walks

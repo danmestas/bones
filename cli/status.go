@@ -100,6 +100,15 @@ func (c *StatusCmd) Run(g *repocli.Globals) error {
 	if err != nil {
 		return err
 	}
+	// JSON mode (no --all): emit the current workspace's row through
+	// the same StatusAllPayload schema --all uses, so consumers piping
+	// `bones status --json` and `bones status --all --json` get the
+	// same envelope shape (single-element workspaces array vs full
+	// host roster). Pre-fix #NNN the --json flag was declared but the
+	// non-`--all` path silently emitted human text.
+	if c.JSON {
+		return renderStatusJSONForRoot(os.Stdout, root)
+	}
 	// Read-only hub probe (#207). If the hub isn't healthy, render
 	// the existing degraded-mode branch (HubAvailable=false) without
 	// touching workspace.Join — Join would lazy-start the hub via
@@ -119,6 +128,49 @@ func (c *StatusCmd) Run(g *repocli.Globals) error {
 		return err
 	}
 	return renderStatus(report, os.Stdout)
+}
+
+// renderStatusJSONForRoot emits the StatusAllPayload envelope with a
+// single workspace row matching the current root. Used by `bones
+// status --json` (without `--all`) so the JSON contract is uniform
+// with `--all --json`. Looks the row up by cwd in the registry,
+// falling back to a synthetic row when the workspace isn't registered
+// (e.g. an incomplete `bones up`).
+func renderStatusJSONForRoot(w io.Writer, root string) error {
+	entries, err := registry.List()
+	if err != nil {
+		return err
+	}
+	rootResolved := registry.ResolveCwd(root)
+	for _, e := range entries {
+		if registry.ResolveCwd(e.Cwd) != rootResolved {
+			continue
+		}
+		state := "idle"
+		switch {
+		case e.HubPID == 0:
+			state = "idle"
+		case registry.IsAlive(e):
+			state = "active"
+		default:
+			state = "paused"
+		}
+		row := schemas.StatusWorkspaceRow{
+			Cwd:       e.Cwd,
+			Name:      e.Name,
+			HubURL:    e.HubURL,
+			State:     state,
+			Sessions:  sessions.CountByWorkspace(e.Cwd),
+			StartedAt: timefmt.NewLoggedTime(e.StartedAt),
+		}
+		return emitEnvelope(w, "status",
+			schemas.StatusAllPayload{Workspaces: []schemas.StatusWorkspaceRow{row}})
+	}
+	// Workspace not in registry — emit an empty workspaces list so
+	// the schema contract holds. Operator hint about the missing
+	// registration is the human-mode renderer's job.
+	return emitEnvelope(w, "status",
+		schemas.StatusAllPayload{Workspaces: []schemas.StatusWorkspaceRow{}})
 }
 
 // resolveStatusRoot walks up from cwd to the workspace marker
