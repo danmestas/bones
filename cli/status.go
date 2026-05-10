@@ -738,7 +738,7 @@ func renderOrphanHubsSection(w io.Writer, orphans []orphanHub) error {
 		return err
 	}
 	_, err := io.WriteString(w,
-		"  (run `bones hub reap --pid=N` per process)\n")
+		"  (run `bones hub reap` to clean)\n")
 	return err
 }
 

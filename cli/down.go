@@ -304,25 +304,44 @@ func legacyLeafPID(root string) (int, bool) {
 // load-bearing for tests that register workspaces under the test
 // process's own pid.
 func planReapOrphans() []downAction {
-	orphans, err := registry.Orphans()
+	orphans, err := registry.AllOrphanHubs()
 	if err != nil || len(orphans) == 0 {
 		return nil
 	}
 	self := os.Getpid()
 	plan := make([]downAction, 0, len(orphans))
 	for _, o := range orphans {
-		if o.HubPID == self {
+		if o.PID == self {
 			continue
 		}
-		desc := fmt.Sprintf("reap orphan registry entry %s (pid %d, workspace gone)",
-			o.Name, o.HubPID)
-		entry := o
+		desc, action := planReapOne(o)
 		plan = append(plan, downAction{
 			description: desc,
-			do:          func() error { return registry.Reap(entry) },
+			do:          action,
 		})
 	}
 	return plan
+}
+
+// planReapOne builds the per-orphan description + reap action,
+// dispatching by Source: registry-source orphans get ReapEntry (signal
+// + remove registry entry); process-only orphans get ReapPID (signal
+// only — there's no entry to remove).
+func planReapOne(o registry.OrphanHub) (string, func() error) {
+	if o.Source == registry.SourceRegistry {
+		entry := o.Entry
+		desc := fmt.Sprintf("reap orphan registry entry %s (pid %d, workspace gone)",
+			entry.Name, entry.HubPID)
+		return desc, func() error { return registry.ReapEntry(entry) }
+	}
+	pid := o.PID
+	cwd := o.Cwd
+	if cwd == "" {
+		cwd = "unknown"
+	}
+	desc := fmt.Sprintf("reap orphan hub process pid=%d cwd=%s (no registry entry)",
+		pid, cwd)
+	return desc, func() error { return registry.ReapPID(pid) }
 }
 
 // planRemoveGitHook restores the user's original pre-commit (if any)

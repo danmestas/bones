@@ -661,25 +661,36 @@ func workspaceMarkerPresent(root string) bool {
 // surfaces orphans the operator can still action — not the stale
 // crud that pre-#229 accumulated indefinitely.
 func checkOrphanHubs(w io.Writer) int {
-	orphans, err := registry.Orphans()
+	orphans, err := registry.AllOrphanHubs()
 	if err != nil {
-		_, _ = fmt.Fprintf(w, "  WARN  orphan-hub registry read: %v\n", err)
+		_, _ = fmt.Fprintf(w, "  WARN  orphan-hub scan: %v\n", err)
 		return 1
 	}
 	if len(orphans) == 0 {
-		_, _ = fmt.Fprintln(w, "  OK    no orphan hub processes registered")
+		_, _ = fmt.Fprintln(w, "  OK    no orphan hub processes")
 		return 0
 	}
-	for _, e := range orphans {
-		age := "?"
-		if !e.StartedAt.IsZero() {
-			age = time.Since(e.StartedAt).Round(time.Second).String()
-		}
+	for _, o := range orphans {
+		age := orphanAge(o)
 		_, _ = fmt.Fprintf(w,
 			"  WARN  orphan hub: pid=%d cwd=%s age=%s — run `bones hub reap` to terminate\n",
-			e.HubPID, e.Cwd, age)
+			o.PID, o.Cwd, age)
 	}
 	return len(orphans)
+}
+
+// orphanAge returns a human-readable age for an OrphanHub. Registry-
+// source orphans use Entry.StartedAt; process-source orphans use
+// Process.ETime (raw `ps` etime string) since they have no registry
+// timestamp.
+func orphanAge(o registry.OrphanHub) string {
+	if o.Source == registry.SourceRegistry && !o.Entry.StartedAt.IsZero() {
+		return time.Since(o.Entry.StartedAt).Round(time.Second).String()
+	}
+	if o.Process.ETime != "" {
+		return o.Process.ETime
+	}
+	return "?"
 }
 
 // checkManifestIntegrity reads .claude/skills/.bones-manifest.json

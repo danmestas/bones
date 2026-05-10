@@ -183,3 +183,162 @@ func TestReap_DeadPidJustRemovesEntry(t *testing.T) {
 		t.Errorf("entry should be removed after Reap on dead PID")
 	}
 }
+
+// TestAllOrphanHubs_UnionOfBothSources pins the central invariant of
+// the unify-orphan-classifiers fix: AllOrphanHubs returns BOTH
+// registry-side orphans (entries with IsOrphan==true) AND process-only
+// orphans (live `bones hub start` PIDs with no registry entry).
+//
+// Pre-fix: hub_reap, doctor, down all called Orphans() and saw only
+// the first set. Test-spawn process leaks (the dominant case) were
+// invisible. See the spy-on-bones session that produced this fix.
+func TestAllOrphanHubs_UnionOfBothSources(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// Registry-source orphan: an entry whose Cwd directory exists but
+	// has no .bones/agent.id marker. Use os.Getpid() so the process is
+	// live (registry self-prune kills dead-pid entries before
+	// IsOrphan can reach them).
+	regCwd := t.TempDir()
+	regPID := os.Getpid()
+	if err := Write(Entry{
+		Cwd:       regCwd,
+		Name:      "orphan-reg",
+		HubPID:    regPID,
+		HubURL:    "http://127.0.0.1:1",
+		StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("Write registry orphan: %v", err)
+	}
+
+	// Process-only orphan: stub liveHubProcessesFn to return a fake
+	// hub PID + cwd that doesn't appear in the registry. Pre-fix this
+	// was the leak case `hub reap` couldn't see.
+	procPID := 1_234_567
+	procCwd := "/tmp/bones-proc-orphan-fake-" + filepath.Base(t.TempDir())
+	stub := func() ([]HubProcess, error) {
+		return []HubProcess{
+			{PID: procPID, ETime: "01:23", Cwd: procCwd, Cmd: "bones hub start"},
+		}, nil
+	}
+	prev := liveHubProcessesFn
+	liveHubProcessesFn = stub
+	t.Cleanup(func() { liveHubProcessesFn = prev })
+
+	orphans, err := AllOrphanHubs()
+	if err != nil {
+		t.Fatalf("AllOrphanHubs: %v", err)
+	}
+	if len(orphans) != 2 {
+		t.Fatalf("expected 2 orphans (1 registry + 1 process); got %d: %+v",
+			len(orphans), orphans)
+	}
+
+	var sawReg, sawProc bool
+	for _, o := range orphans {
+		switch o.Source {
+		case SourceRegistry:
+			sawReg = true
+			if o.PID != regPID || o.Cwd != regCwd {
+				t.Errorf("registry orphan mismatch: pid=%d cwd=%s, want pid=%d cwd=%s",
+					o.PID, o.Cwd, regPID, regCwd)
+			}
+			if o.Entry.Name != "orphan-reg" {
+				t.Errorf("Entry not populated for SourceRegistry: %+v", o.Entry)
+			}
+		case SourceProcess:
+			sawProc = true
+			if o.PID != procPID || o.Cwd != procCwd {
+				t.Errorf("process orphan mismatch: pid=%d cwd=%s, want pid=%d cwd=%s",
+					o.PID, o.Cwd, procPID, procCwd)
+			}
+			if o.Process.Cmd != "bones hub start" {
+				t.Errorf("Process not populated for SourceProcess: %+v", o.Process)
+			}
+		}
+	}
+	if !sawReg {
+		t.Errorf("missing SourceRegistry orphan in result")
+	}
+	if !sawProc {
+		t.Errorf("missing SourceProcess orphan in result")
+	}
+}
+
+// TestAllOrphanHubs_ProcessAlreadyInRegistryNotDoublyReported pins
+// that a live hub PID covered by an existing registry entry is NOT
+// also surfaced as a process-source orphan. The cross-source dedup
+// is keyed on PID first, then on resolved Cwd.
+func TestAllOrphanHubs_ProcessAlreadyInRegistryNotDoublyReported(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, ".bones"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, ".bones", "agent.id"),
+		[]byte("test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pid := os.Getpid()
+	if err := Write(Entry{
+		Cwd:       cwd,
+		Name:      "healthy-ws",
+		HubPID:    pid,
+		HubURL:    "http://127.0.0.1:1",
+		StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	stub := func() ([]HubProcess, error) {
+		return []HubProcess{
+			{PID: pid, ETime: "00:42", Cwd: cwd, Cmd: "bones hub start"},
+		}, nil
+	}
+	prev := liveHubProcessesFn
+	liveHubProcessesFn = stub
+	t.Cleanup(func() { liveHubProcessesFn = prev })
+
+	orphans, err := AllOrphanHubs()
+	if err != nil {
+		t.Fatalf("AllOrphanHubs: %v", err)
+	}
+	if len(orphans) != 0 {
+		t.Errorf("healthy registered workspace should produce 0 orphans, got %d: %+v",
+			len(orphans), orphans)
+	}
+}
+
+// TestReapPID_KillsProcessOnly pins that ReapPID terminates a live PID
+// without touching the registry. Used by hub_reap when handling a
+// process-source orphan that has no Entry to remove.
+func TestReapPID_KillsProcessOnly(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start sleep: %v", err)
+	}
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	})
+
+	if err := ReapPID(cmd.Process.Pid); err != nil {
+		t.Fatalf("ReapPID: %v", err)
+	}
+	_ = cmd.Wait()
+	if pidAlive(cmd.Process.Pid) {
+		t.Errorf("process still alive after ReapPID+Wait")
+	}
+}
+
+// TestReapPID_DeadPidIsNoOp pins idempotency: ReapPID on a dead PID
+// returns nil without error and without touching anything.
+func TestReapPID_DeadPidIsNoOp(t *testing.T) {
+	if err := ReapPID(999_999); err != nil {
+		t.Errorf("ReapPID on assumed-dead PID should be no-op, got: %v", err)
+	}
+}
