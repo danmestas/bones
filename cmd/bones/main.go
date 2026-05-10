@@ -22,7 +22,6 @@ import (
 	_ "github.com/danmestas/libfossil/db/driver/modernc"
 
 	"github.com/danmestas/bones/internal/telemetry"
-	"github.com/danmestas/bones/internal/updatecheck"
 	bversion "github.com/danmestas/bones/internal/version"
 )
 
@@ -38,12 +37,6 @@ func main() {
 	// package so cli/orchestrator can stamp it onto fresh workspaces
 	// and cli/doctor can compare against the workspace stamp.
 	bversion.Set(version)
-
-	// Once-per-day update check. Best-effort; runs the network refresh
-	// in a goroutine and prints a one-line stderr notice based on
-	// cached state. Suppressed by BONES_UPDATE_CHECK=0 and skipped on
-	// "dev" builds (i.e. anything not built by GoReleaser).
-	updatecheck.Check(version)
 
 	// Opt-in telemetry: reads BONES_TELEMETRY + BONES_OTEL_ENDPOINT
 	// per ADR 0039. No-op in default builds (no exporter compiled in)
