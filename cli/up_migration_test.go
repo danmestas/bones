@@ -63,3 +63,45 @@ func TestSwarmUp_AcceptsCleanWorkspace_NoMigrationFailure(t *testing.T) {
 		t.Errorf("clean workspace tripped migration check: %v", err)
 	}
 }
+
+// TestUp_NonGitWorkspace_SkipsSessionStartHooks pins the Plan B fix:
+// `bones up` in a workspace without a .git directory must NOT install
+// SessionStart hooks. Pre-fix: hooks were installed, and the
+// `bones tasks prime --hook=session-start` and `bones hub start`
+// commands they invoke require git-tracked files to seed fossil,
+// so they would fail every time Claude opened the workspace. The
+// new behavior is dual-skip: pre-commit hook AND SessionStart hooks
+// are both gated on git presence.
+func TestUp_NonGitWorkspace_SkipsSessionStartHooks(t *testing.T) {
+	dir := t.TempDir() // no `git init` — not a git repo
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("BONES_DIR", t.TempDir())
+
+	// runUp may still emit other downstream errors (e.g. an unrelated
+	// scaffold step), but the migration check is irrelevant here and
+	// .claude/settings.json must not gain SessionStart hooks.
+	_ = runUp(dir, upOpts{Quiet: true})
+
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	data, err := os.ReadFile(settingsPath)
+	if errors.Is(err, os.ErrNotExist) {
+		// Best outcome: no settings.json at all (no hooks merged).
+		return
+	}
+	if err != nil {
+		t.Fatalf("read settings.json: %v", err)
+	}
+	body := string(data)
+	if strings.Contains(body, "SessionStart") {
+		t.Errorf("non-git workspace should not have SessionStart hooks; settings.json:\n%s",
+			body)
+	}
+	if strings.Contains(body, "bones tasks prime") {
+		t.Errorf("non-git workspace should not have `bones tasks prime` hook; settings.json:\n%s",
+			body)
+	}
+	if strings.Contains(body, "bones hub start") {
+		t.Errorf("non-git workspace should not have `bones hub start` hook; settings.json:\n%s",
+			body)
+	}
+}

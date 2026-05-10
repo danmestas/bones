@@ -109,7 +109,25 @@ func runUp(cwd string, opts upOpts) (err error) {
 		logger.Warnf("bones: scaffold incomplete from prior run — re-running scaffold")
 	}
 
-	fp, scaffErr := scaffoldOrchestrator(wsDir, scaffoldOpts{Stealth: opts.Stealth})
+	// Detect git presence once and route both hook-install paths
+	// uniformly. Without .git, the pre-commit hook can't install (no
+	// hooks dir) AND the SessionStart hooks bones would write into
+	// .claude/settings.json all call commands that require git-tracked
+	// files to seed fossil — so they'd fail every time Claude opens
+	// the workspace. See #NNN: scaffolding hooks that will fail is
+	// strictly worse than refusing to scaffold them.
+	noGit := githook.FindGitDir(wsDir) == ""
+	if noGit && !opts.JSON {
+		logger.Infof(
+			"up: no .git found — skipping pre-commit and SessionStart hook install. " +
+				"Run `git init && git add . && git commit -m init` then re-run " +
+				"`bones up` to bootstrap the substrate.")
+	}
+
+	fp, scaffErr := scaffoldOrchestrator(wsDir, scaffoldOpts{
+		Stealth:   opts.Stealth,
+		OmitHooks: noGit,
+	})
 	if scaffErr != nil {
 		err = fmt.Errorf("orchestrator scaffold: %w", scaffErr)
 		return err
@@ -381,13 +399,13 @@ func initOrJoinWorkspace(ctx context.Context, cwd string) (workspace.Info, error
 // enforcement seam that prevents agents from silently bypassing the
 // shadow trunk.
 //
-// The "no .git found" line prints regardless of verbose because it
-// signals a missing enforcement gate the operator should know about.
-// The success line is verbose-only.
+// runUp emits the unified no-.git skip message before calling this and
+// scaffoldOrchestrator, so the no-git branch here is silent — the
+// operator already knows hooks were skipped. Success line is verbose-
+// only.
 func installGitHook(wsDir string, verbose bool, logger *upLogger) error {
 	gitDir := githook.FindGitDir(wsDir)
 	if gitDir == "" {
-		logger.Infof("up: no .git found — skipping pre-commit hook install")
 		return nil
 	}
 	if err := githook.Install(gitDir); err != nil {

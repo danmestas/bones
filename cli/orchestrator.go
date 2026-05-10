@@ -31,6 +31,16 @@ type scaffoldOpts struct {
 	// skills bundle, scaffold-version stamp, and manifest still write
 	// — only the cross-territory hook merge is skipped.
 	Stealth bool
+
+	// OmitHooks skips the .claude/settings.json hook merge for a
+	// different reason than Stealth: the workspace has no .git, so the
+	// SessionStart hooks bones would install (`bones tasks prime`,
+	// `bones hub start`) require git-tracked files to seed fossil and
+	// would fail every time Claude opens the workspace. Set by runUp
+	// when githook.FindGitDir returns empty. The skills bundle, stamp,
+	// and manifest still write so a later `git init && bones up`
+	// converges to a complete scaffold.
+	OmitHooks bool
 }
 
 // scaffoldFootprint captures what scaffoldOrchestrator did during a
@@ -121,7 +131,7 @@ func scaffoldOrchestrator(root string, opts scaffoldOpts) (scaffoldFootprint, er
 	if err := writeBonesSkills(root, &fp); err != nil {
 		return fp, fmt.Errorf("skills bundle: %w", err)
 	}
-	if !opts.Stealth {
+	if !opts.Stealth && !opts.OmitHooks {
 		if err := mergeSettings(filepath.Join(root, ".claude", "settings.json"), &fp); err != nil {
 			return fp, fmt.Errorf("settings: %w", err)
 		}
