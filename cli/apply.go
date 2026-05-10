@@ -386,7 +386,23 @@ func branchRev(hubFossil, fossilBin, branch string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("fossil info %s: %w", branch, err)
 	}
-	for _, line := range strings.Split(string(out), "\n") {
+	rev, ok := parseFossilInfoRev(string(out))
+	if !ok {
+		return "", fmt.Errorf("could not parse rev for branch %q from `fossil info`", branch)
+	}
+	return rev, nil
+}
+
+// parseFossilInfoRev extracts the hex UUID from `fossil info` output.
+// The `hash:` (current) and `uuid:` (legacy) lines have the form
+// `hash:    <40-hex> <timestamp> UTC`. Earlier code paths returned the
+// whole trailing portion (timestamp included), which then poisoned
+// `.bones/last-applied` and made every subsequent `manifestAtRev`
+// lookup fail. Splitting at the first whitespace token isolates the
+// hex UUID. Shared between branchRev and trunkRev so the two paths
+// can't drift again.
+func parseFossilInfoRev(out string) (string, bool) {
+	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		for _, prefix := range []string{"uuid:", "hash:"} {
 			if !strings.HasPrefix(line, prefix) {
@@ -396,10 +412,13 @@ func branchRev(hubFossil, fossilBin, branch string) (string, error) {
 			if i := strings.IndexAny(rest, " \t"); i >= 0 {
 				rest = rest[:i]
 			}
-			return rest, nil
+			if rest == "" {
+				return "", false
+			}
+			return rest, true
 		}
 	}
-	return "", fmt.Errorf("could not parse rev for branch %q from `fossil info`", branch)
+	return "", false
 }
 
 // latestSlotRecoveryDir scans `.bones/recovery/` for entries matching
@@ -543,6 +562,7 @@ func (c *ApplyCmd) applyFromCheckout(
 	if total == 0 {
 		outcome.AlreadyUpToDate = true
 		fmt.Printf("bones apply: already up to date at %s\n", shortRev(rev))
+		printFanInNudgeIfNeeded(pre.HubFossil, pre.FossilBin)
 		return writeLastAppliedMarker(pre.WorkspaceDir, rev)
 	}
 	if c.DryRun {
@@ -619,12 +639,27 @@ func refuseIfDirty(workspaceDir string, manifest []string) error {
 // manifest at that rev. A missing marker returns (nil, nil) — first
 // apply is additive-only. A marker pointing at an unknown rev logs a
 // warning and returns (nil, nil) so deletions are suppressed.
+//
+// Self-healing: if the marker is malformed (not a 40-char fossil hex
+// UUID), it is treated as a write-side bug from a prior apply that
+// emitted polluted output. The marker is rewritten to empty so
+// subsequent runs aren't trapped, and the call returns (nil, nil)
+// (additive-only). A legitimately-missing rev (history rewrite, repo
+// swap, valid hex but garbage-collected) keeps the marker so the
+// operator sees the signal across runs.
 func loadPrevManifest(pre *applyPreflight) ([]string, error) {
 	prevRev, err := readLastAppliedMarker(pre.WorkspaceDir)
 	if err != nil {
 		return nil, fmt.Errorf("read last-applied marker: %w", err)
 	}
 	if prevRev == "" {
+		return nil, nil
+	}
+	if !isFossilHexRev(prevRev) {
+		fmt.Fprintf(os.Stderr,
+			"bones apply: discarding malformed last-applied marker %q "+
+				"(not a fossil hex UUID); treating as fresh apply\n", prevRev)
+		_ = writeLastAppliedMarker(pre.WorkspaceDir, "")
 		return nil, nil
 	}
 	prevManifest, err := manifestAtRev(pre.HubFossil, pre.FossilBin, prevRev)
@@ -635,6 +670,26 @@ func loadPrevManifest(pre *applyPreflight) ([]string, error) {
 		return nil, nil
 	}
 	return prevManifest, nil
+}
+
+// isFossilHexRev reports whether s is a syntactically-valid fossil
+// commit hash: exactly 40 lowercase hex characters. Used as the
+// load-side gate that catches polluted markers from pre-fix code paths
+// (where trunkRev returned `<hex> <ts> UTC`).
+func isFossilHexRev(s string) bool {
+	const fossilHexLen = 40
+	if len(s) != fossilHexLen {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'f':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // shortRev abbreviates a fossil hex UUID to 12 characters — fossil's
@@ -910,20 +965,87 @@ func manifestAtRev(hubFossil, fossilBin, rev string) ([]string, error) {
 	return paths, nil
 }
 
+// printFanInNudgeIfNeeded surfaces the agent-branch-with-unmerged-work
+// situation that pre-fix #NNN looked indistinguishable from "nothing
+// to do" to operators.
+//
+// When `bones apply` finds total==0 changes against trunk, the
+// natural read is "everything is already in git". But after a swarm
+// dispatch where slots commit to `agent/<id>` branches and the
+// operator hasn't run `bones swarm fan-in` yet, trunk is still at
+// the seed and the slot work is sitting on agent branches awaiting
+// merge. The operator sees nothing happen and concludes the work
+// was lost.
+//
+// Detection is cheap: `fossil branch list` enumerates all branches;
+// any matching the `agent/*` pattern from ADR 0050 indicates pending
+// slot work the operator can fan-in or apply per-slot. If the helper
+// can't enumerate (fossil-CLI failure, missing binary), it stays
+// silent — the apply already succeeded; the nudge is purely advisory.
+func printFanInNudgeIfNeeded(hubFossil, fossilBin string) {
+	branches, err := fossilAgentBranches(hubFossil, fossilBin)
+	if err != nil || len(branches) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"bones apply: trunk is up to date but %d agent branch%s ha%s unmerged work:\n",
+		len(branches), pluralizeBranches(len(branches)), pluralizeHaveHas(len(branches)))
+	for _, b := range branches {
+		fmt.Fprintf(os.Stderr, "  - %s\n", b)
+	}
+	fmt.Fprintln(os.Stderr,
+		"  run `bones swarm fan-in` to land them in trunk, then re-run `bones apply`,")
+	fmt.Fprintln(os.Stderr,
+		"  or `bones apply --slot=<branch> --to=<dir>` to materialize one (ADR 0050).")
+}
+
+// fossilAgentBranches lists branches in the hub fossil whose name
+// matches the agent-branch pattern from ADR 0050 (`agent/<id>`). Used
+// by printFanInNudgeIfNeeded as the "is there pending slot work?"
+// signal.
+func fossilAgentBranches(hubFossil, fossilBin string) ([]string, error) {
+	out, err := exec.Command(fossilBin, "branch", "list", "-R", hubFossil).Output()
+	if err != nil {
+		return nil, err
+	}
+	var agents []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		// Fossil prefixes the current branch with `* `.
+		line = strings.TrimPrefix(line, "* ")
+		if strings.HasPrefix(line, "agent/") {
+			agents = append(agents, line)
+		}
+	}
+	return agents, nil
+}
+
+func pluralizeBranches(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "es"
+}
+
+func pluralizeHaveHas(n int) string {
+	if n == 1 {
+		return "s"
+	}
+	return "ve"
+}
+
 // trunkRev returns the trunk tip's hex UUID via `fossil info`.
 // Accepts both legacy (`uuid:`) and current (`hash:`) labels.
+// Routes through parseFossilInfoRev so the trailing-timestamp pollution
+// fixed for branchRev (#NNN) cannot recur here.
 func trunkRev(hubFossil, fossilBin string) (string, error) {
 	out, err := exec.Command(fossilBin, "info", "-R", hubFossil, "trunk").Output()
 	if err != nil {
 		return "", fmt.Errorf("fossil info trunk: %w", err)
 	}
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		for _, prefix := range []string{"uuid:", "hash:"} {
-			if strings.HasPrefix(line, prefix) {
-				return strings.TrimSpace(strings.TrimPrefix(line, prefix)), nil
-			}
-		}
+	rev, ok := parseFossilInfoRev(string(out))
+	if !ok {
+		return "", errors.New("could not parse trunk rev from `fossil info`")
 	}
-	return "", errors.New("could not parse trunk rev from `fossil info`")
+	return rev, nil
 }

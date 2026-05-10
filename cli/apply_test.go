@@ -170,6 +170,236 @@ func TestApplyPreflight_HappyPath(t *testing.T) {
 	}
 }
 
+// TestParseFossilInfoRev pins the rev-extraction contract that
+// branchRev and trunkRev both depend on. Pre-fix, trunkRev returned
+// the entire trailing portion of the `hash:` line (including
+// timestamp and "UTC"), which then poisoned .bones/last-applied and
+// made every subsequent manifestAtRev lookup fail (#NNN). The shared
+// parser splits at the first whitespace token to isolate the hex.
+func TestParseFossilInfoRev(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+		ok   bool
+	}{
+		{
+			name: "current_hash_with_timestamp",
+			in: "hash:    deadbeefcafebabedeadbeefcafebabedeadbeef 2026-05-10 19:05:28 UTC\n" +
+				"tags:    trunk\n",
+			want: "deadbeefcafebabedeadbeefcafebabedeadbeef",
+			ok:   true,
+		},
+		{
+			name: "legacy_uuid_with_timestamp",
+			in:   "uuid:    abcdef0123456789abcdef0123456789abcdef01 2025-01-01 00:00:00 UTC\n",
+			want: "abcdef0123456789abcdef0123456789abcdef01",
+			ok:   true,
+		},
+		{
+			name: "hash_no_trailing",
+			in:   "hash: 1234567890abcdef1234567890abcdef12345678",
+			want: "1234567890abcdef1234567890abcdef12345678",
+			ok:   true,
+		},
+		{
+			name: "tab_separator",
+			in:   "hash:\t1234567890abcdef1234567890abcdef12345678\t2026-01-01",
+			want: "1234567890abcdef1234567890abcdef12345678",
+			ok:   true,
+		},
+		{
+			name: "no_hash_line",
+			in:   "comment: foo\ntags: trunk\n",
+			want: "",
+			ok:   false,
+		},
+		{
+			name: "empty",
+			in:   "",
+			want: "",
+			ok:   false,
+		},
+		{
+			name: "hash_label_no_value",
+			in:   "hash:\n",
+			want: "",
+			ok:   false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := parseFossilInfoRev(c.in)
+			if got != c.want || ok != c.ok {
+				t.Errorf("parseFossilInfoRev(%q) = (%q, %v), want (%q, %v)",
+					c.in, got, ok, c.want, c.ok)
+			}
+		})
+	}
+}
+
+// TestIsFossilHexRev pins the marker-validity gate used by
+// loadPrevManifest to detect markers polluted by the pre-fix trunkRev
+// (which returned `<hex> <timestamp> UTC` strings).
+func TestIsFossilHexRev(t *testing.T) {
+	cases := map[string]bool{
+		"deadbeefcafebabedeadbeefcafebabedeadbeef":  true,
+		"DEADBEEFCAFEBABEDEADBEEFCAFEBABEDEADBEEF":  false, // uppercase rejected
+		"deadbeefcafebabedeadbeefcafebabedeadbee":   false, // 39 chars
+		"deadbeefcafebabedeadbeefcafebabedeadbeefa": false, // 41 chars
+		"": false,
+		"deadbeef cafebabe deadbeef cafebabe deadb":               false, // contains spaces
+		"65e730745b52867d021a915c4b40f0e3c62f99ea 2026-05-10 UTC": false, // pre-fix marker shape
+	}
+	for in, want := range cases {
+		t.Run(in, func(t *testing.T) {
+			if got := isFossilHexRev(in); got != want {
+				t.Errorf("isFossilHexRev(%q) = %v, want %v", in, got, want)
+			}
+		})
+	}
+}
+
+// TestLoadPrevManifest_HealsMalformedMarker pins the self-healing
+// fallback: if .bones/last-applied was written by pre-fix code that
+// returned `<hex> <ts> UTC`, the gate detects the malformed value,
+// rewrites the marker to empty, and returns (nil, nil) so apply
+// proceeds in additive-only mode. Without the heal, every subsequent
+// run would log "previous rev not found" forever.
+func TestLoadPrevManifest_HealsMalformedMarker(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".bones"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bad := "65e730745b52867d021a915c4b40f0e3c62f99ea 2026-05-10 19:05:28 UTC"
+	if err := os.WriteFile(filepath.Join(dir, ".bones", "last-applied"),
+		[]byte(bad+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pre := &applyPreflight{WorkspaceDir: dir}
+	got, err := loadPrevManifest(pre)
+	if err != nil {
+		t.Fatalf("loadPrevManifest: %v", err)
+	}
+	if got != nil {
+		t.Errorf("malformed marker should produce nil manifest, got %v", got)
+	}
+	rev, err := readLastAppliedMarker(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rev != "" {
+		t.Errorf("malformed marker should be cleared, still got %q", rev)
+	}
+}
+
+// TestLoadPrevManifest_ValidHexUnknownRev pins the deletion-suppression
+// path: a marker with a syntactically-valid hex that fossil can't find
+// (history rewrite, repo swap) keeps the marker so the operator sees
+// the signal across runs, and returns (nil, nil) so deletes are
+// suppressed for that apply.
+func TestLoadPrevManifest_ValidHexUnknownRev(t *testing.T) {
+	if _, err := exec.LookPath("fossil"); err != nil {
+		t.Skip("fossil not on PATH")
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".bones"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Valid hex shape, but no fossil exists at all so any lookup fails.
+	hex := "deadbeefcafebabedeadbeefcafebabedeadbeef"
+	if err := os.WriteFile(filepath.Join(dir, ".bones", "last-applied"),
+		[]byte(hex+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pre := &applyPreflight{
+		WorkspaceDir: dir,
+		HubFossil:    filepath.Join(dir, "no-such.fossil"),
+		FossilBin:    "fossil",
+	}
+	got, err := loadPrevManifest(pre)
+	if err != nil {
+		t.Fatalf("loadPrevManifest: %v", err)
+	}
+	if got != nil {
+		t.Errorf("missing-rev should suppress deletes (nil manifest), got %v", got)
+	}
+	// Marker preserved across the unknown-rev case (operator-visible signal).
+	rev, err := readLastAppliedMarker(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rev != hex {
+		t.Errorf("valid-hex unknown-rev marker should be preserved, got %q", rev)
+	}
+}
+
+// TestFossilAgentBranches_RealRepo pins the agent-branch detection
+// used by printFanInNudgeIfNeeded. Creates a fossil with one trunk
+// branch + two `agent/<id>` branches and verifies only the agents
+// surface. Stand-in for the operator workflow where slots commit on
+// per-agent branches and the operator forgot to fan-in.
+func TestFossilAgentBranches_RealRepo(t *testing.T) {
+	if _, err := exec.LookPath("fossil"); err != nil {
+		t.Skip("fossil not on PATH")
+	}
+	dir := t.TempDir()
+	hubFossil := filepath.Join(dir, "hub.fossil")
+	wt := filepath.Join(dir, "wt")
+
+	mustRun(t, "fossil", "new", "--admin-user", "u", hubFossil)
+	mustRun(t, "fossil", "open", "--force", hubFossil, "--workdir", wt)
+	defer mustRunIn(t, wt, "fossil", "close", "--force")
+
+	// Seed: single commit on trunk so the repo isn't empty.
+	if err := os.WriteFile(filepath.Join(wt, "seed.txt"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRunIn(t, wt, "fossil", "add", "seed.txt")
+	mustRunIn(t, wt, "fossil", "commit", "--no-warnings", "--user-override", "u", "-m", "init")
+
+	// Two agent branches via `branch new` from trunk.
+	mustRunIn(t, wt, "fossil", "branch", "new", "agent/writer-abc", "trunk")
+	mustRunIn(t, wt, "fossil", "branch", "new", "agent/tester-xyz", "trunk")
+
+	got, err := fossilAgentBranches(hubFossil, "fossil")
+	if err != nil {
+		t.Fatalf("fossilAgentBranches: %v", err)
+	}
+	if !equalStringSets(got, []string{"agent/tester-xyz", "agent/writer-abc"}) {
+		t.Errorf("agent branches = %v, want [agent/tester-xyz agent/writer-abc]", got)
+	}
+}
+
+// TestFossilAgentBranches_NoAgents pins the negative case: a fossil
+// with only trunk + a feature branch returns an empty slice (the
+// nudge stays silent for non-swarm workspaces).
+func TestFossilAgentBranches_NoAgents(t *testing.T) {
+	if _, err := exec.LookPath("fossil"); err != nil {
+		t.Skip("fossil not on PATH")
+	}
+	dir := t.TempDir()
+	hubFossil := filepath.Join(dir, "hub.fossil")
+	wt := filepath.Join(dir, "wt")
+	mustRun(t, "fossil", "new", "--admin-user", "u", hubFossil)
+	mustRun(t, "fossil", "open", "--force", hubFossil, "--workdir", wt)
+	defer mustRunIn(t, wt, "fossil", "close", "--force")
+	if err := os.WriteFile(filepath.Join(wt, "seed.txt"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRunIn(t, wt, "fossil", "add", "seed.txt")
+	mustRunIn(t, wt, "fossil", "commit", "--no-warnings", "--user-override", "u", "-m", "init")
+	mustRunIn(t, wt, "fossil", "branch", "new", "feature/foo", "trunk")
+
+	got, err := fossilAgentBranches(hubFossil, "fossil")
+	if err != nil {
+		t.Fatalf("fossilAgentBranches: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("non-agent branches should not surface, got %v", got)
+	}
+}
+
 func TestTrunkManifest_RealFossilRepo(t *testing.T) {
 	if _, err := exec.LookPath("fossil"); err != nil {
 		t.Skip("fossil not on PATH")
