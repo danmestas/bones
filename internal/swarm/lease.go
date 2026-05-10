@@ -556,15 +556,23 @@ func (l *ResumedLease) Commit(
 		return CommitResult{}, fmt.Errorf("swarm.ResumedLease.Commit: leaf already stopped")
 	}
 	// #288: synthetic agent slots (slot name `agent-<prefix>`) commit on
-	// the per-agent fossil branch `agent/<full-id>` instead of advancing
-	// trunk. Plan-anchored slots leave Tags nil and continue the
-	// trunk-based-development model. The full agent_id lives on the
-	// session record's AgentID field, which Resume copied into
-	// l.fossilUser; for plan slots that field is `slot-<name>` and
-	// IsSyntheticSlot keeps the tag derivation off it.
+	// the per-agent fossil branch `agent/<full-id>` for parallel-work
+	// isolation per ADR 0050.
+	//
+	// Plan-anchored slots commit on trunk (the trunk-based-development
+	// model). Pre-#NNN they passed Tags=nil expecting parent-branch
+	// inheritance the way `fossil ci` does, but libfossil emits exactly
+	// the tags the caller supplies — no inheritance — so the slot
+	// commits had no branch tag and `fossil info trunk` kept resolving
+	// to the seed. Now plan-anchored slots pass an explicit
+	// `branch=trunk` + `sym-trunk=*` pair, mirroring what fossil's CLI
+	// `ci` would emit, so the resulting checkin advances trunk
+	// correctly and `bones apply` materializes the slot work.
 	var tags []TagSpec
 	if IsSyntheticSlot(l.slot) {
 		tags = AgentBranchTags(l.fossilUser)
+	} else {
+		tags = TrunkBranchTags()
 	}
 	uuid, err := commitViaLeaf(ctx, l.leaf, l.taskID, message, files, tags)
 	if err != nil {

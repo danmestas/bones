@@ -539,7 +539,19 @@ func (o *applyOutcome) attrs() []telemetry.Attr {
 func (c *ApplyCmd) applyFromCheckout(
 	pre *applyPreflight, tempDir string, outcome *applyOutcome,
 ) error {
-	manifest, rev, err := trunkManifest(pre.HubFossil, pre.FossilBin)
+	// Use the on-disk temp checkout as the manifest source rather than
+	// `fossil ls -r trunk` (the prior implementation in trunkManifest).
+	// Per the comment on scanCheckoutManifest, libfossil-written commits
+	// (every slot commit goes through this path) come back as empty
+	// from `fossil ls -R repo -r <rev>` on Fossil 2.28 — the xfer
+	// protocol on the receive side doesn't hydrate the row that ls
+	// queries. The on-disk checkout, once `fossil open` extracts it,
+	// is authoritative. Walking it gives us the actual manifest.
+	manifest, err := scanCheckoutManifest(tempDir)
+	if err != nil {
+		return fmt.Errorf("bones apply: scan trunk checkout: %w", err)
+	}
+	rev, err := trunkRev(pre.HubFossil, pre.FossilBin)
 	if err != nil {
 		return err
 	}
