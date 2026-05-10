@@ -216,15 +216,28 @@ func readProcCwd(pid int) string {
 	return target
 }
 
-// lsofCwd shells `lsof -p <pid> -d cwd -Fn` and parses the cwd line.
-// Returns "" on any failure. Only the FD type "cwd" is requested so
-// the output is a fixed two-line block per pid:
+// lsofCwd shells `lsof -p <pid> -d cwd -Fpn` and parses the cwd line
+// for the requested pid. Returns "" on any failure or when the parsed
+// path is not absolute (e.g. lsof reports `n/` for a process whose
+// working directory has been deleted).
+//
+// `-Fpn` produces blocks shaped like:
 //
 //	p<pid>
+//	fcwd
 //	n<absolute-path>
+//
+// On macOS `lsof -p <pid>` does NOT filter the output to that pid in
+// `-Fn` mode — the filter is non-strict and other processes' fcwd
+// entries appear in the dump. Parsing the first `n/<path>` line
+// without the `p<pid>` block context returned a wrong (foreign-pid)
+// path roughly half the time, which surfaced as misattributed orphan
+// hubs in `bones status --all` (#350). The fix is to find the block
+// that begins with `p<requested-pid>` and read the `n` line within.
 func lsofCwd(pid int) string {
+	want := "p" + strconv.Itoa(pid)
 	out, err := exec.Command("lsof", "-p", strconv.Itoa(pid),
-		"-d", "cwd", "-Fn").Output()
+		"-d", "cwd", "-Fpn").Output()
 	if err != nil {
 		// lsof exits 1 when the process isn't found; treat as unknown.
 		var exitErr *exec.ExitError
@@ -237,9 +250,39 @@ func lsofCwd(pid int) string {
 		}
 		// For other failures still attempt to parse partial output.
 	}
-	for _, line := range strings.Split(string(out), "\n") {
+	return parseLsofCwdBlock(string(out), want)
+}
+
+// parseLsofCwdBlock walks an `lsof -Fpn` dump and returns the cwd
+// (n-line) for the block whose pid header is wantPHeader (e.g.
+// "p21151"). Bare `n/` (deleted/empty cwd) is returned as "" so the
+// caller treats it as undiscoverable rather than the literal root.
+//
+// Pulled out of lsofCwd so unit tests can exercise the parser without
+// depending on a live lsof binary or live host processes (#350).
+func parseLsofCwdBlock(out, wantPHeader string) string {
+	inBlock := false
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "p") {
+			inBlock = (line == wantPHeader)
+			continue
+		}
+		if !inBlock {
+			continue
+		}
 		if strings.HasPrefix(line, "n/") {
-			return strings.TrimPrefix(line, "n")
+			path := strings.TrimPrefix(line, "n")
+			// `n/` (the literal single slash) is lsof's marker for a
+			// process whose cwd has been deleted (the kernel keeps a
+			// reference but the path is gone). Treat as undiscoverable
+			// — falsely returning "/" misled status --all into thinking
+			// the process had a real cwd that didn't match any
+			// workspace, then attributing the orphan to the wrong
+			// workspace via the registry-pid fallback (#350).
+			if path == "/" {
+				return ""
+			}
+			return path
 		}
 	}
 	return ""

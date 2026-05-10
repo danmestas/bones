@@ -110,6 +110,78 @@ func TestLiveHubProcesses_RunsOnHost(t *testing.T) {
 	}
 }
 
+// TestParseLsofCwdBlock_FiltersToRequestedPID pins the load-bearing
+// fix for #350. macOS `lsof -p <pid> -d cwd -Fn` does NOT actually
+// filter the output to the requested pid — other processes' cwd
+// entries appear in the dump. Pre-#350 lsofCwd returned the FIRST
+// `n/<path>` line, which on a busy host was almost never the
+// requested pid's cwd. Now lsofCwd uses `-Fpn` and parses pid blocks.
+func TestParseLsofCwdBlock_FiltersToRequestedPID(t *testing.T) {
+	// Real-world macOS output shape: `lsof -p 21151 -d cwd -Fpn` dumps
+	// blocks for many pids despite the -p filter. We want the cwd from
+	// the p21151 block, not from p401 or p582.
+	out := `p401
+fcwd
+n/
+p582
+fcwd
+n/Users/dmestas/Library/Containers/com.apple.notificationcenterui/Data
+p21151
+fcwd
+n/private/var/folders/_x/abc/T/TestCLI_Ready/002
+p26530
+fcwd
+n/Users/dmestas/projects/agent-harness
+`
+	got := parseLsofCwdBlock(out, "p21151")
+	want := "/private/var/folders/_x/abc/T/TestCLI_Ready/002"
+	if got != want {
+		t.Errorf("parseLsofCwdBlock returned %q, want %q", got, want)
+	}
+}
+
+// TestParseLsofCwdBlock_DeletedCwdReturnsEmpty pins that an `n/`
+// (single slash) entry — lsof's marker for a process whose cwd has
+// been deleted — is treated as undiscoverable. Pre-#350, this would
+// be returned as the literal "/" and then the orphan classifier
+// would Stat("/") (succeeds), miss the registry, and attribute the
+// orphan to whichever workspace happened to share the registry pid
+// fallback path.
+func TestParseLsofCwdBlock_DeletedCwdReturnsEmpty(t *testing.T) {
+	out := `p21151
+fcwd
+n/
+`
+	if got := parseLsofCwdBlock(out, "p21151"); got != "" {
+		t.Errorf("parseLsofCwdBlock with n/ marker returned %q, want \"\"", got)
+	}
+}
+
+// TestParseLsofCwdBlock_MissingPidReturnsEmpty handles the case where
+// lsof's output doesn't contain a block for the requested pid (e.g.
+// the process exited between ps and lsof, or lsof was sandboxed and
+// returned partial output).
+func TestParseLsofCwdBlock_MissingPidReturnsEmpty(t *testing.T) {
+	out := `p582
+fcwd
+n/Users/dmestas/projects/agent-harness
+`
+	if got := parseLsofCwdBlock(out, "p21151"); got != "" {
+		t.Errorf("parseLsofCwdBlock for missing pid returned %q, want \"\"", got)
+	}
+}
+
+// TestParseLsofCwdBlock_HandlesEmpty pins the trivial inputs:
+// nothing in, nothing out.
+func TestParseLsofCwdBlock_HandlesEmpty(t *testing.T) {
+	if got := parseLsofCwdBlock("", "p21151"); got != "" {
+		t.Errorf("parseLsofCwdBlock(\"\") returned %q, want \"\"", got)
+	}
+	if got := parseLsofCwdBlock("\n\n\n", "p21151"); got != "" {
+		t.Errorf("parseLsofCwdBlock(blanks) returned %q, want \"\"", got)
+	}
+}
+
 // TestIndexAfterField verifies the column-reconstruction helper used
 // when ps's command column contains its own whitespace runs.
 func TestIndexAfterField(t *testing.T) {
