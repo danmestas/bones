@@ -8,13 +8,11 @@ import (
 	"github.com/danmestas/bones/internal/chat"
 )
 
-// reactionBodyPrefix is the in-band tag that marks a chat.Envelope as
-// a reaction rather than a chat post. Bodies that start with this
-// prefix are translated into Reaction events by eventFromEnvelope;
-// every other body surfaces as ChatMessage. Kept private because the
-// encoding is a substrate detail per ADR 0003 — callers React and
-// receive Reaction, they never observe the wire format.
-const reactionBodyPrefix = "REACT:"
+// mediaBodyPrefix is the in-band tag that marks a chat.Envelope as a
+// media post (Leaf.PostMedia) rather than a plain chat post. Bodies
+// that start with this prefix are translated into MediaMessage events
+// by eventFromEnvelope; every other body surfaces as ChatMessage.
+// Kept private because the encoding is a substrate detail per ADR 0003.
 const mediaBodyPrefix = "MEDIA:"
 
 // Event is the type of value delivered on coord.Subscribe's channel.
@@ -89,16 +87,11 @@ func (m ChatMessage) ReplyTo() string { return m.replyTo }
 // package boundary per ADR 0003. Mirrors the taskFromRecord helper in
 // coord/types.go.
 //
-// REACT-prefixed bodies route to Reaction instead of ChatMessage; a
-// malformed REACT body (missing the second colon) surfaces as an
-// ordinary ChatMessage, so garbage on the wire degrades to a visible
-// chat post rather than being silently dropped.
+// MEDIA-prefixed bodies route to MediaMessage; everything else
+// surfaces as ChatMessage.
 func eventFromEnvelope(env chat.Envelope) Event {
 	if m, ok := mediaFromEnvelope(env); ok {
 		return m
-	}
-	if r, ok := reactionFromEnvelope(env); ok {
-		return r
 	}
 	return ChatMessage{
 		from:      env.From,
@@ -109,80 +102,6 @@ func eventFromEnvelope(env chat.Envelope) Event {
 		replyTo:   env.ReplyTo,
 	}
 }
-
-// Reaction is the coord.Subscribe surface for a peer's reaction to
-// another message. It carries the target messageID (whatever coord.
-// React was called with, opaque substrate identifier) plus the caller-
-// provided reaction string. Reactions are delivered on the same event
-// channel as ChatMessage; consumers discriminate via the Event type
-// switch per ADR 0008.
-//
-// Reactions piggyback on the chat substrate — no separate KV bucket,
-// no new NATS subject. The in-band encoding is a substrate detail and
-// never appears on the public surface.
-type Reaction struct {
-	from      string
-	thread    string
-	target    string
-	reaction  string
-	timestamp time.Time
-}
-
-// eventTag seals Reaction as a coord.Event implementation.
-func (Reaction) eventTag() {}
-
-// From returns the agent identifier of the reactor.
-func (r Reaction) From() string { return r.from }
-
-// Thread returns the 8-character short thread identifier the reaction
-// was posted under. Matches ChatMessage.Thread so consumers that track
-// per-thread state can route on a single field.
-func (r Reaction) Thread() string { return r.thread }
-
-// Target returns the MessageID of the chat message this reaction
-// applies to. Opaque — the caller passed it into coord.React and
-// received it back unchanged, consistent with ADR 0003's substrate-
-// hiding rule for identifiers.
-func (r Reaction) Target() string { return r.target }
-
-// Body returns the reaction payload as a string. Coord does not
-// validate or normalize the content — emoji, text, or arbitrary bytes
-// all pass through untouched.
-func (r Reaction) Body() string { return r.reaction }
-
-// Timestamp returns the UTC wall-clock time the reaction was created.
-func (r Reaction) Timestamp() time.Time { return r.timestamp }
-
-// reactionFromEnvelope parses a chat.Envelope into a Reaction when its
-// body matches the REACT-prefix encoding. The format is
-// "REACT:<messageID>:<reaction>" — the first colon after the prefix
-// splits target from reaction content, so a reaction payload may itself
-// contain colons without ambiguity. A body that starts with the prefix
-// but lacks a second colon is treated as malformed and returns
-// (Reaction{}, false), letting eventFromEnvelope fall through to
-// ChatMessage translation.
-func reactionFromEnvelope(env chat.Envelope) (Reaction, bool) {
-	if !strings.HasPrefix(env.Body, reactionBodyPrefix) {
-		return Reaction{}, false
-	}
-	rest := env.Body[len(reactionBodyPrefix):]
-	idx := strings.IndexByte(rest, ':')
-	if idx < 0 {
-		return Reaction{}, false
-	}
-	return Reaction{
-		from:      env.From,
-		thread:    env.Thread,
-		target:    rest[:idx],
-		reaction:  rest[idx+1:],
-		timestamp: env.Timestamp,
-	}, true
-}
-
-// _ is a compile-time assertion that Reaction satisfies Event. A
-// failing assertion here means we lost the sealed-interface seal and
-// external packages could construct Reaction values directly.
-var _ Event = Reaction{}
 
 type MediaMessage struct {
 	from      string
@@ -233,40 +152,3 @@ func mediaFromEnvelope(env chat.Envelope) (MediaMessage, bool) {
 }
 
 var _ Event = MediaMessage{}
-
-// PresenceChange is the Event fired on coord.WatchPresence when an
-// agent appears in or disappears from the presence substrate. Up is
-// true when the agent became reachable (first heartbeat or return
-// after an outage); false when the agent went away (clean shutdown
-// deletes the entry; missed heartbeats expire it via KV TTL).
-//
-// All fields are unexported to keep the Coord public surface
-// migration-ready (parallel with ChatMessage above and Task/Presence
-// in types.go).
-type PresenceChange struct {
-	agentID   string
-	project   string
-	up        bool
-	timestamp time.Time
-}
-
-// eventTag seals PresenceChange as a coord.Event implementation.
-func (PresenceChange) eventTag() {}
-
-// AgentID returns the identifier of the agent whose presence changed.
-func (p PresenceChange) AgentID() string { return p.agentID }
-
-// Project returns the project segment of the agent.
-func (p PresenceChange) Project() string { return p.project }
-
-// Up reports the direction of the change: true for became-online,
-// false for went-offline. A Down event with no prior Up on the same
-// consumer's watch is possible — the watch started after the initial
-// Up — and a consumer that cares about the full picture should seed
-// state from coord.Who before WatchPresence.
-func (p PresenceChange) Up() bool { return p.up }
-
-// Timestamp returns the wall-clock time the watcher observed the
-// change, NOT the original event time at the substrate. Observed-time
-// semantics match notify's delivery model.
-func (p PresenceChange) Timestamp() time.Time { return p.timestamp }

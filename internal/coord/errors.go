@@ -37,16 +37,6 @@ var ErrAgentMismatch = errors.New("coord: agent mismatch")
 // substrate transition error.
 var ErrTaskAlreadyClosed = errors.New("coord: task already closed")
 
-// ErrAskTimeout reports that Ask's ctx deadline elapsed before a reply
-// arrived on the inbox subject. Per ADR 0008, ErrAskTimeout also fires
-// when no recipient is subscribed to the ask subject — the substrate
-// cannot distinguish "no one listening" from "listener is slow"
-// cheaply, and the caller-observable behavior is identical either way.
-// Callers that need presence semantics layer a registry on top (Phase
-// 4 work). Distinct from context.Canceled: ErrAskTimeout is the reply-
-// wait boundary; context.Canceled is upstream cancellation.
-var ErrAskTimeout = errors.New("coord: ask timed out")
-
 // ErrTooManySubscribers reports that Subscribe was called when the
 // number of active subscribers on this Coord already equals
 // Config.MaxSubscribers. Per ADR 0008 and the invariant-9 bound on
@@ -56,20 +46,6 @@ var ErrAskTimeout = errors.New("coord: ask timed out")
 var ErrTooManySubscribers = errors.New(
 	"coord: too many subscribers",
 )
-
-// ErrAgentOffline reports that AskAdmin's presence pre-flight could not
-// find the recipient in the project's presence bucket. Distinct from
-// ErrAskTimeout: ErrAgentOffline is a pre-flight check against a known
-// directory (the presence KV), whereas ErrAskTimeout fires only after
-// the reply-wait deadline elapses against an actual substrate publish.
-// Callers that want the old "send and hope" behavior continue to use
-// Ask; AskAdmin is the opt-in to the stronger pre-flight.
-//
-// Entries can age out between the pre-flight and the publish, so a
-// clean AskAdmin that returns ErrAskTimeout is still possible. The
-// sentinel only narrows the "no one was listening at pre-flight time"
-// branch.
-var ErrAgentOffline = errors.New("coord: agent offline")
 
 // ErrNotImplemented is returned by Phase 1 stub methods.
 var ErrNotImplemented = errors.New("coord: not implemented")
