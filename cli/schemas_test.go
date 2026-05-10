@@ -191,7 +191,7 @@ func zeroPayloadFor(t *testing.T, name string) any {
 	case "TasksLinkPayload":
 		return schemas.TasksLinkPayload{}
 	case "TasksListPayload":
-		return schemas.TasksListPayload{}
+		return schemas.TasksListPayload{Tasks: []schemas.Task{}}
 	case "TasksPrimePayload":
 		return schemas.TasksPrimePayload{
 			OpenTasks:    []schemas.TasksPrimeTask{},

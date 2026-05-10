@@ -38,7 +38,7 @@ var Verbs = []VerbInfo{
 	{Verb: "tasks.close", CurrentVersion: "v1", PayloadName: "TasksClosePayload"},
 	{Verb: "tasks.create", CurrentVersion: "v1", PayloadName: "TasksCreatePayload"},
 	{Verb: "tasks.link", CurrentVersion: "v1", PayloadName: "TasksLinkPayload"},
-	{Verb: "tasks.list", CurrentVersion: "v1", PayloadName: "TasksListPayload"},
+	{Verb: "tasks.list", CurrentVersion: "v2", PayloadName: "TasksListPayload"},
 	{Verb: "tasks.prime", CurrentVersion: "v1", PayloadName: "TasksPrimePayload"},
 	{Verb: "tasks.ready", CurrentVersion: "v1", PayloadName: "TasksReadyPayload"},
 	{Verb: "tasks.show", CurrentVersion: "v1", PayloadName: "TasksShowPayload"},
@@ -187,7 +187,15 @@ type TasksLinkPayload struct {
 // TasksListPayload is the payload for `bones tasks list --json`.
 // Emits a (possibly filtered) list of tasks. Default-mode list only;
 // the `--by-slot` mode emits the `tasks.bySlot` shape instead.
-type TasksListPayload []Task
+//
+// v2 (#NNN): wrapped the array in a named field for shape consistency
+// with every other envelope (`status`, `workspaces.list`,
+// `swarm.status`, etc., all use `data.<resource>`). v1 returned the
+// array as `data` directly. Consumers using `.data[]` against v1
+// migrate to `.data.tasks[]` against v2.
+type TasksListPayload struct {
+	Tasks []Task `json:"tasks"`
+}
 
 // TasksPrimePayload is the payload for `bones tasks prime --json`.
 // Mirrors `primeResultJSON`: the agent's open/ready/claimed task

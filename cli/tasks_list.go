@@ -9,6 +9,7 @@ import (
 
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
+	"github.com/danmestas/bones/cli/schemas"
 	"github.com/danmestas/bones/cli/uxprint"
 	"github.com/danmestas/bones/internal/coord"
 	"github.com/danmestas/bones/internal/tasks"
@@ -312,7 +313,8 @@ func filterOrphans(in []tasks.Task, liveAgents map[string]struct{}) []tasks.Task
 // formatListLine per task. The legacy plain-text format is preserved.
 func emitTasks(out []tasks.Task, asJSON bool) error {
 	if asJSON {
-		return emitEnvelope(os.Stdout, "tasks.list", tasksToSchema(out))
+		return emitEnvelope(os.Stdout, "tasks.list",
+			schemas.TasksListPayload{Tasks: tasksToSchema(out)})
 	}
 	for _, t := range out {
 		fmt.Println(formatListLine(t))
