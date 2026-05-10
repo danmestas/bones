@@ -21,7 +21,6 @@ type CLI struct {
 	Logs   bonescli.LogsCmd   `cmd:"" group:"daily" help:"Read per-slot or workspace event logs"`
 	Apply  bonescli.ApplyCmd  `cmd:"" group:"daily" help:"Materialize hub trunk into git tree"`
 	Env    bonescli.EnvCmd    `cmd:"" group:"daily" help:"Emit shell exports for current workspace"`
-	Rename bonescli.RenameCmd `cmd:"" group:"daily" help:"Set workspace display name"`
 
 	// Cleanup is broken out because gofmt aligns all daily-block
 	// field names to the longest in the block; "Cleanup" is one
@@ -47,7 +46,6 @@ type CLI struct {
 	// Tooling — used by humans authoring plans/skills.
 	ValidatePlan bonescli.ValidatePlanCmd `cmd:"" group:"tooling" help:"Validate plan"`
 	Plan         bonescli.PlanCmd         `cmd:"" group:"tooling" help:"Plan workflow operations"`
-	Peek         bonescli.PeekCmd         `cmd:"" group:"tooling" help:"Browse hub via fossil ui"`
 	Telemetry    bonescli.TelemetryCmd    `cmd:"" group:"tooling" help:"Manage usage telemetry"`
 
 	// Plumbing — rarely invoked directly.
