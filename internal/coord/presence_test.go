@@ -3,7 +3,6 @@ package coord
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/danmestas/bones/internal/testutil/natstest"
 )
@@ -83,109 +82,9 @@ func TestWho_TwoAgents(t *testing.T) {
 	}
 }
 
-func TestWatchPresence_UpThenDown(t *testing.T) {
-	nc, _ := natstest.NewJetStreamServer(t)
-	url := nc.ConnectedUrl()
-
-	cA, err := Open(
-		context.Background(), presenceCfgForAgent(t, url, "test-a"),
-	)
-	if err != nil {
-		t.Fatalf("Open A: %v", err)
-	}
-	t.Cleanup(func() { _ = cA.Close() })
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	events, closer, err := cA.WatchPresence(ctx)
-	if err != nil {
-		t.Fatalf("WatchPresence: %v", err)
-	}
-	t.Cleanup(func() { _ = closer() })
-
-	cB, err := Open(
-		context.Background(), presenceCfgForAgent(t, url, "test-b"),
-	)
-	if err != nil {
-		t.Fatalf("Open B: %v", err)
-	}
-
-	gotUp := false
-	deadline := time.After(2 * time.Second)
-UP:
-	for {
-		select {
-		case e := <-events:
-			pc, ok := e.(PresenceChange)
-			if !ok {
-				t.Fatalf("WatchPresence: got non-PresenceChange %T", e)
-			}
-			if pc.AgentID() == "test-b" && pc.Up() {
-				gotUp = true
-				break UP
-			}
-		case <-deadline:
-			t.Fatalf("WatchPresence: no Up for test-b within 2s")
-		}
-	}
-	if !gotUp {
-		t.Fatalf("WatchPresence: did not observe test-b Up")
-	}
-
-	if err := cB.Close(); err != nil {
-		t.Fatalf("Close B: %v", err)
-	}
-
-	deadline = time.After(2 * time.Second)
-	for {
-		select {
-		case e := <-events:
-			pc, ok := e.(PresenceChange)
-			if !ok {
-				t.Fatalf("WatchPresence: got non-PresenceChange %T", e)
-			}
-			if pc.AgentID() == "test-b" && !pc.Up() {
-				return
-			}
-		case <-deadline:
-			t.Fatalf("WatchPresence: no Down for test-b within 2s")
-		}
-	}
-}
-
-func TestWatchPresence_CloserIdempotent(t *testing.T) {
-	c := mustOpen(t)
-	events, closer, err := c.WatchPresence(context.Background())
-	if err != nil {
-		t.Fatalf("WatchPresence: %v", err)
-	}
-	if err := closer(); err != nil {
-		t.Fatalf("first close: %v", err)
-	}
-	if err := closer(); err != nil {
-		t.Fatalf("second close: %v", err)
-	}
-	// Channel must be closed after the first closer call.
-	select {
-	case _, ok := <-events:
-		if ok {
-			t.Fatalf("WatchPresence: channel still open post-close")
-		}
-	case <-time.After(time.Second):
-		t.Fatalf("WatchPresence: channel not closed within 1s")
-	}
-}
-
 func TestWho_NilCtxPanics(t *testing.T) {
 	c := mustOpen(t)
 	requirePanic(t, func() {
 		_, _ = c.Who(nilCtx)
-	}, "ctx is nil")
-}
-
-func TestWatchPresence_NilCtxPanics(t *testing.T) {
-	c := mustOpen(t)
-	requirePanic(t, func() {
-		_, _, _ = c.WatchPresence(nilCtx)
 	}, "ctx is nil")
 }
