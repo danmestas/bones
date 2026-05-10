@@ -166,23 +166,29 @@ func parseStatus(s string) (tasks.Status, error) {
 	return "", fmt.Errorf("invalid status %q (want open|claimed|closed)", s)
 }
 
-// applyContext merges key=value pairs into existing (creating it if nil).
-// Later pairs with the same key overwrite earlier ones.
+// applyContext merges key=value pairs into existing and returns a NEW
+// map. Later pairs with the same key overwrite earlier ones. The
+// input map is never mutated — that matters for the update path,
+// where the same map underlies both `before.Context` and the mutator's
+// `t.Context`. In-place mutation there silently corrupts `before` and
+// fools `diffTaskFields` into seeing no change, dropping the write
+// (#347).
 func applyContext(existing map[string]string, pairs []string) map[string]string {
 	if len(pairs) == 0 {
 		return existing
 	}
-	if existing == nil {
-		existing = map[string]string{}
+	out := make(map[string]string, len(existing)+len(pairs))
+	for k, v := range existing {
+		out[k] = v
 	}
 	for _, p := range pairs {
 		idx := strings.IndexRune(p, '=')
 		if idx <= 0 {
 			continue
 		}
-		existing[p[:idx]] = p[idx+1:]
+		out[p[:idx]] = p[idx+1:]
 	}
-	return existing
+	return out
 }
 
 // validateContextPairs returns an error if any pair lacks a non-empty key.
