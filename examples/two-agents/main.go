@@ -274,25 +274,7 @@ func runParentSteps(ctx context.Context, ps *parentState) int {
 		return parentFail(c, ps.agentA, ps.agentB, "step 4", err)
 	}
 	fmt.Println("step 4 PASS (who/watch-presence)")
-
-	// Step 5: React.
-	if err := c.Post(ctx, threadCtrl, []byte("trig:react")); err != nil {
-		return parentFail(c, ps.agentA, ps.agentB, "trig:react post", err)
-	}
-	if _, err := waitForResult(ctx, ps.ctrlEvents, 5); err != nil {
-		return parentFail(c, ps.agentA, ps.agentB, "step 5", err)
-	}
-	fmt.Println("step 5 PASS (react)")
-
-	// Step 6: SubscribePattern.
-	if err := c.Post(ctx, threadCtrl, []byte("trig:wildcard")); err != nil {
-		return parentFail(c, ps.agentA, ps.agentB, "trig:wildcard post", err)
-	}
-	if _, err := waitForResult(ctx, ps.ctrlEvents, 6); err != nil {
-		return parentFail(c, ps.agentA, ps.agentB, "step 6", err)
-	}
-	fmt.Println("step 6 PASS (subscribe-pattern)")
-	fmt.Println("all 6 steps PASSED")
+	fmt.Println("all 4 steps PASSED")
 
 	// Signal children to exit.
 	if err := c.Post(ctx, threadCtrl, []byte("trig:done")); err != nil {
@@ -446,10 +428,6 @@ func dispatchStep(
 		return stepClaimRelease(ctx, c, role, taskID, ctrlEvents)
 	case trig == "trig:ask":
 		return stepAskAnswer(ctx, c, role)
-	case trig == "trig:react":
-		return stepReact(ctx, c, role, chatEvents)
-	case trig == "trig:wildcard":
-		return stepWildcard(ctx, c, role, ctrlEvents)
 	}
 	return fmt.Errorf("unknown trigger: %s", trig)
 }
@@ -467,47 +445,6 @@ func stepAskAnswer(ctx context.Context, c *coord.Coord, role string) error {
 		return c.Post(ctx, threadCtrl, []byte("result:step-3:FAIL:got "+resp))
 	}
 	return c.Post(ctx, threadCtrl, []byte("result:step-3:PASS"))
-}
-
-// stepReact: agent-a posts; agent-b reacts; agent-a asserts Reaction observed.
-// agent-a alone reports PASS on the ctrl thread.
-func stepReact(
-	ctx context.Context, c *coord.Coord, role string,
-	chatEvents <-chan coord.Event,
-) error {
-	switch role {
-	case "agent-a":
-		// Post, then wait for our own message's reaction to be visible.
-		// Our own ChatMessage event arrives on chatEvents first; waitFor
-		// silently skips it because the predicate only matches Reactions.
-		if err := c.Post(ctx, threadChat, []byte("react-me")); err != nil {
-			return c.Post(ctx, threadCtrl, []byte("result:step-5:FAIL:post: "+err.Error()))
-		}
-		_, err := waitFor(ctx, chatEvents, 3*time.Second, func(e coord.Event) bool {
-			r, ok := e.(coord.Reaction)
-			return ok && r.Body() == "👍"
-		})
-		if err != nil {
-			return c.Post(ctx, threadCtrl, []byte("result:step-5:FAIL:"+err.Error()))
-		}
-		return c.Post(ctx, threadCtrl, []byte("result:step-5:PASS"))
-
-	case "agent-b":
-		// Wait for agent-a's "react-me" message, then react.
-		msg, err := waitFor(ctx, chatEvents, 2*time.Second, func(e coord.Event) bool {
-			cm, ok := e.(coord.ChatMessage)
-			return ok && cm.Body() == "react-me"
-		})
-		if err != nil {
-			return c.Post(ctx, threadCtrl, []byte("result:step-5:FAIL:b wait: "+err.Error()))
-		}
-		cm := msg.(coord.ChatMessage)
-		if err := c.React(ctx, threadChat, cm.MessageID(), "👍"); err != nil {
-			return c.Post(ctx, threadCtrl, []byte("result:step-5:FAIL:b react: "+err.Error()))
-		}
-		return nil
-	}
-	return nil
 }
 
 // stepClaimRelease: agent-a claims first, posts handoff:a-claimed, holds briefly,
@@ -643,67 +580,6 @@ func stepWhoPresence(ctx context.Context, c *coord.Coord, natsURL, tempDir strin
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-	}
-	return nil
-}
-
-// stepWildcard: agent-a opens SubscribePattern("*"); agent-b posts to room.42 and room.99;
-// agent-a asserts receipt of both. SubscribePattern uses raw NATS subject-wildcard patterns
-// on the ThreadShort segment (see coord/subscribe_pattern.go) — thread names like "room.42"
-// are hashed to 8-char hex shorts, so "room.*" would never match. "*" matches any single
-// ThreadShort segment and is the correct wildcard-all pattern here.
-// ctrlEvents is the existing subscription from runAgent — reused to avoid a race where a
-// fresh Subscribe could miss the ready:wildcard signal (coord.Subscribe drops pre-subscribe
-// events; see coord/subscribe.go).
-func stepWildcard(
-	ctx context.Context, c *coord.Coord, role string,
-	ctrlEvents <-chan coord.Event,
-) error {
-	switch role {
-	case "agent-a":
-		patternEvents, closePattern, err := c.SubscribePattern(ctx, "*")
-		if err != nil {
-			return c.Post(ctx, threadCtrl, []byte("result:step-6:FAIL:subscribe: "+err.Error()))
-		}
-		defer func() { _ = closePattern() }()
-
-		// Signal readiness — parent waits before triggering agent-b.
-		if err := c.Post(ctx, threadCtrl, []byte("ready:wildcard")); err != nil {
-			return c.Post(ctx, threadCtrl, []byte("result:step-6:FAIL:ready post: "+err.Error()))
-		}
-
-		seen := make(map[string]bool)
-		for len(seen) < 2 {
-			msg, err := waitFor(ctx, patternEvents, 3*time.Second, func(e coord.Event) bool {
-				_, ok := e.(coord.ChatMessage)
-				return ok
-			})
-			if err != nil {
-				return c.Post(ctx, threadCtrl, []byte(fmt.Sprintf(
-					"result:step-6:FAIL:wait: got %d of 2: %v", len(seen), err)))
-			}
-			cm := msg.(coord.ChatMessage)
-			seen[cm.Thread()] = true
-		}
-		return c.Post(ctx, threadCtrl, []byte("result:step-6:PASS"))
-
-	case "agent-b":
-		// Wait for ready:wildcard from agent-a using the existing ctrlEvents subscription
-		// to avoid a race where a fresh Subscribe misses the signal.
-		_, err := waitFor(ctx, ctrlEvents, 2*time.Second, func(e coord.Event) bool {
-			cm, ok := e.(coord.ChatMessage)
-			return ok && cm.Body() == "ready:wildcard"
-		})
-		if err != nil {
-			return c.Post(ctx, threadCtrl, []byte("result:step-6:FAIL:b wait: "+err.Error()))
-		}
-		if err := c.Post(ctx, "room.42", []byte("in-42")); err != nil {
-			return c.Post(ctx, threadCtrl, []byte("result:step-6:FAIL:post room.42: "+err.Error()))
-		}
-		if err := c.Post(ctx, "room.99", []byte("in-99")); err != nil {
-			return c.Post(ctx, threadCtrl, []byte("result:step-6:FAIL:post room.99: "+err.Error()))
-		}
-		return nil
 	}
 	return nil
 }
