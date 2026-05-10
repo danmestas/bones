@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -205,6 +207,59 @@ func TestFilterTasks_StatusOpenAlias(t *testing.T) {
 // hot-slot indicator. Closed tasks free the slot and must not be counted.
 // Tasks without a slot context land in the synthetic "(unslotted)" bucket
 // so plan authors don't lose sight of them.
+// TestEmitTasks_JSONv2Envelope pins the Cluster F fix: tasks.list
+// JSON envelope wraps the array under data.tasks (v2), matching every
+// other versioned envelope's shape. Pre-fix #NNN, the v1 envelope
+// returned the array as `data` directly, forcing per-verb special-
+// casing in jq pipelines (`.data[]` for tasks.list, `.data.workspaces[]`
+// elsewhere).
+func TestEmitTasks_JSONv2Envelope(t *testing.T) {
+	prev := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	in := []tasks.Task{
+		{ID: "a", Title: "alpha", Status: tasks.StatusOpen},
+		{ID: "b", Title: "beta", Status: tasks.StatusClaimed},
+	}
+	emitErr := emitTasks(in, true)
+	_ = w.Close()
+	os.Stdout = prev
+	if emitErr != nil {
+		t.Fatalf("emitTasks: %v", emitErr)
+	}
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatal(err)
+	}
+	var env struct {
+		Schema struct {
+			Verb    string `json:"verb"`
+			Version string `json:"version"`
+		} `json:"schema"`
+		Data struct {
+			Tasks []struct {
+				ID    string `json:"id"`
+				Title string `json:"title"`
+			} `json:"tasks"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, buf.String())
+	}
+	if env.Schema.Verb != "tasks.list" || env.Schema.Version != "v2" {
+		t.Errorf("schema = %+v, want {tasks.list v2}", env.Schema)
+	}
+	if len(env.Data.Tasks) != 2 {
+		t.Fatalf("tasks len = %d, want 2: %s", len(env.Data.Tasks), buf.String())
+	}
+	if env.Data.Tasks[0].ID != "a" || env.Data.Tasks[1].ID != "b" {
+		t.Errorf("tasks order/ids unexpected: %+v", env.Data.Tasks)
+	}
+}
+
 func TestGroupBySlot(t *testing.T) {
 	all := []tasks.Task{
 		// Slot "alpha": 5 open + 1 closed → hot (open count > 4)
