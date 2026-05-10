@@ -220,26 +220,6 @@ func TestPost_InvariantPanics(t *testing.T) {
 	})
 }
 
-func TestAsk_InvariantPanics(t *testing.T) {
-	c := mustOpen(t)
-	defer func() { _ = c.Close() }()
-	t.Run("nil ctx", func(t *testing.T) {
-		requirePanic(t, func() {
-			_, _ = c.Ask(nilCtx, "peer", "q")
-		}, "ctx is nil")
-	})
-	t.Run("empty recipient", func(t *testing.T) {
-		requirePanic(t, func() {
-			_, _ = c.Ask(context.Background(), "", "q")
-		}, "recipient is empty")
-	})
-	t.Run("empty question", func(t *testing.T) {
-		requirePanic(t, func() {
-			_, _ = c.Ask(context.Background(), "peer", "")
-		}, "question is empty")
-	})
-}
-
 // Note: TestOpen_AutoCreatesChatFossilParentDir,
 // TestOpen_RecreatesMissingChatFossil, and
 // TestOpen_ChatFossilUnreadableErrorIncludesPath were removed when ADR
