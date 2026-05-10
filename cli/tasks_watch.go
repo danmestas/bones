@@ -79,7 +79,9 @@ func (c *TasksWatchCmd) Run(g *repocli.Globals) error {
 		return fmt.Errorf("watch: subscribe: %w", err)
 	}
 
-	fmt.Fprintln(os.Stderr, "watching task events — press Ctrl-C to stop")
+	if !c.JSON {
+		fmt.Fprintln(os.Stderr, "watching task events — press Ctrl-C to stop")
+	}
 
 	for {
 		select {
