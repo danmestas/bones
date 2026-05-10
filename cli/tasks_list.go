@@ -122,6 +122,7 @@ func (c *TasksListCmd) Run(g *repocli.Globals) error {
 		defer closeCoord()
 
 		out := filterTasks(allTasks, c.All, filterStatus, c.ClaimedBy)
+		statusFilterActive := filterStatus != ""
 		if c.Ready {
 			// Delegate readiness to coord — it knows the full edge
 			// model (blocks/supersedes/duplicates/parent) that a flat
@@ -147,7 +148,7 @@ func (c *TasksListCmd) Run(g *repocli.Globals) error {
 			out = filterOrphans(out, liveAgentSet(peers))
 		}
 
-		return c.render(out, allTasks)
+		return c.render(out, allTasks, statusFilterActive)
 	}))
 }
 
@@ -156,7 +157,14 @@ func (c *TasksListCmd) Run(g *repocli.Globals) error {
 // rendering. Pulled out of Run so the orchestration body stays under
 // the funlen budget while the rendering logic remains adjacent to
 // the filter pipeline that produced its inputs.
-func (c *TasksListCmd) render(out, allTasks []tasks.Task) error {
+//
+// statusFilterActive scopes the "no open tasks; N closed" hint:
+// pre-fix #NNN, that hint fired even when the user explicitly asked
+// for `--status=closed` (or its --closed alias) and got an empty
+// result, conflating "filter excluded all rows" with "nothing matches
+// your filter". Now the hint fires only in the no-filter case where
+// it actually answers the operator's likely question.
+func (c *TasksListCmd) render(out, allTasks []tasks.Task, statusFilterActive bool) error {
 	// --by-slot replaces the per-task rendering with the per-slot
 	// summary (issue #214). Composes with the other filters: e.g.
 	// `--by-slot --claimed-by=-` shows hot slots among unclaimed
@@ -168,12 +176,12 @@ func (c *TasksListCmd) render(out, allTasks []tasks.Task) error {
 	}
 
 	// Filter-emptiness hint: when the human-mode result is empty
-	// but closed tasks exist, point the operator at --all so they
-	// can tell "the filter hid closed rows" from "there is nothing
-	// to list at all". JSON output skips the hint — JSON consumers
-	// see the empty array; the hint is human-only by design (issue
-	// #323's read-verb rule).
-	if !c.JSON && len(out) == 0 && !c.All {
+	// but closed tasks exist AND the operator did not explicitly
+	// filter, point them at --all so they can tell "the filter hid
+	// closed rows" from "there is nothing to list at all". JSON
+	// output skips the hint — JSON consumers see the empty array;
+	// the hint is human-only by design (issue #323's read-verb rule).
+	if !c.JSON && len(out) == 0 && !c.All && !statusFilterActive {
 		closedCount := countClosed(allTasks)
 		if closedCount > 0 {
 			uxprint.NoOpenTasks(os.Stdout, closedCount)
@@ -199,10 +207,18 @@ func countClosed(in []tasks.Task) int {
 
 // filterTasks applies the always-on list filters (closed-vs-all, status,
 // claimed-by). Other selectors compose on top of its result.
+//
+// The --all-vs-hide-closed rule applies only when no explicit status
+// filter is set. Pre-fix #NNN, this branch always dropped closed
+// tasks unless --all was set — which made `bones tasks list --closed`
+// (and `--status=closed`) silently empty: the !all branch dropped
+// closed first, leaving the explicit status filter with nothing to
+// match. The fix only hides closed when the user asked for no
+// status filter at all.
 func filterTasks(in []tasks.Task, all bool, status tasks.Status, claimedBy string) []tasks.Task {
 	out := make([]tasks.Task, 0, len(in))
 	for _, t := range in {
-		if !all && t.Status == tasks.StatusClosed {
+		if status == "" && !all && t.Status == tasks.StatusClosed {
 			continue
 		}
 		if status != "" && t.Status != status {
