@@ -1,14 +1,13 @@
-// Package presence is the substrate layer that backs coord's Who and
-// WatchPresence. A single JetStream KV bucket carries one entry per
-// live agent, refreshed on Config.HeartbeatInterval cadence. Entry TTL
-// is 3x HeartbeatInterval (invariant 19) — tightening the
-// multiplier requires an ADR amendment.
+// Package presence is the substrate layer that backs coord.Who. A
+// single JetStream KV bucket carries one entry per live agent,
+// refreshed on Config.HeartbeatInterval cadence. Entry TTL is 3x
+// HeartbeatInterval (invariant 19) — tightening the multiplier
+// requires an ADR amendment.
 //
 // This package is internal and unexported: callers outside
 // github.com/danmestas/bones must not depend on it. The internal
-// Entry and Event types translate through coord/types.go and
-// coord/events.go into the public Presence DTO and PresenceChange
-// event per ADR 0003's substrate-hiding rule.
+// Entry type translates through coord/types.go into the public
+// Presence DTO per ADR 0003's substrate-hiding rule.
 package presence
 
 import (

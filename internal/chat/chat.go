@@ -403,7 +403,7 @@ func (m *Manager) Respond(
 		reply, herr := handler(msg.Data)
 		if herr != nil {
 			// Silent drop: ADR 0008 says the substrate does not
-			// model error payloads. Ask side sees ErrAskTimeout.
+			// model error payloads. Caller sees a request timeout.
 			return
 		}
 		_ = msg.Respond(reply)
