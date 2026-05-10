@@ -682,6 +682,82 @@ func TestReconcileOrphanHubs_AllSignals(t *testing.T) {
 	}
 }
 
+// TestReconcileOrphanHubs_ResolvesSymlinkedCwds pins the load-bearing
+// fix for #353. On macOS /tmp is a symlink to /private/tmp; the
+// registry stores user-typed paths (e.g. "/tmp/foo") while lsof
+// returns symlink-resolved paths (e.g. "/private/tmp/foo"). Pre-#353
+// the byCwd map keyed by filepath.Clean preserved /tmp and missed
+// the lookup keyed by /private/tmp, so a live healthy workspace
+// appeared as both Active and Orphan in `bones status --all`.
+//
+// We construct a real symlink in t.TempDir() and verify that an
+// entry stored under the symlinked path matches a process whose
+// reported cwd is the resolved path.
+func TestReconcileOrphanHubs_ResolvesSymlinkedCwds(t *testing.T) {
+	tmp := t.TempDir()
+	// real/    <- the actual workspace dir
+	// link/    <- symlink to real/
+	realDir := filepath.Join(tmp, "real")
+	if err := os.Mkdir(realDir, 0o755); err != nil {
+		t.Fatalf("mkdir real: %v", err)
+	}
+	linkDir := filepath.Join(tmp, "link")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		// Symlinks may not be supported (e.g. some sandboxed CI). Skip
+		// rather than fail the rest of the suite.
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	// Registry entry stored under the symlink-side path (mirrors what
+	// `bones up` does when the operator runs it from /tmp/foo).
+	active := []registry.Entry{
+		{Cwd: linkDir, HubPID: 100},
+	}
+	// Process reports the resolved-side path (mirrors macOS lsof).
+	procs := []registry.HubProcess{
+		{PID: 100, ETime: "1:00", Cwd: realDir},
+	}
+
+	got := reconcileOrphanHubs(procs, active)
+	if len(got) != 0 {
+		t.Errorf("symlinked-vs-resolved cwds should match, got %d orphan(s): %+v",
+			len(got), got)
+	}
+}
+
+// TestResolveCwd_FallsBackOnMissingPath pins that resolveCwd returns
+// filepath.Clean(p) when EvalSymlinks fails (e.g. path doesn't exist
+// or symlink chain is broken). This preserves the existing "cwd no
+// longer exists" classification path — without the fallback,
+// resolveCwd would return "" for a deleted tempdir, and that empty
+// string would key the byCwd map confusingly.
+func TestResolveCwd_FallsBackOnMissingPath(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	got := resolveCwd(missing)
+	want := filepath.Clean(missing)
+	if got != want {
+		t.Errorf("resolveCwd(missing) = %q, want %q (filepath.Clean fallback)", got, want)
+	}
+}
+
+// TestResolveCwd_IsIdempotent pins the load-bearing property: passing
+// resolveCwd's output back into itself yields the same path. That's
+// what makes the byCwd lookup work — both sides of the comparison
+// canonicalize to the same string regardless of which form (typed,
+// symlinked, fully-resolved) the caller starts with.
+func TestResolveCwd_IsIdempotent(t *testing.T) {
+	// t.TempDir() returns a path that on macOS still has the
+	// /var -> /private/var symlink unfollowed; on Linux it's
+	// already fully resolved. Either way, applying resolveCwd
+	// twice must converge.
+	dir := t.TempDir()
+	once := resolveCwd(dir)
+	twice := resolveCwd(once)
+	if once != twice {
+		t.Errorf("resolveCwd not idempotent: once=%q twice=%q", once, twice)
+	}
+}
+
 // TestRenderOrphanHubsSection pins the renderer column shape: PID,
 // ETIME, CWD, REASON, plus the trailing reap hint pointing at #263.
 func TestRenderOrphanHubsSection(t *testing.T) {
