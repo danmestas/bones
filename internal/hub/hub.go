@@ -1025,13 +1025,28 @@ var ErrSeedPrecondition = errors.New(
 // the hub is spawned. Today the only precondition is that the
 // workspace has at least one git-tracked file; future preconditions
 // (e.g., libfossil version compatibility) belong here too.
+//
+// Three failure modes share a single user-visible shape:
+//
+//  1. Git binary not on PATH — distinct error naming the missing tool.
+//  2. Workspace is not a git repo (`git ls-files` exit 128) — surfaced
+//     as ErrSeedPrecondition. The actionable message ("commit at least
+//     one file") names the same recovery path that works post-`git
+//     init`, just preceded by `git init`. Pre-fix this case leaked
+//     `git ls-files: exit status 128` to operators (#NNN).
+//  3. Workspace is a git repo with zero tracked files — also
+//     ErrSeedPrecondition.
 func checkSeedPrecondition(root string) error {
 	files, err := gitTrackedFiles(root)
 	if err != nil {
-		// Not a git repo, or git unavailable. Pass through with a
-		// hub: prefix; the underlying error message already names
-		// `git ls-files` which is enough for the user to act on.
-		return fmt.Errorf("hub: seed precondition: %w", err)
+		if errors.Is(err, exec.ErrNotFound) {
+			return errors.New(
+				"hub: git binary not found on PATH; install git to use bones")
+		}
+		// Not a git repo (exit 128) — same actionable recovery as
+		// "no tracked files": the user runs `git init && git add . &&
+		// git commit -m init`. Single friendly error covers both.
+		return ErrSeedPrecondition
 	}
 	if len(files) == 0 {
 		return ErrSeedPrecondition

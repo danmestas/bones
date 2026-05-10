@@ -5,9 +5,39 @@ import (
 	"errors"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+// TestCheckSeedPrecondition_NoGitRepo_ReturnsFriendlyError pins that
+// running checkSeedPrecondition in a directory that is NOT a git repo
+// surfaces ErrSeedPrecondition (the friendly "no git-tracked files...
+// commit at least one" message) rather than leaking
+// `git ls-files: exit status 128` to the operator. Spy on v0.15.0
+// surfaced the unfriendly leak.
+func TestCheckSeedPrecondition_NoGitRepo_ReturnsFriendlyError(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir() // no `git init` — not a git repo
+	err := checkSeedPrecondition(root)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrSeedPrecondition) {
+		t.Errorf("expected ErrSeedPrecondition, got: %v", err)
+	}
+	// Negative: must NOT contain the cryptic underlying command name.
+	// If a future regression rewires this to fmt.Errorf("...%w", ...)
+	// over the raw exec error again, this guard fires.
+	if strings.Contains(err.Error(), "git ls-files") {
+		t.Errorf("error leaks underlying command; should be friendly: %v", err)
+	}
+	if strings.Contains(err.Error(), "exit status") {
+		t.Errorf("error leaks exit status; should be friendly: %v", err)
+	}
+}
 
 // TestStart_FailsFastOnEmptyGitRepo pins the #138 item 9 fix: when the
 // workspace has no git-tracked files, `bones hub start` must return the
