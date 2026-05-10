@@ -655,7 +655,7 @@ func liveOrphanHubs(active []registry.Entry) ([]orphanHub, error) {
 func reconcileOrphanHubs(procs []registry.HubProcess, active []registry.Entry) []orphanHub {
 	byCwd := make(map[string]registry.Entry, len(active))
 	for _, e := range active {
-		byCwd[filepath.Clean(e.Cwd)] = e
+		byCwd[resolveCwd(e.Cwd)] = e
 	}
 	var out []orphanHub
 	for _, p := range procs {
@@ -670,7 +670,7 @@ func reconcileOrphanHubs(procs []registry.HubProcess, active []registry.Entry) [
 			out = append(out, o)
 			continue
 		}
-		entry, ok := byCwd[filepath.Clean(p.Cwd)]
+		entry, ok := byCwd[resolveCwd(p.Cwd)]
 		if !ok {
 			o.Reason = "cwd missing from registry"
 			out = append(out, o)
@@ -683,6 +683,30 @@ func reconcileOrphanHubs(procs []registry.HubProcess, active []registry.Entry) [
 		}
 	}
 	return out
+}
+
+// resolveCwd returns the symlink-resolved absolute form of p, falling
+// back to filepath.Clean(p) when EvalSymlinks fails (path doesn't
+// exist, permission denied, broken symlink chain). Used to normalize
+// both registry-side cwds (as stored, e.g. "/tmp/foo") and process-
+// side cwds (as lsof returns them, e.g. "/private/tmp/foo") to the
+// same canonical form before comparison.
+//
+// Without this normalization a workspace at /tmp/foo on macOS (where
+// /tmp is a symlink to /private/tmp) shows in `bones status --all`
+// twice — once correctly under Active workspaces, and once falsely
+// under Orphan hubs because the byCwd map keyed by filepath.Clean
+// (which preserves /tmp) misses the lookup keyed by the lsof-
+// resolved /private/tmp path (#353).
+//
+// EvalSymlinks does NOT make a filesystem call when p has no symlink
+// components, so the fallback path on Linux (where /tmp is a real
+// directory) costs roughly the same as filepath.Clean.
+func resolveCwd(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
 }
 
 // renderOrphanHubsSection emits Section 2 of status --all: the live
