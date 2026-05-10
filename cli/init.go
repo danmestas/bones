@@ -8,7 +8,6 @@ import (
 
 	repocli "github.com/danmestas/EdgeSync/cli/repo"
 
-	"github.com/danmestas/bones/internal/banner"
 	"github.com/danmestas/bones/internal/workspace"
 )
 
@@ -16,7 +15,6 @@ import (
 type InitCmd struct{}
 
 func (c *InitCmd) Run(g *repocli.Globals) error {
-	banner.Print()
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("cwd: %w", err)
@@ -63,9 +61,6 @@ type UpCmd struct {
 }
 
 func (c *UpCmd) Run(g *repocli.Globals) error {
-	if g.Verbose && !c.JSON {
-		banner.Print()
-	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("cwd: %w", err)
