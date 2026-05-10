@@ -552,6 +552,36 @@ func spawnDetachedChild(p paths, o opts) error {
 	// real pid (#148).
 	pid := cmd.Process.Pid
 
+	return finalizeDetachedChild(p, cmd, parentLog, pid, o)
+}
+
+// finalizeDetachedChild bridges the gap between "child has bound TCP
+// listeners" and "operator-visible lazy-start succeeded." It blocks
+// until the child's registry entry lands, then releases the child
+// process and announces the hub URL on stderr. Pulled out of
+// spawnDetachedChild so the spawn body stays under the funlen cap;
+// also colocates the registry-wait, the cmd.Process.Release, and the
+// announce — they're a sequence that must run in order or the
+// post-#355 contract breaks.
+func finalizeDetachedChild(
+	p paths, cmd *exec.Cmd, parentLog *hubLogger, pid int, o opts,
+) error {
+	// Wait for the child to publish its registry entry before we
+	// return. The TCP probes above only confirm the listeners are
+	// bound — the child still has to finish runTaskRecovery (can be
+	// 100ms+) and then call registry.Write. Pre-fix, a sequenced
+	// `bones up && bones tasks list && bones status --all` would see
+	// the second workspace's hub as "idle" and its actual running
+	// hub PID classified as orphan, because the registry update
+	// hadn't landed by the time status read it. Now the parent CLI
+	// verb only returns once the registry knows the hub. (#355)
+	if err := waitForRegistry(p.root, pid, readyTimeout); err != nil {
+		_ = cmd.Process.Kill()
+		parentLog.Errorf("hub: child started but registry never updated: %v", err)
+		return fmt.Errorf("hub: registry not ready: %w%s",
+			err, hubLogTail(p))
+	}
+
 	// Release the child so it isn't reaped when we return.
 	if err := cmd.Process.Release(); err != nil {
 		return fmt.Errorf("hub: release child: %w", err)
@@ -562,6 +592,28 @@ func spawnDetachedChild(p paths, o opts) error {
 		"hub: fossil at http://127.0.0.1:%d, nats at nats://127.0.0.1:%d (pid=%d)\n",
 		o.repoPort, o.coordPort, pid)
 	return nil
+}
+
+// waitForRegistry polls registry.Read until it returns an entry whose
+// HubPID matches childPID, or until timeout. Used by the detach-mode
+// parent to bridge the gap between "child has bound TCP listeners"
+// (waitForTCP returns) and "child has finished runTaskRecovery and
+// written its registry entry" (registry.Write completes).
+//
+// A registry.Read error is treated as "not ready yet" rather than a
+// terminal failure — the child may simply not have published yet on
+// a fresh workspace where the registry file doesn't exist.
+func waitForRegistry(root string, childPID int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		entry, err := registry.Read(root)
+		if err == nil && entry.HubPID == childPID {
+			return nil
+		}
+		time.Sleep(pollInterval)
+	}
+	return fmt.Errorf("timeout waiting for registry to record hub pid %d after %s",
+		childPID, timeout)
 }
 
 // StopOption configures Stop. Passed variadically so existing callers
