@@ -119,8 +119,8 @@ func TestNoForbiddenTimeFormatCallsites(t *testing.T) {
 //
 //   - internal/sessions/sessions.go, internal/holds/hold.go,
 //     internal/presence/entry.go, internal/dispatch/manifest.go,
-//     internal/chat/chat.go, internal/updatecheck/updatecheck.go,
-//     internal/logwriter/events.go: internal-substrate types whose
+//     internal/chat/chat.go, internal/logwriter/events.go:
+//     internal-substrate types whose
 //     JSON shape is not part of the public --json contract. Sweep
 //     is mechanical but out of #324's named scope; left to a
 //     follow-up so the diff stays focused.
@@ -129,18 +129,17 @@ func TestNoForbiddenTimeFormatCallsites(t *testing.T) {
 // documenting the migration plan; reviewers should reject growth
 // without one.
 var timeTimeJSONFieldAllowlist = map[string]bool{
-	filepath.Join("internal", "chat", "chat.go"):               true,
-	filepath.Join("internal", "dispatch", "manifest.go"):       true,
-	filepath.Join("internal", "holds", "hold.go"):              true,
-	filepath.Join("internal", "logwriter", "events.go"):        true,
-	filepath.Join("internal", "presence", "entry.go"):          true,
-	filepath.Join("internal", "registry", "info.go"):           true,
-	filepath.Join("internal", "registry", "registry.go"):       true,
-	filepath.Join("internal", "sessions", "sessions.go"):       true,
-	filepath.Join("internal", "swarm", "events.go"):            true,
-	filepath.Join("internal", "swarm", "session.go"):           true,
-	filepath.Join("internal", "tasks", "task.go"):              true,
-	filepath.Join("internal", "updatecheck", "updatecheck.go"): true,
+	filepath.Join("internal", "chat", "chat.go"):         true,
+	filepath.Join("internal", "dispatch", "manifest.go"): true,
+	filepath.Join("internal", "holds", "hold.go"):        true,
+	filepath.Join("internal", "logwriter", "events.go"):  true,
+	filepath.Join("internal", "presence", "entry.go"):    true,
+	filepath.Join("internal", "registry", "info.go"):     true,
+	filepath.Join("internal", "registry", "registry.go"): true,
+	filepath.Join("internal", "sessions", "sessions.go"): true,
+	filepath.Join("internal", "swarm", "events.go"):      true,
+	filepath.Join("internal", "swarm", "session.go"):     true,
+	filepath.Join("internal", "tasks", "task.go"):        true,
 }
 
 // TestNoBareTimeTimeJSONFields walks the bones source tree and
