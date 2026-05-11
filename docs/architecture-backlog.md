@@ -246,3 +246,68 @@ exercised through integration). *Locality* — the workaround comments
 collapse into a real seam. *Honesty* — the throughput ceiling becomes a
 documented limit instead of a quiet known-limitation paragraph buried in
 an ADR.
+
+## Candidate: drop swarm verbs in favor of orchestrator delegation
+
+**Status.** Open architectural question. No ADR drafted. Raised during
+a swarm-bug session.
+
+**Pitch.** The bones swarm verbs (`dispatch`, `join`, `commit`, `close`,
+`cwd`, `tasks`, `fan-in`, `reap`, `status`) reimplement a slot-routing
+state machine that Claude Code's orchestrator-delegation model already
+provides. Replace the lot with: a SessionStart hook that opens an
+EdgeSync leaf, leaf autosyncs to hub, and SessionEnd commits the
+dirty tree. The orchestrator (parent Claude session) decides who to
+spawn; bones provides the substrate.
+
+**Scope removed.** `cli/swarm_*.go`, `internal/swarm/`,
+`internal/dispatch/`, ADR 0050's branch-per-agent mode in
+`internal/swarm/synthetic.go`. Roughly 3K LOC plus the per-commit
+branching decision at `internal/swarm/lease.go`.
+
+**Scope retained.** `bones tasks *` for task bookkeeping. Hub fossil
+and its autosync. SessionStart/End hook plumbing. Doctor and scaffold
+paths.
+
+**Open questions before ADR.**
+
+1. Does Claude Code's Task tool fire SessionStart hooks for spawned
+   subagents? If not, the SessionStart-leaf model doesn't apply as
+   drawn — verify against the agent SDK or empirically.
+2. What cwd does a Task-tool subagent run in — parent's or a per-spawn
+   temp? Parent's = all subagents share a leaf (wrong; need
+   per-subagent leaves). Temp = leaf opens fresh per spawn (works).
+3. Auto-commit on file change (watcher loop) vs. SessionEnd-only
+   commit (one commit per agent run)? SessionEnd is simpler and
+   matches hierarchical delegation; watcher is nicer ergonomics but
+   adds real complexity surface.
+4. Loss of atomic claim — if the orchestrator delegates the same task
+   twice, both agents commit. Today's `swarm join --task-id` makes the
+   second fail. Mitigation: orchestrator-side discipline + bones-side
+   warning at SessionStart when task is already claimed.
+5. Loss of `bones apply --slot=X --to=Y` per-slot recovery. With
+   one-trunk-only, every commit lands on trunk and there's no per-slot
+   view to apply. Operators inspect via `bones tasks list` and the
+   fossil timeline instead.
+6. Confirmation: is ADR 0050's per-agent-branch deconfliction mode
+   actually used in production, or is it a feature on paper? If
+   unused, deleting it is a clean architectural cut.
+
+**Why this is appealing.**
+
+- The libfossil partial-manifest bug (libfossil#30) compounds across
+  multi-slot dispatches but not across single-commit-per-agent
+  workloads. Drop swarm verbs → only one commit per agent run → no
+  compounding → bones isn't blocked on upstream fixes for the
+  headline workflow.
+- The "is this synthetic or plan-anchored?" branching at every commit
+  site goes away.
+- The bones project pitch collapses to one sentence: "trunk advances
+  commit by commit; every agent commits to trunk; autosync
+  linearizes."
+- Aligns with the project's stated direction: "delete any code that
+  considers writing to tags."
+
+**Trigger to draft the ADR.** Answers to the 6 open questions above.
+If positive, this becomes a deletion pass similar in shape to the
+2026-05-09 Ousterhout cut (`docs/audits/2026-05-09-cut-sequence.md`).
